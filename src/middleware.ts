@@ -16,5 +16,11 @@ export function middleware(_request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/"],
+  matcher: [
+    /*
+     * Match all paths except static assets, images, favicon, and API routes
+     * so HTML (e.g. `/`, `/city/venice`) is not cached with stale chunk URLs.
+     */
+    "/((?!api|_next/static|_next/image|favicon.ico).*)",
+  ],
 };
