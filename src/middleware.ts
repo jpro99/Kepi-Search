@@ -1,11 +1,10 @@
-import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 /**
  * Avoid stale HTML that still points at old hashed `_next/static/chunks/*` after deploys.
  * (Chunk names change when client bundles change; cached HTML keeps loading old chunks.)
  */
-export function middleware(_request: NextRequest) {
+export function middleware() {
   const res = NextResponse.next();
   res.headers.set(
     "Cache-Control",

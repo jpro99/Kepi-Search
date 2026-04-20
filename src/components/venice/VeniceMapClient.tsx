@@ -38,6 +38,8 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 /** Inlined at build; bump `NEXT_PUBLIC_KEPI_BUILD` on Vercel to bust stale cached map chunks. */
 const KEPI_CLIENT_BUILD = process.env.NEXT_PUBLIC_KEPI_BUILD ?? "";
+/** Hardcoded stamp so the map client chunk hash changes whenever MapLibre / map wiring is updated (avoids stale `11koiq0k4…` bundles). */
+const KEPI_MAP_CLIENT_STAMP = "maplibre-blank-sprite-20260421";
 
 type SortMode =
   | "coreWalk"
@@ -80,22 +82,39 @@ const SORT_RESULTS_ID = "kepi-sort-results";
 /** Prefix for TerraDraw MapLibre layers (`terra-draw-maplibre-gl-adapter`). */
 const TERRA_DRAW_MAP_PREFIX = "kepi-td";
 
+/** Ids that should be a 1x1 transparent pixel (MapTiler / tiles sometimes reference blank icons). */
+const BLANK_SPRITE_IDS = [
+  "",
+  " ",
+  "\u00a0",
+  "\u200b", // ZWSP
+  "\u200c",
+  "\u200d",
+  "\u2009", // thin space
+  "\u202f", // narrow no-break space
+  "\u3000", // ideographic space
+  "\ufeff",
+] as const;
+
+/** True when the id is empty or only whitespace / format characters (bogus icon-image from data). */
+function isBlankishSpriteId(id: string): boolean {
+  if (id.length === 0) return true;
+  return !/[^\s\u00a0\u200b-\u200f\u2028\u2029\u202f\u205f\u3000\ufeff]/.test(id);
+}
+
 /** Tiny transparent RGBA image for bogus sprite ids from MapTiler POIs or tooling. */
 function registerBlankSpriteIds(map: maplibregl.Map) {
   const blank = { width: 1, height: 1, data: new Uint8Array(4) };
-  const ids = [
-    " ",
-    "\u00a0",
-    "\u200b", // zero-width space
-    "\u2009", // thin space
-    "\ufeff", // BOM / ZWNBSP sometimes appears in data
-  ];
-  for (const id of ids) {
-    if (map.hasImage(id)) continue;
+  for (const id of BLANK_SPRITE_IDS) {
+    try {
+      if (map.hasImage(id)) map.removeImage(id);
+    } catch {
+      /* ignore */
+    }
     try {
       map.addImage(id, blank);
     } catch {
-      /* ignore */
+      /* ignore - empty string id may be rejected on some builds */
     }
   }
 }
@@ -103,20 +122,16 @@ function registerBlankSpriteIds(map: maplibregl.Map) {
 function tightenTerraDrawPointMarkerFilter(map: maplibregl.Map) {
   const layerId = `${TERRA_DRAW_MAP_PREFIX}-point-marker`;
   if (!map.getLayer(layerId)) return;
+  const matchExpr = [
+    "match",
+    ["get", "markerId"],
+    ...BLANK_SPRITE_IDS.flatMap((id) => [id, false]),
+    true,
+  ] as unknown as maplibregl.ExpressionSpecification;
   map.setFilter(layerId, [
     "all",
     ["has", "markerId"],
-    [
-      "match",
-      ["get", "markerId"],
-      "",
-      false,
-      " ",
-      false,
-      "\u00a0",
-      false,
-      true,
-    ],
+    matchExpr,
   ]);
 }
 
@@ -463,6 +478,7 @@ function VeniceMapShell({
   useEffect(() => {
     if (!catalog || !mapEl.current || !maptilerKey) return;
     void KEPI_CLIENT_BUILD;
+    void KEPI_MAP_CLIENT_STAMP;
 
     const { center, zoom, maxBounds } = catalog.map;
     const maptilerStyle = `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`;
@@ -482,7 +498,7 @@ function VeniceMapShell({
         sources: {},
         layers: [
           {
-            id: "kepi-style-loader-bg",
+            id: `kepi-style-loader-bg-${KEPI_MAP_CLIENT_STAMP}`,
             type: "background",
             paint: { "background-color": "#0f172a" },
           },
@@ -509,15 +525,22 @@ function VeniceMapShell({
 
     map.on("styleimagemissing", (e) => {
       const id = e.id;
-      if (typeof id !== "string" || map.hasImage(id)) return;
+      if (typeof id !== "string") return;
+      const blank = { width: 1, height: 1, data: new Uint8Array(4) };
+      // If a blank id collided with a broken sprite entry, replace it so getImages succeeds.
+      if (isBlankishSpriteId(id)) {
+        try {
+          if (map.hasImage(id)) map.removeImage(id);
+        } catch {
+          /* ignore */
+        }
+      } else if (map.hasImage(id)) {
+        return;
+      }
       try {
-        map.addImage(id, {
-          width: 1,
-          height: 1,
-          data: new Uint8Array(4),
-        });
+        map.addImage(id, blank);
       } catch {
-        /* duplicate registration */
+        /* duplicate or invalid id */
       }
     });
 
