@@ -46,6 +46,8 @@ Prints JSON for hotels whose `name` matches Marriott / Hilton / Hyatt heuristics
 2. Set `NEXT_PUBLIC_MAPTILER_KEY` (and optionally `OPENROUTESERVICE_API_KEY`) in Project → Settings → Environment Variables for **Production** (and Preview if you use previews).
 3. Default build: `npm run build`, output Next.js app. No extra server beyond API routes.
 
+**Branch:** This repo’s active line of work lives on **`master`**. GitHub’s default branch may still be **`main`**. In Vercel → *Settings → Git → Production Branch*, point production at **`master`**, or keep **`main`** fast-forwarded to the same commit as `master`—otherwise Vercel keeps building an old tree while you push to `master`.
+
 ## Scripts
 
 | Script | Description |

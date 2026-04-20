@@ -193,7 +193,7 @@ function MapLoading() {
   );
 }
 
-function UrlCityBridge() {
+function UrlCityBridge({ maptilerKey }: { maptilerKey: string }) {
   const searchParams = useSearchParams();
   const router = useRouter();
   const rawCity = searchParams.get("city");
@@ -242,6 +242,7 @@ function UrlCityBridge() {
       allCities={list.cities}
       defaultCityId={list.defaultCityId}
       shareAreaParam={searchParams.get("area")}
+      maptilerKey={maptilerKey}
     />
   );
 }
@@ -251,11 +252,13 @@ function VeniceMapShell({
   allCities,
   defaultCityId,
   shareAreaParam,
+  maptilerKey,
 }: {
   cityId: string;
   allCities: CityListEntry[];
   defaultCityId: string;
   shareAreaParam: string | null;
+  maptilerKey: string;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -265,9 +268,6 @@ function VeniceMapShell({
   const drawRef = useRef<TerraDraw | null>(null);
   const [catalog, setCatalog] = useState<CityCatalog | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
-  const [maptilerKey] = useState(
-    () => process.env.NEXT_PUBLIC_MAPTILER_KEY ?? "",
-  );
   const [hotels, setHotels] = useState<HotelSearchHit[]>([]);
   const [chainOn, setChainOn] = useState<Record<Chain, boolean>>({
     marriott: true,
@@ -710,17 +710,19 @@ function VeniceMapShell({
       <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 bg-slate-900 p-6 text-center text-slate-100">
         <p className="max-w-md text-lg font-semibold">MapTiler key missing</p>
         <p className="max-w-lg text-sm text-slate-300">
-          Create{" "}
+          Put{" "}
           <code className="rounded bg-slate-800 px-1.5 py-0.5">
-            .env.local
+            NEXT_PUBLIC_MAPTILER_KEY=…
           </code>{" "}
           in{" "}
-          <code className="rounded bg-slate-800 px-1.5 py-0.5">kepi-search</code>{" "}
-          with{" "}
-          <code className="rounded bg-slate-800 px-1.5 py-0.5">
-            NEXT_PUBLIC_MAPTILER_KEY=your_key
-          </code>
-          . Free tier at maptiler.com is enough for personal use.
+          <code className="rounded bg-slate-800 px-1.5 py-0.5">.env.local</code>{" "}
+          next to this app&apos;s{" "}
+          <code className="rounded bg-slate-800 px-1.5 py-0.5">package.json</code>
+          , then stop and restart{" "}
+          <code className="rounded bg-slate-800 px-1.5 py-0.5">next dev</code>{" "}
+          (Next only reads env when the dev server starts). For production, set
+          the same variable in the host dashboard and rebuild. Free tier at
+          maptiler.com is enough for personal use.
         </p>
       </div>
     );
@@ -976,10 +978,14 @@ function VeniceMapShell({
   );
 }
 
-export default function VeniceMapClient() {
+export default function VeniceMapClient({
+  maptilerKey,
+}: {
+  maptilerKey: string;
+}) {
   return (
     <Suspense fallback={<MapLoading />}>
-      <UrlCityBridge />
+      <UrlCityBridge maptilerKey={maptilerKey} />
     </Suspense>
   );
 }
