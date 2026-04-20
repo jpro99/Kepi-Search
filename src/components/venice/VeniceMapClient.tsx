@@ -456,6 +456,12 @@ function VeniceMapShell({
 
     const map = new maplibregl.Map({
       container: mapEl.current,
+      canvasContextAttributes: {
+        antialias: false,
+        failIfMajorPerformanceCaveat: false,
+        // MapLibre defaults to high-performance; on some dual-GPU systems that can increase WebGL loss.
+        powerPreference: "default",
+      },
       // Empty style first: attach styleimagemissing before MapTiler style parses
       // (worker can request bogus sprite ids such as a single space).
       style: {
@@ -474,6 +480,16 @@ function VeniceMapShell({
       pitch: 0,
       maxBounds,
     });
+
+    const canvas = map.getCanvas();
+    const onWebGlContextLost = (ev: Event) => {
+      ev.preventDefault();
+    };
+    const onWebGlContextRestored = () => {
+      map.resize();
+    };
+    canvas.addEventListener("webglcontextlost", onWebGlContextLost);
+    canvas.addEventListener("webglcontextrestored", onWebGlContextRestored);
 
     map.on("styleimagemissing", (e) => {
       const id = e.id;
@@ -632,6 +648,8 @@ function VeniceMapShell({
 
     return () => {
       window.removeEventListener("resize", onResize);
+      canvas.removeEventListener("webglcontextlost", onWebGlContextLost);
+      canvas.removeEventListener("webglcontextrestored", onWebGlContextRestored);
       const draw = drawRef.current;
       drawRef.current = null;
       if (draw) draw.stop();
