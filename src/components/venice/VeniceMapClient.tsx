@@ -73,6 +73,20 @@ function compareHits(a: HotelSearchHit, b: HotelSearchHit, sort: SortMode) {
 const RESULT_SOURCE_ID = "kepi-search-results";
 const RESULT_LAYER_ID = "kepi-search-results-circles";
 
+/** Prefix for TerraDraw MapLibre layers (`terra-draw-maplibre-gl-adapter`). */
+const TERRA_DRAW_MAP_PREFIX = "kepi-td";
+
+function tightenTerraDrawPointMarkerFilter(map: maplibregl.Map) {
+  const layerId = `${TERRA_DRAW_MAP_PREFIX}-point-marker`;
+  if (!map.getLayer(layerId)) return;
+  map.setFilter(layerId, [
+    "all",
+    ["has", "markerId"],
+    ["!=", ["get", "markerId"], ""],
+    ["!=", ["get", "markerId"], " "],
+  ]);
+}
+
 const CHAIN_COLOR: Record<HotelSearchHit["chain"], string> = {
   marriott: "#c41230",
   hilton: "#0f4d92",
@@ -485,12 +499,17 @@ function VeniceMapShell({
     });
 
     map.on("load", () => {
-      const adapter = new TerraDrawMapLibreGLAdapter({ map });
+      const adapter = new TerraDrawMapLibreGLAdapter({
+        map,
+        prefixId: TERRA_DRAW_MAP_PREFIX,
+      });
       const draw = new TerraDraw({
         adapter,
         modes: [selectMode, rectangleMode],
       });
       draw.start();
+      queueMicrotask(() => tightenTerraDrawPointMarkerFilter(map));
+      map.once("idle", () => tightenTerraDrawPointMarkerFilter(map));
       draw.setMode(rectangleMode.mode);
 
       draw.on("finish", (id) => {
