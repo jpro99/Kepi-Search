@@ -76,14 +76,35 @@ const RESULT_LAYER_ID = "kepi-search-results-circles";
 /** Prefix for TerraDraw MapLibre layers (`terra-draw-maplibre-gl-adapter`). */
 const TERRA_DRAW_MAP_PREFIX = "kepi-td";
 
+function registerBlankSpriteIds(map: maplibregl.Map) {
+  const blank = { width: 1, height: 1, data: new Uint8Array(4) };
+  for (const id of [" ", "\u00a0"]) {
+    if (map.hasImage(id)) continue;
+    try {
+      map.addImage(id, blank);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 function tightenTerraDrawPointMarkerFilter(map: maplibregl.Map) {
   const layerId = `${TERRA_DRAW_MAP_PREFIX}-point-marker`;
   if (!map.getLayer(layerId)) return;
   map.setFilter(layerId, [
     "all",
     ["has", "markerId"],
-    ["!=", ["get", "markerId"], ""],
-    ["!=", ["get", "markerId"], " "],
+    [
+      "match",
+      ["get", "markerId"],
+      "",
+      false,
+      " ",
+      false,
+      "\u00a0",
+      false,
+      true,
+    ],
   ]);
 }
 
@@ -466,6 +487,11 @@ function VeniceMapShell({
       } catch {
         /* duplicate registration */
       }
+    });
+
+    map.on("style.load", () => {
+      registerBlankSpriteIds(map);
+      tightenTerraDrawPointMarkerFilter(map);
     });
 
     map.setStyle(maptilerStyle);
