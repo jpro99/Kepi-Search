@@ -417,22 +417,32 @@ function VeniceMapShell({
     if (!catalog || !mapEl.current || !maptilerKey) return;
 
     const { center, zoom, maxBounds } = catalog.map;
+    const maptilerStyle = `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`;
+
     const map = new maplibregl.Map({
       container: mapEl.current,
-      style: `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`,
+      // Empty style first: attach styleimagemissing before MapTiler style parses
+      // (worker can request bogus sprite ids such as a single space).
+      style: {
+        version: 8 as const,
+        sources: {},
+        layers: [
+          {
+            id: "kepi-style-loader-bg",
+            type: "background",
+            paint: { "background-color": "#0f172a" },
+          },
+        ],
+      },
       center: [center.lng, center.lat],
       zoom,
       pitch: 0,
       maxBounds,
     });
 
-    // Basemap / draw adapters can reference sprite ids that resolve to whitespace;
-    // MapLibre logs otherwise. Harmless 1x1 transparent placeholder.
     map.on("styleimagemissing", (e) => {
       const id = e.id;
-      if (typeof id !== "string") return;
-      if (id.trim() !== "") return;
-      if (map.hasImage(id)) return;
+      if (typeof id !== "string" || map.hasImage(id)) return;
       try {
         map.addImage(id, {
           width: 1,
@@ -440,9 +450,11 @@ function VeniceMapShell({
           data: new Uint8Array(4),
         });
       } catch {
-        /* duplicate concurrent registration */
+        /* duplicate registration */
       }
     });
+
+    map.setStyle(maptilerStyle);
 
     map.addControl(new maplibregl.NavigationControl(), "top-right");
     mapRef.current = map;
