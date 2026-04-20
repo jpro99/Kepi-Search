@@ -10,6 +10,8 @@ export type CityListEntry = {
 
 const MAX_RESULTS = 120;
 
+const CITY_SEARCH_INPUT_ID = "kepi-city-search-input";
+
 export function CitySearchCombobox({
   cities,
   valueId,
@@ -77,10 +79,15 @@ export function CitySearchCombobox({
       aria-haspopup="listbox"
       className="relative min-w-0 flex-1 sm:max-w-[min(22rem,100%)]"
     >
-      <label className="block text-[10px] font-medium uppercase tracking-wide text-slate-500">
+      <label
+        htmlFor={CITY_SEARCH_INPUT_ID}
+        className="block text-[10px] font-medium uppercase tracking-wide text-slate-500"
+      >
         City search
       </label>
       <input
+        id={CITY_SEARCH_INPUT_ID}
+        name="citySearch"
         type="text"
         aria-label="Search cities"
         aria-autocomplete="list"

@@ -72,6 +72,7 @@ function compareHits(a: HotelSearchHit, b: HotelSearchHit, sort: SortMode) {
 
 const RESULT_SOURCE_ID = "kepi-search-results";
 const RESULT_LAYER_ID = "kepi-search-results-circles";
+const SORT_RESULTS_ID = "kepi-sort-results";
 
 /** Prefix for TerraDraw MapLibre layers (`terra-draw-maplibre-gl-adapter`). */
 const TERRA_DRAW_MAP_PREFIX = "kepi-td";
@@ -796,26 +797,37 @@ function VeniceMapShell({
                 <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
                   Chains
                 </span>
-                {CHAINS.map((c) => (
-                  <label
-                    key={c}
-                    className="flex cursor-pointer items-center gap-1.5 rounded-md border border-slate-600 bg-slate-800/80 px-2 py-1 text-[11px] text-slate-200"
-                  >
-                    <input
-                      type="checkbox"
-                      className="accent-cyan-400"
-                      checked={chainOn[c]}
-                      onChange={() =>
-                        setChainOn((prev) => ({ ...prev, [c]: !prev[c] }))
-                      }
-                    />
-                    <span className="capitalize">{c}</span>
-                  </label>
-                ))}
+                {CHAINS.map((c) => {
+                  const chainInputId = `kepi-chain-${c}`;
+                  return (
+                    <label
+                      key={c}
+                      htmlFor={chainInputId}
+                      className="flex cursor-pointer items-center gap-1.5 rounded-md border border-slate-600 bg-slate-800/80 px-2 py-1 text-[11px] text-slate-200"
+                    >
+                      <input
+                        id={chainInputId}
+                        name={`chain_${c}`}
+                        type="checkbox"
+                        className="accent-cyan-400"
+                        checked={chainOn[c]}
+                        onChange={() =>
+                          setChainOn((prev) => ({ ...prev, [c]: !prev[c] }))
+                        }
+                      />
+                      <span className="capitalize">{c}</span>
+                    </label>
+                  );
+                })}
               </div>
-              <label className="flex min-w-[10rem] flex-1 flex-col gap-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500 sm:ml-auto sm:max-w-[14rem]">
+              <label
+                htmlFor={SORT_RESULTS_ID}
+                className="flex min-w-[10rem] flex-1 flex-col gap-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500 sm:ml-auto sm:max-w-[14rem]"
+              >
                 Sort results
                 <select
+                  id={SORT_RESULTS_ID}
+                  name="sortBy"
                   value={sortBy}
                   onChange={(e) => setSortBy(e.target.value as SortMode)}
                   className="rounded-lg border border-slate-600 bg-slate-800 px-2 py-1.5 text-xs font-normal normal-case text-slate-100 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
