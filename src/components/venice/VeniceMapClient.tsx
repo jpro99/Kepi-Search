@@ -36,6 +36,9 @@ import {
 } from "@/lib/session/serializeArea";
 import "maplibre-gl/dist/maplibre-gl.css";
 
+/** Inlined at build; bump `NEXT_PUBLIC_KEPI_BUILD` on Vercel to bust stale cached map chunks. */
+const KEPI_CLIENT_BUILD = process.env.NEXT_PUBLIC_KEPI_BUILD ?? "";
+
 type SortMode =
   | "coreWalk"
   | "transitWalk"
@@ -77,9 +80,17 @@ const SORT_RESULTS_ID = "kepi-sort-results";
 /** Prefix for TerraDraw MapLibre layers (`terra-draw-maplibre-gl-adapter`). */
 const TERRA_DRAW_MAP_PREFIX = "kepi-td";
 
+/** Tiny transparent RGBA image for bogus sprite ids from MapTiler POIs or tooling. */
 function registerBlankSpriteIds(map: maplibregl.Map) {
   const blank = { width: 1, height: 1, data: new Uint8Array(4) };
-  for (const id of [" ", "\u00a0"]) {
+  const ids = [
+    " ",
+    "\u00a0",
+    "\u200b", // zero-width space
+    "\u2009", // thin space
+    "\ufeff", // BOM / ZWNBSP sometimes appears in data
+  ];
+  for (const id of ids) {
     if (map.hasImage(id)) continue;
     try {
       map.addImage(id, blank);
@@ -451,6 +462,7 @@ function VeniceMapShell({
 
   useEffect(() => {
     if (!catalog || !mapEl.current || !maptilerKey) return;
+    void KEPI_CLIENT_BUILD;
 
     const { center, zoom, maxBounds } = catalog.map;
     const maptilerStyle = `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`;
@@ -492,6 +504,9 @@ function VeniceMapShell({
     canvas.addEventListener("webglcontextlost", onWebGlContextLost);
     canvas.addEventListener("webglcontextrestored", onWebGlContextRestored);
 
+    // Register as early as possible (MapTiler tiles can request sprites before `style.load`).
+    registerBlankSpriteIds(map);
+
     map.on("styleimagemissing", (e) => {
       const id = e.id;
       if (typeof id !== "string" || map.hasImage(id)) return;
@@ -512,6 +527,10 @@ function VeniceMapShell({
     });
 
     map.setStyle(maptilerStyle);
+    requestAnimationFrame(() => registerBlankSpriteIds(map));
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => registerBlankSpriteIds(map)),
+    );
 
     map.addControl(new maplibregl.NavigationControl(), "top-right");
     mapRef.current = map;
