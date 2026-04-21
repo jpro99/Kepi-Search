@@ -38,7 +38,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 /** Inlined at build; bump `NEXT_PUBLIC_KEPI_BUILD` on Vercel to bust stale cached map chunks. */
 const KEPI_CLIENT_BUILD = process.env.NEXT_PUBLIC_KEPI_BUILD ?? "";
 /** Hardcoded stamp so the map client chunk hash changes whenever MapLibre / map wiring is updated (avoids stale `11koiq0k4…` bundles). */
-const KEPI_MAP_CLIENT_STAMP = "no-empty-sprite-id-20260421";
+const KEPI_MAP_CLIENT_STAMP = "map-boot-banner-20260421";
 
 type SortMode =
   | "coreWalk"
@@ -317,6 +317,8 @@ function VeniceMapShell({
   >("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [shareHint, setShareHint] = useState<string | null>(null);
+  /** Shown on the map when MapLibre errors, WebGL is lost, or the map never reaches `load`. */
+  const [mapBootIssue, setMapBootIssue] = useState<string | null>(null);
 
   const runSearchRef = useRef<(() => Promise<void>) | null>(null);
 
@@ -509,6 +511,8 @@ function VeniceMapShell({
     if (!catalog || !mapEl.current || !maptilerKey) return;
     void KEPI_CLIENT_BUILD;
     void KEPI_MAP_CLIENT_STAMP;
+    setMapBootIssue(null);
+    let mapErrorReported = false;
 
     const { center, zoom, maxBounds } = catalog.map;
     const maptilerStyle = `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`;
@@ -543,6 +547,10 @@ function VeniceMapShell({
     const canvas = map.getCanvas();
     const onWebGlContextLost = (ev: Event) => {
       ev.preventDefault();
+      mapErrorReported = true;
+      setMapBootIssue(
+        "WebGL paused or lost (browser or GPU). Try reloading the page or closing other heavy tabs.",
+      );
     };
     const onWebGlContextRestored = () => {
       map.resize();
@@ -616,8 +624,31 @@ function VeniceMapShell({
 
     const onMapError = (e: { error?: Error }) => {
       console.error("[kepi map]", e.error ?? e);
+      mapErrorReported = true;
+      const err = e.error;
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : "Unknown map error";
+      setMapBootIssue(`Map / tiles: ${msg}`);
     };
     map.on("error", onMapError);
+
+    const stallMs = 14_000;
+    const stallTimer = window.setTimeout(() => {
+      if (mapRef.current !== map || mapErrorReported) return;
+      try {
+        if (!map.loaded()) {
+          setMapBootIssue(
+            "The map never finished loading. Open DevTools → Network, reload, and look for api.maptiler.com (blocked, 401, or 403). Confirm NEXT_PUBLIC_MAPTILER_KEY in the Vercel project env and redeploy. Try Ctrl+Shift+R (hard refresh). Some ad blockers block map tiles.",
+          );
+        }
+      } catch {
+        /* map may be mid-teardown */
+      }
+    }, stallMs);
 
     const rectangleMode = new TerraDrawRectangleMode({
       styles: {
@@ -645,6 +676,8 @@ function VeniceMapShell({
     });
 
     map.on("load", () => {
+      window.clearTimeout(stallTimer);
+      setMapBootIssue(null);
       try {
         map.resize();
       } catch {
@@ -756,6 +789,7 @@ function VeniceMapShell({
     window.addEventListener("resize", onResize);
 
     return () => {
+      window.clearTimeout(stallTimer);
       map.off("error", onMapError);
       if (resizeObserver) resizeObserver.disconnect();
       window.removeEventListener("resize", onResize);
@@ -860,6 +894,22 @@ function VeniceMapShell({
 
       <div className="relative min-h-0 flex-1">
         <div ref={mapEl} className="absolute inset-0" />
+        {mapBootIssue && (
+          <div className="absolute left-2 right-2 top-2 z-20 flex justify-center px-1">
+            <div className="pointer-events-auto max-h-[40vh] max-w-2xl overflow-y-auto rounded-lg border border-amber-500/50 bg-slate-950/95 px-3 py-2 text-center shadow-xl ring-1 ring-amber-400/30">
+              <p className="text-left text-[11px] leading-snug text-amber-100 sm:text-xs">
+                {mapBootIssue}
+              </p>
+              <button
+                type="button"
+                onClick={() => setMapBootIssue(null)}
+                className="mt-2 rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-slate-700"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
         <div className="pointer-events-none absolute bottom-3 left-3 right-3 flex flex-col items-center gap-2 sm:pointer-events-auto sm:items-start">
           {shareHint && (
             <p className="pointer-events-none max-w-md rounded-lg bg-slate-900/95 px-3 py-1.5 text-[11px] text-cyan-200 shadow-lg ring-1 ring-cyan-500/40 sm:text-xs">
