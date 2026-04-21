@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import maplibregl from "maplibre-gl";
+import "@/lib/maplibreCspWorker";
 import type { Feature, Polygon, Position } from "geojson";
 import * as turf from "@turf/turf";
 import {
@@ -33,13 +34,12 @@ import {
   encodeSearchAreaParam,
   MAX_AREA_PARAM_CHARS,
 } from "@/lib/session/serializeArea";
-import { configureMaplibreCspWorker } from "@/lib/maplibreCspWorker";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 /** Inlined at build; bump `NEXT_PUBLIC_KEPI_BUILD` on Vercel to bust stale cached map chunks. */
 const KEPI_CLIENT_BUILD = process.env.NEXT_PUBLIC_KEPI_BUILD ?? "";
 /** Hardcoded stamp so the map client chunk hash changes whenever MapLibre / map wiring is updated (avoids stale `11koiq0k4…` bundles). */
-const KEPI_MAP_CLIENT_STAMP = "same-origin-maplibre-csp-worker-20260421";
+const KEPI_MAP_CLIENT_STAMP = "eager-same-origin-maplibre-worker-20260421";
 
 type SortMode =
   | "coreWalk"
@@ -535,8 +535,6 @@ function VeniceMapShell({
           return;
         }
         if (!mapEl.current || cancelled) return;
-
-        configureMaplibreCspWorker();
 
         let mapErrorReported = false;
         /** Empty bootstrap style has `sources: {}`; MapTiler streets-v2 has many sources. */

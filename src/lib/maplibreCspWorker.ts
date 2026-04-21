@@ -2,16 +2,12 @@
 
 import maplibregl from "maplibre-gl";
 
-let configured = false;
-
 /**
- * MapLibre's default worker uses a `blob:` URL. Some browsers, extensions, and CSPs
- * block that, which yields a black map with no obvious console error. Loading the
- * official CSP worker from our own origin avoids that class of failure.
+ * MapLibre's UMD bundle sets a `blob:` worker URL as soon as this library loads.
+ * That must be overridden on the same tick (before any Map is constructed). Doing
+ * this only in `useEffect` is too late — workers may already be tied to the blob.
  */
-export function configureMaplibreCspWorker(): void {
-  if (typeof window === "undefined" || configured) return;
-  configured = true;
+if (typeof window !== "undefined") {
   maplibregl.setWorkerUrl(
     `${window.location.origin}/maplibre-gl-csp-worker.js`,
   );
