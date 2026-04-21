@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -205,17 +204,31 @@ function UrlCityBridge({ maptilerKey }: { maptilerKey: string }) {
     cities: CityListEntry[];
     defaultCityId: string;
   } | null>(null);
+  const [citiesFetchError, setCitiesFetchError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     fetch("/api/cities")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) {
+          throw new Error(`Could not load cities (${r.status})`);
+        }
+        return r.json();
+      })
       .then((d: { cities: CityListEntry[]; defaultCityId?: string }) => {
         if (cancelled) return;
+        setCitiesFetchError(null);
         setList({
           cities: d.cities ?? [],
           defaultCityId: d.defaultCityId ?? "venice",
         });
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setCitiesFetchError(
+          e instanceof Error ? e.message : "Could not load cities",
+        );
+        setList({ cities: [], defaultCityId: "venice" });
       });
     return () => {
       cancelled = true;
@@ -238,6 +251,19 @@ function UrlCityBridge({ maptilerKey }: { maptilerKey: string }) {
   }, [list, rawCity, cityId, router, searchParams]);
 
   if (!list || !cityId) return <MapLoading />;
+
+  if (citiesFetchError && list.cities.length === 0) {
+    return (
+      <div className="flex h-[100dvh] flex-col items-center justify-center gap-3 bg-slate-950 p-6 text-center text-slate-100">
+        <p className="max-w-md text-sm text-amber-300">{citiesFetchError}</p>
+        <p className="max-w-lg text-xs text-slate-400">
+          Check the Network tab for <code className="text-cyan-200">/api/cities</code>.
+          If you use a non-root path or reverse proxy, the app must be served from the
+          same origin as the API.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <VeniceMapShell
@@ -987,9 +1013,5 @@ export default function VeniceMapClient({
 }: {
   maptilerKey: string;
 }) {
-  return (
-    <Suspense fallback={<MapLoading />}>
-      <UrlCityBridge maptilerKey={maptilerKey} />
-    </Suspense>
-  );
+  return <UrlCityBridge maptilerKey={maptilerKey} />;
 }
