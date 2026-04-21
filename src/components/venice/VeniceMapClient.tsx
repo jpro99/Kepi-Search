@@ -39,7 +39,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 /** Inlined at build; bump `NEXT_PUBLIC_KEPI_BUILD` on Vercel to bust stale cached map chunks. */
 const KEPI_CLIENT_BUILD = process.env.NEXT_PUBLIC_KEPI_BUILD ?? "";
 /** Hardcoded stamp so the map client chunk hash changes whenever MapLibre / map wiring is updated (avoids stale `11koiq0k4…` bundles). */
-const KEPI_MAP_CLIENT_STAMP = "maplibre-blank-sprite-20260421";
+const KEPI_MAP_CLIENT_STAMP = "no-empty-sprite-id-20260421";
 
 type SortMode =
   | "coreWalk"
@@ -82,9 +82,11 @@ const SORT_RESULTS_ID = "kepi-sort-results";
 /** Prefix for TerraDraw MapLibre layers (`terra-draw-maplibre-gl-adapter`). */
 const TERRA_DRAW_MAP_PREFIX = "kepi-td";
 
-/** Ids that should be a 1x1 transparent pixel (MapTiler / tiles sometimes reference blank icons). */
+/**
+ * Non-empty ids that should be a 1x1 transparent pixel (MapTiler / tiles sometimes reference blank icons).
+ * Do not use "" — MapLibre `hasImage("")` / `addImage("")` throw or duplicate against the style.
+ */
 const BLANK_SPRITE_IDS = [
-  "",
   " ",
   "\u00a0",
   "\u200b", // ZWSP
@@ -96,9 +98,9 @@ const BLANK_SPRITE_IDS = [
   "\ufeff",
 ] as const;
 
-/** True when the id is empty or only whitespace / format characters (bogus icon-image from data). */
+/** True for non-empty ids that are only whitespace / format chars (bogus icon-image from tile data). */
 function isBlankishSpriteId(id: string): boolean {
-  if (id.length === 0) return true;
+  if (id.length === 0) return false;
   return !/[^\s\u00a0\u200b-\u200f\u2028\u2029\u202f\u205f\u3000\ufeff]/.test(id);
 }
 
@@ -106,6 +108,7 @@ function isBlankishSpriteId(id: string): boolean {
 function registerBlankSpriteIds(map: maplibregl.Map) {
   const blank = { width: 1, height: 1, data: new Uint8Array(4) };
   for (const id of BLANK_SPRITE_IDS) {
+    if (!id) continue;
     try {
       if (map.hasImage(id)) map.removeImage(id);
     } catch {
@@ -114,7 +117,7 @@ function registerBlankSpriteIds(map: maplibregl.Map) {
     try {
       map.addImage(id, blank);
     } catch {
-      /* ignore - empty string id may be rejected on some builds */
+      /* ignore */
     }
   }
 }
@@ -131,6 +134,7 @@ function tightenTerraDrawPointMarkerFilter(map: maplibregl.Map) {
   map.setFilter(layerId, [
     "all",
     ["has", "markerId"],
+    ["!=", ["get", "markerId"], ""],
     matchExpr,
   ]);
 }
@@ -525,7 +529,7 @@ function VeniceMapShell({
 
     map.on("styleimagemissing", (e) => {
       const id = e.id;
-      if (typeof id !== "string") return;
+      if (typeof id !== "string" || !id.length) return;
       const blank = { width: 1, height: 1, data: new Uint8Array(4) };
       // If a blank id collided with a broken sprite entry, replace it so getImages succeeds.
       if (isBlankishSpriteId(id)) {
