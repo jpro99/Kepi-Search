@@ -38,7 +38,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 /** Inlined at build; bump `NEXT_PUBLIC_KEPI_BUILD` on Vercel to bust stale cached map chunks. */
 const KEPI_CLIENT_BUILD = process.env.NEXT_PUBLIC_KEPI_BUILD ?? "";
 /** Hardcoded stamp so the map client chunk hash changes whenever MapLibre / map wiring is updated (avoids stale `11koiq0k4…` bundles). */
-const KEPI_MAP_CLIENT_STAMP = "map-boot-banner-20260421";
+const KEPI_MAP_CLIENT_STAMP = "stall-detect-maptiler-style-20260421";
 
 type SortMode =
   | "coreWalk"
@@ -513,6 +513,9 @@ function VeniceMapShell({
     void KEPI_MAP_CLIENT_STAMP;
     setMapBootIssue(null);
     let mapErrorReported = false;
+    /** Empty bootstrap style has `sources: {}`; MapTiler streets-v2 has many sources. */
+    let sawMaptilerStyle = false;
+    let postLoadTileCheck: number | undefined;
 
     const { center, zoom, maxBounds } = catalog.map;
     const maptilerStyle = `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`;
@@ -585,6 +588,12 @@ function VeniceMapShell({
     map.on("style.load", () => {
       registerBlankSpriteIds(map);
       tightenTerraDrawPointMarkerFilter(map);
+      try {
+        const n = Object.keys(map.getStyle()?.sources ?? {}).length;
+        if (n > 0) sawMaptilerStyle = true;
+      } catch {
+        /* ignore */
+      }
       requestAnimationFrame(() => {
         try {
           map.resize();
@@ -636,13 +645,19 @@ function VeniceMapShell({
     };
     map.on("error", onMapError);
 
-    const stallMs = 14_000;
+    const stallMs = 12_000;
     const stallTimer = window.setTimeout(() => {
       if (mapRef.current !== map || mapErrorReported) return;
       try {
+        if (!sawMaptilerStyle) {
+          setMapBootIssue(
+            "MapTiler basemap style never loaded (still on the empty bootstrap style). Open DevTools -> Network, reload, and inspect api.maptiler.com/style.json (401/403/CORS/blocked). Set NEXT_PUBLIC_MAPTILER_KEY in Vercel Production env and redeploy. Try Ctrl+Shift+R. Extensions sometimes block map requests.",
+          );
+          return;
+        }
         if (!map.loaded()) {
           setMapBootIssue(
-            "The map never finished loading. Open DevTools → Network, reload, and look for api.maptiler.com (blocked, 401, or 403). Confirm NEXT_PUBLIC_MAPTILER_KEY in the Vercel project env and redeploy. Try Ctrl+Shift+R (hard refresh). Some ad blockers block map tiles.",
+            "The map never finished loading after the basemap style arrived. Check api.maptiler.com tile requests in Network, confirm your MapTiler key, and try a hard refresh.",
           );
         }
       } catch {
@@ -783,6 +798,21 @@ function VeniceMapShell({
           void runSearchRef.current?.();
         });
       }
+
+      postLoadTileCheck = window.setTimeout(() => {
+        if (mapRef.current !== map || mapErrorReported) return;
+        try {
+          if (!map.areTilesLoaded()) {
+            setMapBootIssue(
+              (prev) =>
+                prev ??
+                "Basemap tiles are still missing after load. In DevTools -> Network, filter maptiler and look for failed tile or font requests (403, blocked). Confirm NEXT_PUBLIC_MAPTILER_KEY in Vercel and try disabling strict blockers.",
+            );
+          }
+        } catch {
+          /* ignore */
+        }
+      }, 6000);
     });
 
     const onResize = () => map.resize();
@@ -790,6 +820,7 @@ function VeniceMapShell({
 
     return () => {
       window.clearTimeout(stallTimer);
+      if (postLoadTileCheck !== undefined) window.clearTimeout(postLoadTileCheck);
       map.off("error", onMapError);
       if (resizeObserver) resizeObserver.disconnect();
       window.removeEventListener("resize", onResize);
