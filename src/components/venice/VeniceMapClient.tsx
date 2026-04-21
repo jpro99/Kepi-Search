@@ -39,7 +39,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 /** Inlined at build; bump `NEXT_PUBLIC_KEPI_BUILD` on Vercel to bust stale cached map chunks. */
 const KEPI_CLIENT_BUILD = process.env.NEXT_PUBLIC_KEPI_BUILD ?? "";
 /** Hardcoded stamp so the map client chunk hash changes whenever MapLibre / map wiring is updated (avoids stale `11koiq0k4…` bundles). */
-const KEPI_MAP_CLIENT_STAMP = "eager-same-origin-maplibre-worker-20260421";
+const KEPI_MAP_CLIENT_STAMP = "direct-maptiler-style-no-bootstrap-20260421";
 
 type SortMode =
   | "coreWalk"
@@ -542,31 +542,17 @@ function VeniceMapShell({
         let postLoadTileCheck: number | undefined;
 
         const map = new maplibregl.Map({
-      container: mapEl.current,
-      canvasContextAttributes: {
-        antialias: false,
-        failIfMajorPerformanceCaveat: false,
-        // MapLibre defaults to high-performance; on some dual-GPU systems that can increase WebGL loss.
-        powerPreference: "default",
-      },
-      // Empty style first: attach styleimagemissing before MapTiler style parses
-      // (worker can request bogus sprite ids such as a single space).
-      style: {
-        version: 8 as const,
-        sources: {},
-        layers: [
-          {
-            id: `kepi-style-loader-bg-${KEPI_MAP_CLIENT_STAMP}`,
-            type: "background",
-            paint: { "background-color": "#0f172a" },
-          },
-        ],
-      },
-      center: [center.lng, center.lat],
-      zoom,
-      pitch: 0,
-      maxBounds,
-    });
+          container: mapEl.current,
+          // Load MapTiler once. The previous empty-style -> setStyle(MapTiler) two-step
+          // could leave the renderer in a bad state on some GPUs even when tiles (200) loaded.
+          style: maptilerStyle,
+          center: [center.lng, center.lat],
+          zoom,
+          pitch: 0,
+          maxBounds,
+          fadeDuration: 0,
+          renderWorldCopies: true,
+        });
 
     const canvas = map.getCanvas();
     const onWebGlContextLost = (ev: Event) => {
@@ -618,17 +604,14 @@ function VeniceMapShell({
       requestAnimationFrame(() => {
         try {
           map.resize();
+          map.triggerRepaint();
         } catch {
           /* ignore */
         }
       });
     });
 
-    map.setStyle(maptilerStyle);
     requestAnimationFrame(() => registerBlankSpriteIds(map));
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => registerBlankSpriteIds(map)),
-    );
 
     map.addControl(new maplibregl.NavigationControl(), "top-right");
     mapRef.current = map;
@@ -672,7 +655,7 @@ function VeniceMapShell({
       try {
         if (!sawMaptilerStyle) {
           setMapBootIssue(
-            "MapTiler basemap style never loaded (still on the empty bootstrap style). Open DevTools -> Network, reload, and inspect api.maptiler.com/style.json (401/403/CORS/blocked). Set NEXT_PUBLIC_MAPTILER_KEY in Vercel Production env and redeploy. Try Ctrl+Shift+R. Extensions sometimes block map requests.",
+            "Basemap style never reported sources after load. Open DevTools -> Network, reload, and inspect api.maptiler.com/style.json. Set NEXT_PUBLIC_MAPTILER_KEY for Production on Vercel and redeploy. Try Ctrl+Shift+R.",
           );
           return;
         }
@@ -716,6 +699,7 @@ function VeniceMapShell({
       setMapBootIssue(null);
       try {
         map.resize();
+        map.triggerRepaint();
       } catch {
         /* ignore */
       }
@@ -986,8 +970,11 @@ function VeniceMapShell({
         </div>
       )}
 
-      <div className="relative min-h-0 flex-1">
-        <div ref={mapEl} className="absolute inset-0" />
+      <div className="relative min-h-0 flex-1 bg-slate-900">
+        <div
+          ref={mapEl}
+          className="absolute inset-0 h-full w-full min-h-[1px] min-w-[1px]"
+        />
         <div className="pointer-events-none absolute bottom-3 left-3 right-3 flex flex-col items-center gap-2 sm:pointer-events-auto sm:items-start">
           {shareHint && (
             <p className="pointer-events-none max-w-md rounded-lg bg-slate-900/95 px-3 py-1.5 text-[11px] text-cyan-200 shadow-lg ring-1 ring-cyan-500/40 sm:text-xs">
