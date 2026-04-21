@@ -38,7 +38,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 /** Inlined at build; bump `NEXT_PUBLIC_KEPI_BUILD` on Vercel to bust stale cached map chunks. */
 const KEPI_CLIENT_BUILD = process.env.NEXT_PUBLIC_KEPI_BUILD ?? "";
 /** Hardcoded stamp so the map client chunk hash changes whenever MapLibre / map wiring is updated (avoids stale `11koiq0k4…` bundles). */
-const KEPI_MAP_CLIENT_STAMP = "stall-detect-maptiler-style-20260421";
+const KEPI_MAP_CLIENT_STAMP = "preflight-maptiler-header-strip-20260421";
 
 type SortMode =
   | "coreWalk"
@@ -512,15 +512,35 @@ function VeniceMapShell({
     void KEPI_CLIENT_BUILD;
     void KEPI_MAP_CLIENT_STAMP;
     setMapBootIssue(null);
-    let mapErrorReported = false;
-    /** Empty bootstrap style has `sources: {}`; MapTiler streets-v2 has many sources. */
-    let sawMaptilerStyle = false;
-    let postLoadTileCheck: number | undefined;
+    let cancelled = false;
+    let detach: (() => void) | null = null;
+    let stallTimer: number | undefined;
 
     const { center, zoom, maxBounds } = catalog.map;
     const maptilerStyle = `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`;
 
-    const map = new maplibregl.Map({
+    void (async () => {
+      try {
+        const styleRes = await fetch(maptilerStyle, {
+          method: "GET",
+          mode: "cors",
+          cache: "no-store",
+        });
+        if (cancelled) return;
+        if (!styleRes.ok) {
+          setMapBootIssue(
+            `MapTiler rejected style.json (HTTP ${styleRes.status}). In Vercel: Project -> Settings -> Environment Variables -> set NEXT_PUBLIC_MAPTILER_KEY for Production, save, then Redeploy. Wrong or missing keys usually return 401 or 403.`,
+          );
+          return;
+        }
+        if (!mapEl.current || cancelled) return;
+
+        let mapErrorReported = false;
+        /** Empty bootstrap style has `sources: {}`; MapTiler streets-v2 has many sources. */
+        let sawMaptilerStyle = false;
+        let postLoadTileCheck: number | undefined;
+
+        const map = new maplibregl.Map({
       container: mapEl.current,
       canvasContextAttributes: {
         antialias: false,
@@ -646,7 +666,7 @@ function VeniceMapShell({
     map.on("error", onMapError);
 
     const stallMs = 12_000;
-    const stallTimer = window.setTimeout(() => {
+    stallTimer = window.setTimeout(() => {
       if (mapRef.current !== map || mapErrorReported) return;
       try {
         if (!sawMaptilerStyle) {
@@ -818,18 +838,45 @@ function VeniceMapShell({
     const onResize = () => map.resize();
     window.addEventListener("resize", onResize);
 
+        detach = () => {
+          if (stallTimer !== undefined) window.clearTimeout(stallTimer);
+          if (postLoadTileCheck !== undefined) {
+            window.clearTimeout(postLoadTileCheck);
+          }
+          map.off("error", onMapError);
+          if (resizeObserver) resizeObserver.disconnect();
+          window.removeEventListener("resize", onResize);
+          canvas.removeEventListener("webglcontextlost", onWebGlContextLost);
+          canvas.removeEventListener(
+            "webglcontextrestored",
+            onWebGlContextRestored,
+          );
+          const draw = drawRef.current;
+          drawRef.current = null;
+          if (draw) draw.stop();
+          try {
+            map.remove();
+          } catch {
+            /* already removed */
+          }
+          mapRef.current = null;
+        };
+      } catch (e: unknown) {
+        if (!cancelled) {
+          console.error("[kepi map] mount", e);
+          setMapBootIssue(
+            e instanceof Error
+              ? `Map could not start: ${e.message}`
+              : "Map could not start (unexpected error). Inspect the console and Network.",
+          );
+        }
+      }
+    })();
+
     return () => {
-      window.clearTimeout(stallTimer);
-      if (postLoadTileCheck !== undefined) window.clearTimeout(postLoadTileCheck);
-      map.off("error", onMapError);
-      if (resizeObserver) resizeObserver.disconnect();
-      window.removeEventListener("resize", onResize);
-      canvas.removeEventListener("webglcontextlost", onWebGlContextLost);
-      canvas.removeEventListener("webglcontextrestored", onWebGlContextRestored);
-      const draw = drawRef.current;
-      drawRef.current = null;
-      if (draw) draw.stop();
-      map.remove();
+      cancelled = true;
+      detach?.();
+      detach = null;
       mapRef.current = null;
     };
   }, [maptilerKey, catalog, upsertResultLayer, shareAreaParam, cityId]);
@@ -923,24 +970,23 @@ function VeniceMapShell({
         </button>
       </header>
 
+      {mapBootIssue && (
+        <div className="flex shrink-0 items-start gap-2 border-b border-amber-500/50 bg-amber-950/50 px-3 py-2 text-amber-50">
+          <p className="min-w-0 flex-1 text-left text-[11px] leading-snug sm:text-xs">
+            {mapBootIssue}
+          </p>
+          <button
+            type="button"
+            onClick={() => setMapBootIssue(null)}
+            className="shrink-0 rounded border border-amber-400/60 bg-amber-900/80 px-2 py-1 text-[10px] font-semibold text-amber-100 hover:bg-amber-800/80"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       <div className="relative min-h-0 flex-1">
         <div ref={mapEl} className="absolute inset-0" />
-        {mapBootIssue && (
-          <div className="absolute left-2 right-2 top-2 z-20 flex justify-center px-1">
-            <div className="pointer-events-auto max-h-[40vh] max-w-2xl overflow-y-auto rounded-lg border border-amber-500/50 bg-slate-950/95 px-3 py-2 text-center shadow-xl ring-1 ring-amber-400/30">
-              <p className="text-left text-[11px] leading-snug text-amber-100 sm:text-xs">
-                {mapBootIssue}
-              </p>
-              <button
-                type="button"
-                onClick={() => setMapBootIssue(null)}
-                className="mt-2 rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-slate-700"
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        )}
         <div className="pointer-events-none absolute bottom-3 left-3 right-3 flex flex-col items-center gap-2 sm:pointer-events-auto sm:items-start">
           {shareHint && (
             <p className="pointer-events-none max-w-md rounded-lg bg-slate-900/95 px-3 py-1.5 text-[11px] text-cyan-200 shadow-lg ring-1 ring-cyan-500/40 sm:text-xs">
