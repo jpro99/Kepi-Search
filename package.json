@@ -4,6 +4,9 @@
   "private": true,
   "scripts": {
     "postinstall": "patch-package && node scripts/patch-maplibre-dist.cjs && node scripts/copy-maplibre-worker.cjs",
+    "fix:utf8": "node scripts/fix-utf8.mjs",
+    "predev": "node scripts/fix-utf8.mjs",
+    "prebuild": "node scripts/fix-utf8.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

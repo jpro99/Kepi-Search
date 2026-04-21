@@ -1,17 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const paths = [
-  "src/app/HomeMapLoader.tsx",
-  "src/components/venice/VeniceMapClient.tsx",
-  "src/data/cities/registry.ts",
-  "src/data/cities/new-york.ts",
-  "src/data/cities/los-angeles.ts",
-  "src/data/cities/chicago.ts",
-  "src/lib/session/serializeArea.ts",
-  "src/lib/session/searchSession.ts",
-  "scripts/fetch-hotels-overpass.mjs",
-];
+const EXT = /\.(tsx?|jsx?|mjs|cjs|css)$/;
 
 function looksUtf16Le(buf) {
   if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return true;
@@ -33,13 +23,34 @@ function decode(buf) {
   return buf.toString("utf8");
 }
 
-const root = path.join(import.meta.dirname, "..");
-for (const rel of paths) {
-  const p = path.join(root, rel);
-  if (!fs.existsSync(p)) continue;
-  const buf = fs.readFileSync(p);
-  if (looksUtf16Le(buf) || (buf[0] === 0xff && buf[1] === 0xfe)) {
-    fs.writeFileSync(p, decode(buf), "utf8");
-    console.log("utf8", rel);
+function walk(dir, out) {
+  if (!fs.existsSync(dir)) return;
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      if (ent.name === "node_modules" || ent.name === ".next") continue;
+      walk(p, out);
+    } else if (EXT.test(ent.name)) {
+      out.push(p);
+    }
   }
+}
+
+const root = path.join(import.meta.dirname, "..");
+const files = [];
+walk(path.join(root, "src"), files);
+walk(path.join(root, "scripts"), files);
+
+let fixed = 0;
+for (const abs of files) {
+  const buf = fs.readFileSync(abs);
+  if (looksUtf16Le(buf) || (buf[0] === 0xff && buf[1] === 0xfe)) {
+    const text = decode(buf).replace(/\r\n/g, "\n");
+    fs.writeFileSync(abs, text, "utf8");
+    console.log("utf8", path.relative(root, abs));
+    fixed++;
+  }
+}
+if (fixed === 0) {
+  console.log("fix-utf8: no UTF-16 sources found");
 }
