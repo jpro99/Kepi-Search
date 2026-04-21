@@ -33,12 +33,13 @@ import {
   encodeSearchAreaParam,
   MAX_AREA_PARAM_CHARS,
 } from "@/lib/session/serializeArea";
+import { configureMaplibreCspWorker } from "@/lib/maplibreCspWorker";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 /** Inlined at build; bump `NEXT_PUBLIC_KEPI_BUILD` on Vercel to bust stale cached map chunks. */
 const KEPI_CLIENT_BUILD = process.env.NEXT_PUBLIC_KEPI_BUILD ?? "";
 /** Hardcoded stamp so the map client chunk hash changes whenever MapLibre / map wiring is updated (avoids stale `11koiq0k4…` bundles). */
-const KEPI_MAP_CLIENT_STAMP = "preflight-maptiler-header-strip-20260421";
+const KEPI_MAP_CLIENT_STAMP = "same-origin-maplibre-csp-worker-20260421";
 
 type SortMode =
   | "coreWalk"
@@ -535,6 +536,8 @@ function VeniceMapShell({
         }
         if (!mapEl.current || cancelled) return;
 
+        configureMaplibreCspWorker();
+
         let mapErrorReported = false;
         /** Empty bootstrap style has `sources: {}`; MapTiler streets-v2 has many sources. */
         let sawMaptilerStyle = false;
@@ -933,7 +936,7 @@ function VeniceMapShell({
   }
 
   return (
-    <div className="flex h-[100dvh] flex-col bg-slate-950 text-slate-50">
+    <div className="flex h-[100dvh] min-h-0 flex-col bg-slate-950 text-slate-50">
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-cyan-900/50 bg-gradient-to-r from-slate-900 via-slate-900 to-cyan-950 px-3 py-2 shadow-lg">
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-sm font-bold tracking-tight text-cyan-300 sm:text-base">

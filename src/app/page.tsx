@@ -5,7 +5,9 @@ import { HomeMapLoader } from "./HomeMapLoader";
 export const dynamic = "force-dynamic";
 
 export default function Home() {
-  const maptilerKey = process.env.NEXT_PUBLIC_MAPTILER_KEY ?? "";
+  const raw = process.env.NEXT_PUBLIC_MAPTILER_KEY;
+  const maptilerKey =
+    typeof raw === "string" ? raw.trim().replace(/^['"]|['"]$/g, "") : "";
   return (
     <Suspense
       fallback={
