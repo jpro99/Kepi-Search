@@ -24,6 +24,14 @@ import {
   type CityListEntry,
 } from "@/components/CitySearchCombobox";
 import type { CityCatalog } from "@/data/cities/types";
+import {
+  buildStayBookUrl,
+  defaultStayRange,
+  isIsoDate,
+  metersToMiles,
+  propertyOverviewUrl,
+  toIsoDateLocal,
+} from "@/lib/search/bookingLinks";
 import type { Chain, HotelSearchHit } from "@/lib/search/types";
 import {
   loadSearchSession,
@@ -331,7 +339,31 @@ function VeniceMapShell({
   /** `pan` = move the map; `draw` = drag a search rectangle (MapLibre pan off until you finish or switch back). */
   const [mapTool, setMapTool] = useState<"pan" | "draw">("pan");
 
+  const [stayCheckIn, setStayCheckIn] = useState(
+    () => defaultStayRange().checkIn,
+  );
+  const [stayCheckOut, setStayCheckOut] = useState(
+    () => defaultStayRange().checkOut,
+  );
+
   const runSearchRef = useRef<(() => Promise<void>) | null>(null);
+
+  const todayIso = useMemo(() => toIsoDateLocal(new Date()), []);
+
+  useEffect(() => {
+    const s = loadSearchSession();
+    if (
+      s?.cityId === cityId &&
+      s.stayCheckIn &&
+      s.stayCheckOut &&
+      isIsoDate(s.stayCheckIn) &&
+      isIsoDate(s.stayCheckOut) &&
+      s.stayCheckOut > s.stayCheckIn
+    ) {
+      setStayCheckIn(s.stayCheckIn);
+      setStayCheckOut(s.stayCheckOut);
+    }
+  }, [cityId]);
 
   const displayHotels = useMemo(() => {
     const filtered = hotels.filter((h) => chainOn[h.chain]);
@@ -468,6 +500,8 @@ function VeniceMapShell({
       const session: StoredSearchSessionV1 = {
         version: 1,
         cityId: catalog.id,
+        stayCheckIn,
+        stayCheckOut,
         ring,
         hotels: data.hotels,
         meta: data.meta,
@@ -490,7 +524,7 @@ function VeniceMapShell({
       setStatus("error");
       setErrorMessage(e instanceof Error ? e.message : "Search failed");
     }
-  }, [catalog, chainOn, sortBy, searchParams, router]);
+  }, [catalog, chainOn, sortBy, searchParams, router, stayCheckIn, stayCheckOut]);
 
   useEffect(() => {
     runSearchRef.current = runSearch;
@@ -1149,6 +1183,54 @@ function VeniceMapShell({
                   {meta.routing.note}
                 </p>
               )}
+              <p className="text-[11px] leading-snug text-slate-500">
+                Dollar rates and points redemptions are only on the hotel or OTA
+                sites after you sign in. Kepi does not call paid rate APIs; use
+                Check rates with your dates, then compare member offers on the
+                chain site.
+              </p>
+            </div>
+          )}
+          {(status === "ok" || status === "loading") && catalog && (
+            <div className="mb-3 flex flex-wrap items-end gap-3 rounded-lg border border-slate-700/80 bg-slate-800/40 px-2 py-2">
+              <label
+                htmlFor="kepi-stay-checkin"
+                className="flex flex-col gap-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500"
+              >
+                Check-in
+                <input
+                  id="kepi-stay-checkin"
+                  name="stayCheckIn"
+                  type="date"
+                  min={todayIso}
+                  value={stayCheckIn}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setStayCheckIn(v);
+                    if (stayCheckOut <= v) {
+                      const d = new Date(`${v}T12:00:00`);
+                      d.setDate(d.getDate() + 1);
+                      setStayCheckOut(toIsoDateLocal(d));
+                    }
+                  }}
+                  className="rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-xs text-slate-100"
+                />
+              </label>
+              <label
+                htmlFor="kepi-stay-checkout"
+                className="flex flex-col gap-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500"
+              >
+                Check-out
+                <input
+                  id="kepi-stay-checkout"
+                  name="stayCheckOut"
+                  type="date"
+                  min={stayCheckIn || todayIso}
+                  value={stayCheckOut}
+                  onChange={(e) => setStayCheckOut(e.target.value)}
+                  className="rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-xs text-slate-100"
+                />
+              </label>
             </div>
           )}
           {status === "ok" && hotels.length > 0 && (
@@ -1219,14 +1301,29 @@ function VeniceMapShell({
                     </p>
                     <p className="font-semibold text-slate-100">{h.name}</p>
                   </div>
-                  <a
-                    href={h.bookUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="shrink-0 rounded-full bg-slate-700 px-3 py-1 text-xs font-semibold text-cyan-200 ring-1 ring-cyan-500/40 hover:bg-slate-600"
-                  >
-                    Book
-                  </a>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <a
+                      href={buildStayBookUrl(
+                        h,
+                        catalog.label,
+                        stayCheckIn,
+                        stayCheckOut,
+                      )}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-full bg-cyan-600/90 px-3 py-1 text-xs font-semibold text-slate-950 ring-1 ring-cyan-400/50 hover:bg-cyan-500"
+                    >
+                      Check rates
+                    </a>
+                    <a
+                      href={propertyOverviewUrl(h, catalog.label)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] font-medium text-slate-400 underline decoration-slate-600 underline-offset-2 hover:text-cyan-200"
+                    >
+                      Hotel site
+                    </a>
+                  </div>
                 </div>
                 <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[11px] text-slate-400 sm:text-xs">
                   <dt className="text-slate-500">Nearest transit</dt>
@@ -1237,7 +1334,8 @@ function VeniceMapShell({
                         <br />
                         <span className="text-cyan-200/90">
                           Walk ~{Math.round(h.walkingToTransit.durationSec / 60)}{" "}
-                          min ({Math.round(h.walkingToTransit.distanceM)} m)
+                          min ({Math.round(h.walkingToTransit.distanceM)} m / ~
+                          {metersToMiles(h.walkingToTransit.distanceM)} mi)
                         </span>
                       </>
                     ) : (
@@ -1245,6 +1343,8 @@ function VeniceMapShell({
                         <br />
                         <span className="text-slate-500">
                           Line ~{(h.metersToNearestTransit / 1000).toFixed(2)} km
+                          {" "}
+                          (~{metersToMiles(h.metersToNearestTransit)} mi)
                         </span>
                       </>
                     )}
@@ -1255,7 +1355,8 @@ function VeniceMapShell({
                       <>
                         <span className="text-cyan-200/90">
                           Walk ~{Math.round(h.walkingToCore.durationSec / 60)} min (
-                          {Math.round(h.walkingToCore.distanceM)} m)
+                          {Math.round(h.walkingToCore.distanceM)} m / ~
+                          {metersToMiles(h.walkingToCore.distanceM)} mi)
                         </span>
                         <br />
                         <span className="text-slate-500">
@@ -1264,8 +1365,9 @@ function VeniceMapShell({
                       </>
                     ) : (
                       <>
-                        Line {(h.metersToPrimaryTouristCore / 1000).toFixed(2)} km |
-                        score {h.coreProximityScore}
+                        Line {(h.metersToPrimaryTouristCore / 1000).toFixed(2)} km
+                        (~{metersToMiles(h.metersToPrimaryTouristCore)} mi) | score{" "}
+                        {h.coreProximityScore}
                       </>
                     )}
                   </dd>

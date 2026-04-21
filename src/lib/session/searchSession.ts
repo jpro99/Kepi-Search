@@ -12,6 +12,9 @@ export type SortModePersisted =
 export type StoredSearchSessionV1 = {
   version: 1;
   cityId: string;
+  /** Check-in / check-out for booking links (YYYY-MM-DD). */
+  stayCheckIn?: string;
+  stayCheckOut?: string;
   /** Outer ring of search polygon (lng, lat), closed. */
   ring: [number, number][];
   hotels: HotelSearchHit[];
