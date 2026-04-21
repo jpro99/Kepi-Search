@@ -41,9 +41,23 @@ export function searchHotelsInPolygon(
   };
 
   const primary = catalog.touristAnchors[0];
-  if (!primary || catalog.transit.length === 0) {
+  if (!primary) {
     return [];
   }
+
+  /** Some seed catalogs omit transit; use the tourist anchor so search still runs. */
+  const transitStops =
+    catalog.transit.length > 0
+      ? catalog.transit
+      : [
+          {
+            id: `${catalog.id}-transit-fallback`,
+            name: "City center (no transit in catalog)",
+            mode: "rail" as const,
+            lat: primary.lat,
+            lng: primary.lng,
+          },
+        ];
 
   const hits: HotelSearchHit[] = [];
 
@@ -51,9 +65,9 @@ export function searchHotelsInPolygon(
     const pt = toPoint(h.lng, h.lat);
     if (!turf.booleanPointInPolygon(pt, poly)) continue;
 
-    let bestTransit = catalog.transit[0]!;
+    let bestTransit = transitStops[0]!;
     let bestD = Infinity;
-    for (const s of catalog.transit) {
+    for (const s of transitStops) {
       const d = metersBetween(h.lng, h.lat, s.lng, s.lat);
       if (d < bestD) {
         bestD = d;

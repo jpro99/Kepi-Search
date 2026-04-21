@@ -320,6 +320,8 @@ function VeniceMapShell({
   const [shareHint, setShareHint] = useState<string | null>(null);
   /** Shown on the map when MapLibre errors, WebGL is lost, or the map never reaches `load`. */
   const [mapBootIssue, setMapBootIssue] = useState<string | null>(null);
+  /** False until TerraDraw has started on the loaded map (Search must not run before this). */
+  const [drawReady, setDrawReady] = useState(false);
 
   const runSearchRef = useRef<(() => Promise<void>) | null>(null);
 
@@ -398,8 +400,19 @@ function VeniceMapShell({
   }, []);
 
   const runSearch = useCallback(async () => {
+    if (!catalog) {
+      setErrorMessage("City data is not ready yet.");
+      setStatus("error");
+      return;
+    }
     const draw = drawRef.current;
-    if (!draw || !catalog) return;
+    if (!draw) {
+      setErrorMessage(
+        "The map is still finishing setup. Wait a moment after the map appears, draw a rectangle on it, then tap Search again.",
+      );
+      setStatus("error");
+      return;
+    }
     const poly = pickSearchPolygon(draw.getSnapshot() as GeoJSON.Feature[]);
     if (!poly) {
       setErrorMessage("Draw a rectangle on the map first (drag to size it).");
@@ -513,6 +526,7 @@ function VeniceMapShell({
     void KEPI_CLIENT_BUILD;
     void KEPI_MAP_CLIENT_STAMP;
     setMapBootIssue(null);
+    setDrawReady(false);
     let cancelled = false;
     let detach: (() => void) | null = null;
     let stallTimer: number | undefined;
@@ -734,6 +748,7 @@ function VeniceMapShell({
       });
 
       drawRef.current = draw;
+      setDrawReady(true);
 
       const session = loadSearchSession();
       let ring: Position[] | null = null;
@@ -824,6 +839,7 @@ function VeniceMapShell({
     window.addEventListener("resize", onResize);
 
         detach = () => {
+          setDrawReady(false);
           if (stallTimer !== undefined) window.clearTimeout(stallTimer);
           if (postLoadTileCheck !== undefined) {
             window.clearTimeout(postLoadTileCheck);
@@ -947,11 +963,20 @@ function VeniceMapShell({
         </button>
         <button
           type="button"
-          onClick={runSearch}
-          disabled={status === "loading"}
+          onClick={() => void runSearch()}
+          disabled={status === "loading" || !drawReady}
+          title={
+            !drawReady
+              ? "Wait for the map to finish loading, then draw a rectangle"
+              : undefined
+          }
           className="shrink-0 rounded-full bg-cyan-400 px-4 py-2 text-sm font-bold text-slate-950 shadow-md transition hover:bg-cyan-300 disabled:opacity-60"
         >
-          {status === "loading" ? "Searching..." : "Search this area"}
+          {status === "loading"
+            ? "Searching..."
+            : !drawReady
+              ? "Loading draw…"
+              : "Search this area"}
         </button>
       </header>
 
@@ -991,8 +1016,14 @@ function VeniceMapShell({
         </div>
       </div>
 
-      {(errorMessage || status === "ok") && (
+      {(errorMessage || status === "ok" || status === "loading") && (
         <aside className="max-h-[40vh] shrink-0 overflow-y-auto border-t border-slate-800 bg-slate-900/95 p-3 sm:max-h-[32vh]">
+          {status === "loading" && (
+            <p className="mb-2 text-sm text-cyan-200">
+              Searching hotels and walking estimates… This can take ~15–30
+              seconds the first time (routing requests per hotel).
+            </p>
+          )}
           {errorMessage && (
             <p className="mb-2 text-sm text-amber-300">{errorMessage}</p>
           )}
@@ -1151,8 +1182,9 @@ function VeniceMapShell({
             )}
           {status === "ok" && hotels.length === 0 && !errorMessage && (
             <p className="text-sm text-slate-400">
-              No catalog hotels in that area. Draw a larger rectangle or move the
-              map toward the city center.
+              No catalog hotels in that area. For seeded cities, the few sample
+              hotels sit near the city center—draw a rectangle that includes the
+              center, or zoom there first. You can also draw a larger area.
             </p>
           )}
         </aside>
