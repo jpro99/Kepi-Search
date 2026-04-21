@@ -15,6 +15,7 @@ import * as turf from "@turf/turf";
 import {
   TerraDraw,
   TerraDrawRectangleMode,
+  TerraDrawRenderMode,
   TerraDrawSelectMode,
 } from "terra-draw";
 import { TerraDrawMapLibreGLAdapter } from "terra-draw-maplibre-gl-adapter";
@@ -297,6 +298,11 @@ function VeniceMapShell({
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const drawRef = useRef<TerraDraw | null>(null);
+  /** Pan vs draw-rectangle; wired inside the map `load` handler. */
+  const mapToolRef = useRef<{
+    pan: () => void;
+    draw: () => void;
+  } | null>(null);
   const [catalog, setCatalog] = useState<CityCatalog | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
   const [hotels, setHotels] = useState<HotelSearchHit[]>([]);
@@ -322,6 +328,8 @@ function VeniceMapShell({
   const [mapBootIssue, setMapBootIssue] = useState<string | null>(null);
   /** False until TerraDraw has started on the loaded map (Search must not run before this). */
   const [drawReady, setDrawReady] = useState(false);
+  /** `pan` = move the map; `draw` = drag a search rectangle (MapLibre pan off until you finish or switch back). */
+  const [mapTool, setMapTool] = useState<"pan" | "draw">("pan");
 
   const runSearchRef = useRef<(() => Promise<void>) | null>(null);
 
@@ -408,14 +416,16 @@ function VeniceMapShell({
     const draw = drawRef.current;
     if (!draw) {
       setErrorMessage(
-        "The map is still finishing setup. Wait a moment after the map appears, draw a rectangle on it, then tap Search again.",
+        "The map is still finishing setup. Wait until the header shows Pan map / Draw area, choose Draw area, drag a rectangle, then tap Search again.",
       );
       setStatus("error");
       return;
     }
     const poly = pickSearchPolygon(draw.getSnapshot() as GeoJSON.Feature[]);
     if (!poly) {
-      setErrorMessage("Draw a rectangle on the map first (drag to size it).");
+      setErrorMessage(
+        "Choose Draw area in the header, drag a rectangle on the map, then tap Search again.",
+      );
       setStatus("error");
       return;
     }
@@ -495,7 +505,7 @@ function VeniceMapShell({
     }
     const poly = pickSearchPolygon(draw.getSnapshot() as GeoJSON.Feature[]);
     if (!poly) {
-      setShareHint("Draw a rectangle first");
+      setShareHint("Use Draw area first, then copy link");
       window.setTimeout(() => setShareHint(null), 2500);
       return;
     }
@@ -708,6 +718,16 @@ function VeniceMapShell({
       },
     });
 
+    const renderMode = new TerraDrawRenderMode({
+      modeName: "kepi-render",
+      styles: {
+        polygonFillColor: "#33ccff",
+        polygonFillOpacity: 0.2,
+        polygonOutlineColor: "#0090c5",
+        polygonOutlineWidth: 2,
+      },
+    });
+
     map.on("load", () => {
       window.clearTimeout(stallTimer);
       setMapBootIssue(null);
@@ -723,7 +743,7 @@ function VeniceMapShell({
       });
       const draw = new TerraDraw({
         adapter,
-        modes: [selectMode, rectangleMode],
+        modes: [selectMode, rectangleMode, renderMode],
       });
       draw.start();
       queueMicrotask(() => tightenTerraDrawPointMarkerFilter(map));
@@ -751,14 +771,10 @@ function VeniceMapShell({
         draw.setMode(rectangleMode.mode);
       };
 
-      const enterSelectAfterPolygon = (featureId: string | number) => {
+      /** View-only mode: shows polygons but does not capture drags, so the map pans normally. */
+      const enterPanMap = () => {
         setBasemapPointerDrag(true);
-        draw.setMode(selectMode.mode);
-        try {
-          draw.selectFeature(featureId);
-        } catch {
-          draw.setMode(selectMode.mode);
-        }
+        draw.setMode(renderMode.mode);
       };
 
       draw.on("finish", (id) => {
@@ -777,6 +793,7 @@ function VeniceMapShell({
           draw.setMode(selectMode.mode);
         }
         setBasemapPointerDrag(true);
+        setMapTool("pan");
       });
 
       drawRef.current = draw;
@@ -816,8 +833,20 @@ function VeniceMapShell({
         restoredFromSession = true;
       }
 
+      mapToolRef.current = {
+        pan: () => {
+          enterPanMap();
+          setMapTool("pan");
+        },
+        draw: () => {
+          enterRectangleDraw();
+          setMapTool("draw");
+        },
+      };
+
       if (!ring || ring.length < 4) {
-        enterRectangleDraw();
+        enterPanMap();
+        setMapTool("pan");
         upsertResultLayer(displayHotelsRef.current);
         return;
       }
@@ -835,11 +864,13 @@ function VeniceMapShell({
         vals.length > 0 &&
         vals.every((r) => (r as { valid?: boolean }).valid !== false);
       if (!ok) {
-        enterRectangleDraw();
+        enterPanMap();
+        setMapTool("pan");
         upsertResultLayer(displayHotelsRef.current);
         return;
       }
-      enterSelectAfterPolygon(fid);
+      enterPanMap();
+      setMapTool("pan");
       upsertResultLayer(displayHotelsRef.current);
 
       if (!restoredFromSession && areaFromUrl) {
@@ -868,6 +899,7 @@ function VeniceMapShell({
     window.addEventListener("resize", onResize);
 
         detach = () => {
+          mapToolRef.current = null;
           setDrawReady(false);
           if (stallTimer !== undefined) window.clearTimeout(stallTimer);
           if (postLoadTileCheck !== undefined) {
@@ -970,7 +1002,8 @@ function VeniceMapShell({
             Kepi Search
           </h1>
           <p className="truncate text-[11px] text-slate-400 sm:text-xs">
-            {catalog.label} | Hyatt | Marriott | Hilton - draw area, then search
+            {catalog.label} | Hyatt | Marriott | Hilton — pan the map, draw a
+            rectangle, then search
           </p>
         </div>
         <CitySearchCombobox
@@ -983,6 +1016,40 @@ function VeniceMapShell({
             router.replace(`/?${p.toString()}`, { scroll: false });
           }}
         />
+        <div
+          className="flex shrink-0 rounded-lg border border-slate-600 bg-slate-800/90 p-0.5 shadow-inner"
+          role="group"
+          aria-label="Map interaction"
+        >
+          <button
+            type="button"
+            disabled={!drawReady}
+            aria-pressed={mapTool === "pan"}
+            onClick={() => mapToolRef.current?.pan()}
+            title="Drag the map with the mouse (default)"
+            className={`rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition sm:text-xs ${
+              mapTool === "pan"
+                ? "bg-cyan-500/20 text-cyan-200 ring-1 ring-cyan-500/50"
+                : "text-slate-300 hover:bg-slate-700/80 hover:text-slate-100"
+            } disabled:opacity-50`}
+          >
+            Pan map
+          </button>
+          <button
+            type="button"
+            disabled={!drawReady}
+            aria-pressed={mapTool === "draw"}
+            onClick={() => mapToolRef.current?.draw()}
+            title="Drag a rectangle for search; map pan is off until you finish or choose Pan map"
+            className={`rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition sm:text-xs ${
+              mapTool === "draw"
+                ? "bg-cyan-500/20 text-cyan-200 ring-1 ring-cyan-500/50"
+                : "text-slate-300 hover:bg-slate-700/80 hover:text-slate-100"
+            } disabled:opacity-50`}
+          >
+            Draw area
+          </button>
+        </div>
         <button
           type="button"
           onClick={() => void copyShareLink()}
@@ -996,7 +1063,7 @@ function VeniceMapShell({
           disabled={status === "loading" || !drawReady}
           title={
             !drawReady
-              ? "Wait for the map to finish loading, then draw a rectangle"
+              ? "Wait for the map to finish loading, then use Draw area"
               : undefined
           }
           className="shrink-0 rounded-full bg-cyan-400 px-4 py-2 text-sm font-bold text-slate-950 shadow-md transition hover:bg-cyan-300 disabled:opacity-60"
@@ -1004,7 +1071,7 @@ function VeniceMapShell({
           {status === "loading"
             ? "Searching..."
             : !drawReady
-              ? "Loading draw…"
+              ? "Loading map…"
               : "Search this area"}
         </button>
       </header>
@@ -1036,9 +1103,15 @@ function VeniceMapShell({
             </p>
           )}
           <p className="pointer-events-none max-w-md rounded-lg bg-slate-900/85 px-3 py-2 text-[11px] text-slate-300 shadow-lg ring-1 ring-cyan-500/30 sm:text-xs">
-            Drag a rectangle, then resize from corners. Tap{" "}
+            Use <span className="font-semibold text-cyan-300">Pan map</span> to
+            move the basemap. Tap{" "}
+            <span className="font-semibold text-cyan-300">Draw area</span>, drag
+            a rectangle, then{" "}
+            <span className="font-semibold text-cyan-300">Pan map</span> again
+            when you want normal scrolling. Corners stay editable right after you
+            finish drawing. Then{" "}
             <span className="font-semibold text-cyan-300">Search this area</span>
-            . Last search restores after refresh (same browser).{" "}
+            . Last search restores after refresh.{" "}
             <span className="font-semibold text-cyan-300">Copy link</span> shares
             city + area in the URL.
           </p>
