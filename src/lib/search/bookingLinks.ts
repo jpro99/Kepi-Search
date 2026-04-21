@@ -47,7 +47,8 @@ function chainCityLanding(chain: Chain, cityLabel: string): string {
     case "hilton":
       return `https://www.hilton.com/en/search/?query=${cityEnc}`;
     case "hyatt":
-      return `https://www.hyatt.com/search?term=${cityEnc}`;
+      // Hyatt's `?term=` search often redirects to a `_404` path (e.g. Como). Map is stable.
+      return `https://www.hyatt.com/explore-hotels/map`;
     default:
       return `https://www.google.com/search?q=${encodeURIComponent(`book hotel ${cityLabel}`)}`;
   }

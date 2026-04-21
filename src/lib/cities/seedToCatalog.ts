@@ -37,7 +37,7 @@ function chainSearchUrls(cityName: string, countryCode: string) {
   return {
     marriott: `https://www.marriott.com/search/findHotels.mi?searchType=InCity&destinationAddress.city=${cityEnc}&destinationAddress.country=${cc}`,
     hilton: `https://www.hilton.com/en/search/?query=${cityEnc}`,
-    hyatt: `https://www.hyatt.com/search?term=${cityEnc}`,
+    hyatt: `https://www.hyatt.com/explore-hotels/map`,
   };
 }
 

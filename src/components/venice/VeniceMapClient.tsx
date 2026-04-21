@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import maplibregl from "maplibre-gl";
 import "@/lib/maplibreCspWorker";
@@ -1084,6 +1085,12 @@ function VeniceMapShell({
             Draw area
           </button>
         </div>
+        <Link
+          href="/settings/integrations"
+          className="shrink-0 rounded-lg border border-slate-600 bg-slate-800 px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-700 sm:text-xs"
+        >
+          Integrations
+        </Link>
         <button
           type="button"
           onClick={() => void copyShareLink()}
