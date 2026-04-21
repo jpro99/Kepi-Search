@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const paths = [
+  "src/app/HomeMapLoader.tsx",
   "src/components/venice/VeniceMapClient.tsx",
   "src/data/cities/registry.ts",
   "src/data/cities/new-york.ts",
