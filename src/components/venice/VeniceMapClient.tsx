@@ -577,6 +577,13 @@ function VeniceMapShell({
     map.on("style.load", () => {
       registerBlankSpriteIds(map);
       tightenTerraDrawPointMarkerFilter(map);
+      requestAnimationFrame(() => {
+        try {
+          map.resize();
+        } catch {
+          /* ignore */
+        }
+      });
     });
 
     map.setStyle(maptilerStyle);
@@ -587,6 +594,30 @@ function VeniceMapShell({
 
     map.addControl(new maplibregl.NavigationControl(), "top-right");
     mapRef.current = map;
+
+    const resizeHost = mapEl.current;
+    const resizeObserver =
+      resizeHost &&
+      new ResizeObserver(() => {
+        try {
+          map.resize();
+        } catch {
+          /* map torn down */
+        }
+      });
+    if (resizeHost && resizeObserver) resizeObserver.observe(resizeHost);
+    requestAnimationFrame(() => {
+      try {
+        map.resize();
+      } catch {
+        /* ignore */
+      }
+    });
+
+    const onMapError = (e: { error?: Error }) => {
+      console.error("[kepi map]", e.error ?? e);
+    };
+    map.on("error", onMapError);
 
     const rectangleMode = new TerraDrawRectangleMode({
       styles: {
@@ -614,6 +645,11 @@ function VeniceMapShell({
     });
 
     map.on("load", () => {
+      try {
+        map.resize();
+      } catch {
+        /* ignore */
+      }
       const adapter = new TerraDrawMapLibreGLAdapter({
         map,
         prefixId: TERRA_DRAW_MAP_PREFIX,
@@ -720,6 +756,8 @@ function VeniceMapShell({
     window.addEventListener("resize", onResize);
 
     return () => {
+      map.off("error", onMapError);
+      if (resizeObserver) resizeObserver.disconnect();
       window.removeEventListener("resize", onResize);
       canvas.removeEventListener("webglcontextlost", onWebGlContextLost);
       canvas.removeEventListener("webglcontextrestored", onWebGlContextRestored);
