@@ -42,6 +42,31 @@ export interface TravelUpdateProvider {
   }): Promise<TravelUpdateEvent[]>;
 }
 
+export interface TravelUpdateCheckOptions {
+  providerOverride?: TravelUpdateProvider;
+  maxAttempts?: number;
+  baseDelayMs?: number;
+  cooldownMs?: number;
+  failureThreshold?: number;
+  nowMs?: number;
+  disableDelay?: boolean;
+}
+
+export interface TravelUpdateCheckResult {
+  mode: TravelUpdateMode;
+  provider: string | null;
+  updates: TravelUpdateEvent[];
+  attempts: number;
+  circuitOpen: boolean;
+  error: string | null;
+}
+
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_BASE_DELAY_MS = 300;
+const DEFAULT_COOLDOWN_MS = 60_000;
+const DEFAULT_FAILURE_THRESHOLD = 2;
+const circuitStateByProvider = new Map<string, { consecutiveFailures: number; openUntilMs: number }>();
+
 function parseDateInput(value: string): number {
   if (!value) return Number.NaN;
   const parsed = Date.parse(value.replace(" ", "T"));
@@ -235,23 +260,99 @@ function dedupeUpdates(updates: TravelUpdateEvent[]): TravelUpdateEvent[] {
   return unique;
 }
 
+function jitteredDelay(baseDelayMs: number, attempt: number): number {
+  const exponential = baseDelayMs * 2 ** Math.max(0, attempt - 1);
+  const jitter = Math.floor(Math.random() * Math.max(25, baseDelayMs / 2));
+  return exponential + jitter;
+}
+
+async function waitMs(value: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, value));
+}
+
+function normalizeError(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  return "Unknown provider failure";
+}
+
+export function resetTravelUpdateCircuitState(): void {
+  circuitStateByProvider.clear();
+}
+
 export async function runTravelUpdateCheck({
   mode,
   reservations,
   nowIso,
+  options,
 }: {
   mode: TravelUpdateMode;
   reservations: readonly UpdatableReservation[];
   nowIso: string;
-}): Promise<{
-  mode: TravelUpdateMode;
-  provider: string | null;
-  updates: TravelUpdateEvent[];
-}> {
-  const provider = resolveProvider(mode);
+  options?: TravelUpdateCheckOptions;
+}): Promise<TravelUpdateCheckResult> {
+  const provider = options?.providerOverride ?? resolveProvider(mode);
   if (!provider) {
-    return { mode, provider: null, updates: [] };
+    return { mode, provider: null, updates: [], attempts: 0, circuitOpen: false, error: null };
   }
-  const updates = await provider.fetchUpdates({ reservations, nowIso });
-  return { mode, provider: provider.name, updates: dedupeUpdates(updates) };
+
+  const maxAttempts = Math.max(1, options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
+  const baseDelayMs = Math.max(50, options?.baseDelayMs ?? DEFAULT_BASE_DELAY_MS);
+  const cooldownMs = Math.max(5_000, options?.cooldownMs ?? DEFAULT_COOLDOWN_MS);
+  const failureThreshold = Math.max(1, options?.failureThreshold ?? DEFAULT_FAILURE_THRESHOLD);
+  const nowMs = options?.nowMs ?? Date.now();
+
+  const circuitState = circuitStateByProvider.get(provider.name) ?? {
+    consecutiveFailures: 0,
+    openUntilMs: 0,
+  };
+  if (circuitState.openUntilMs > nowMs) {
+    return {
+      mode,
+      provider: provider.name,
+      updates: [],
+      attempts: 0,
+      circuitOpen: true,
+      error: `Circuit open until ${new Date(circuitState.openUntilMs).toISOString()}`,
+    };
+  }
+
+  let attempts = 0;
+  let lastError: string | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    attempts = attempt;
+    try {
+      const updates = await provider.fetchUpdates({ reservations, nowIso });
+      circuitStateByProvider.set(provider.name, { consecutiveFailures: 0, openUntilMs: 0 });
+      return {
+        mode,
+        provider: provider.name,
+        updates: dedupeUpdates(updates),
+        attempts,
+        circuitOpen: false,
+        error: null,
+      };
+    } catch (error) {
+      lastError = normalizeError(error);
+      if (attempt < maxAttempts && !options?.disableDelay) {
+        await waitMs(jitteredDelay(baseDelayMs, attempt));
+      }
+    }
+  }
+
+  const nextConsecutiveFailures = circuitState.consecutiveFailures + 1;
+  const openUntilMs =
+    nextConsecutiveFailures >= failureThreshold ? nowMs + cooldownMs : circuitState.openUntilMs;
+  circuitStateByProvider.set(provider.name, {
+    consecutiveFailures: nextConsecutiveFailures,
+    openUntilMs,
+  });
+
+  return {
+    mode,
+    provider: provider.name,
+    updates: [],
+    attempts,
+    circuitOpen: openUntilMs > nowMs,
+    error: lastError ?? "Provider update check failed",
+  };
 }

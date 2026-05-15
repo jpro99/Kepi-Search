@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   runTravelUpdateCheck,
   type TravelUpdateEvent,
@@ -164,6 +164,7 @@ const TYPE_REMINDER_THRESHOLDS: Record<ReservationType, number[]> = {
   hotel: [1440, 240, 60],
   dinner: [180, 60, 30],
 };
+const UPDATE_REPLAY_WINDOW_MS = 30 * 60_000;
 
 const EMPTY_DRAFT: ReservationDraft = {
   type: "flight",
@@ -423,6 +424,19 @@ function normalizeText(value: string): string {
   return value.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
 }
 
+function buildUpdateReplayKey(update: TravelUpdateEvent): string {
+  return [
+    update.provider,
+    update.kind,
+    update.target.reservationType,
+    update.target.confirmationCode ?? "",
+    update.target.titleHint ?? "",
+    update.delayMinutes ?? "",
+    update.updatedLocation ?? "",
+    update.summary,
+  ].join("|");
+}
+
 function csvEscape(value: string): string {
   const clean = value.replaceAll('"', '""');
   return `"${clean}"`;
@@ -600,12 +614,15 @@ export default function TravelAssistantPage() {
   const [lastReminderSentAt, setLastReminderSentAt] = useState<string | null>(null);
   const [lastProviderCheckAt, setLastProviderCheckAt] = useState<string | null>(null);
   const [lastProviderError, setLastProviderError] = useState<string | null>(null);
+  const [lastProviderAttempts, setLastProviderAttempts] = useState(0);
+  const [providerCircuitOpen, setProviderCircuitOpen] = useState(false);
   const [autoTransportUpdates, setAutoTransportUpdates] = useState(true);
   const [isProviderCheckRunning, setIsProviderCheckRunning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [queuedProviderUpdates, setQueuedProviderUpdates] = useState<TravelUpdateEvent[]>([]);
   const [updateFeed, setUpdateFeed] = useState<UpdateFeedItem[]>([]);
+  const recentAppliedUpdateKeysRef = useRef<Map<string, number>>(new Map());
 
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(INITIAL_FAMILY);
   const [reservations, setReservations] = useState<Reservation[]>(INITIAL_RESERVATIONS);
@@ -959,6 +976,13 @@ export default function TravelAssistantPage() {
     if (updates.length === 0) return 0;
 
     const appliedAt = new Date().toISOString();
+    const appliedAtMs = Date.parse(appliedAt);
+    const replayState = recentAppliedUpdateKeysRef.current;
+    replayState.forEach((seenAtMs, key) => {
+      if (appliedAtMs - seenAtMs > UPDATE_REPLAY_WINDOW_MS) {
+        replayState.delete(key);
+      }
+    });
     const appliedFeed: UpdateFeedItem[] = [];
     let criticalUpdateApplied = false;
 
@@ -967,6 +991,8 @@ export default function TravelAssistantPage() {
         const normalizedTitle = normalizeText(reservation.title);
         const matchingUpdates = updates.filter((update) => {
           if (update.target.reservationType !== reservation.type) return false;
+          const replayKey = buildUpdateReplayKey(update);
+          if (replayState.has(replayKey)) return false;
           if (update.target.confirmationCode) {
             return update.target.confirmationCode === reservation.confirmationCode;
           }
@@ -979,6 +1005,7 @@ export default function TravelAssistantPage() {
 
         const nextReservation = { ...reservation };
         matchingUpdates.forEach((update) => {
+          const replayKey = buildUpdateReplayKey(update);
           if (update.kind === "delay" && update.delayMinutes) {
             const parsedTime = parseDateInput(nextReservation.localTime);
             if (!Number.isNaN(parsedTime)) {
@@ -1003,6 +1030,7 @@ export default function TravelAssistantPage() {
             provider: providerName,
             appliedAt,
           });
+          replayState.set(replayKey, appliedAtMs);
         });
 
         return nextReservation;
@@ -1040,7 +1068,22 @@ export default function TravelAssistantPage() {
         nowIso: new Date(nowMs).toISOString(),
       });
       setLastProviderCheckAt(new Date().toISOString());
-      setLastProviderError(null);
+      setLastProviderAttempts(result.attempts);
+      setProviderCircuitOpen(result.circuitOpen);
+      setLastProviderError(result.error);
+
+      if (result.circuitOpen) {
+        if (trigger === "manual") {
+          setToast(result.error ?? "Provider circuit is open. Please retry later.");
+        }
+        return;
+      }
+      if (result.error) {
+        if (trigger === "manual") {
+          setToast(`Provider check failed: ${result.error}`);
+        }
+        return;
+      }
 
       if (result.updates.length === 0) {
         if (trigger === "manual") {
@@ -1058,11 +1101,15 @@ export default function TravelAssistantPage() {
 
       const appliedCount = applyProviderUpdates(result.updates, result.provider ?? "provider");
       if (appliedCount > 0) {
-        setToast(`Applied ${appliedCount} live transport updates.`);
+        setToast(
+          `Applied ${appliedCount} live transport updates${result.attempts > 1 ? ` (after ${result.attempts} attempts)` : ""}.`,
+        );
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown provider adapter failure";
       setLastProviderCheckAt(new Date().toISOString());
+      setLastProviderAttempts(0);
+      setProviderCircuitOpen(false);
       setLastProviderError(message);
       if (trigger === "manual") {
         setToast(`Provider check failed: ${message}`);
@@ -1777,6 +1824,10 @@ export default function TravelAssistantPage() {
                 <p className="text-xs text-slate-400">Pending updates: {pendingSyncCount}</p>
                 <p className="text-xs text-slate-400">Provider mode: {updateMode}</p>
                 <p className="text-xs text-slate-400">Last provider check: {formatClock(lastProviderCheckAt)}</p>
+                <p className="text-xs text-slate-400">Provider attempts (last check): {lastProviderAttempts}</p>
+                <p className="text-xs text-slate-400">
+                  Circuit status: {providerCircuitOpen ? "Open (cooldown active)" : "Closed"}
+                </p>
                 <p className="text-xs text-slate-400">Queued provider updates: {queuedProviderUpdates.length}</p>
                 {lastProviderError ? (
                   <p className="text-xs text-red-200">Provider error: {lastProviderError}</p>
