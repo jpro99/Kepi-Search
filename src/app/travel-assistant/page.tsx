@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  runTravelUpdateCheck,
+  type TravelUpdateEvent,
+  type TravelUpdateKind,
+  type TravelUpdateMode,
+  type TravelUpdateSeverity,
+} from "@/lib/travelAssistant/updateAdapters";
 
 type TripStage = "readiness" | "pre-departure" | "airport" | "arrival" | "recovery";
 type TripStatus = "green" | "yellow" | "red";
@@ -100,6 +107,17 @@ interface TimelineIssue {
   severity: "high" | "medium";
   message: string;
   recommendation: string;
+}
+
+interface UpdateFeedItem {
+  id: string;
+  reservationId: string;
+  kind: TravelUpdateKind;
+  severity: TravelUpdateSeverity;
+  summary: string;
+  detail: string;
+  provider: string;
+  appliedAt: string;
 }
 
 const STAGES: TripStage[] = ["readiness", "pre-departure", "airport", "arrival", "recovery"];
@@ -223,6 +241,22 @@ const INITIAL_RESERVATIONS: Reservation[] = [
     critical: true,
     confidence: "high",
     notes: "Late check-in approved.",
+    source: "imported",
+  },
+  {
+    id: "res-train-1",
+    type: "train",
+    title: "Coastline Express SFO -> Palo Alto",
+    provider: "Caltrain",
+    localTime: "2026-06-23 09:40",
+    timezone: "America/Los_Angeles",
+    location: "SFO Transit Station • Platform 4",
+    confirmationCode: "CT-7730",
+    assignedTo: ["alex", "jamie"],
+    stage: "arrival",
+    critical: true,
+    confidence: "high",
+    notes: "Morning transfer to meeting district.",
     source: "imported",
   },
   {
@@ -373,6 +407,20 @@ function parseDateInput(value: string): number {
   if (!value) return Number.NaN;
   const parsed = Date.parse(value.replace(" ", "T"));
   return Number.isNaN(parsed) ? Number.NaN : parsed;
+}
+
+function formatDateTimeLocal(valueMs: number): string {
+  const value = new Date(valueMs);
+  const year = value.getFullYear();
+  const month = `${value.getMonth() + 1}`.padStart(2, "0");
+  const day = `${value.getDate()}`.padStart(2, "0");
+  const hours = `${value.getHours()}`.padStart(2, "0");
+  const minutes = `${value.getMinutes()}`.padStart(2, "0");
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
+}
+
+function normalizeText(value: string): string {
+  return value.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
 }
 
 function csvEscape(value: string): string {
@@ -535,6 +583,8 @@ function normalizeCoordinates(members: FamilyMember[]): Array<{ member: FamilyMe
 }
 
 export default function TravelAssistantPage() {
+  const updateMode: TravelUpdateMode =
+    (process.env.NEXT_PUBLIC_TRAVEL_UPDATES_MODE ?? "mock").toLowerCase() === "off" ? "off" : "mock";
   const [tripStage, setTripStage] = useState<TripStage>("readiness");
   const [tripStatus, setTripStatus] = useState<TripStatus>("yellow");
   const [networkMode, setNetworkMode] = useState<NetworkMode>("wifi");
@@ -548,8 +598,13 @@ export default function TravelAssistantPage() {
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(new Date().toISOString());
   const [lastReminderSentAt, setLastReminderSentAt] = useState<string | null>(null);
+  const [lastProviderCheckAt, setLastProviderCheckAt] = useState<string | null>(null);
+  const [autoTransportUpdates, setAutoTransportUpdates] = useState(true);
+  const [isProviderCheckRunning, setIsProviderCheckRunning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const [queuedProviderUpdates, setQueuedProviderUpdates] = useState<TravelUpdateEvent[]>([]);
+  const [updateFeed, setUpdateFeed] = useState<UpdateFeedItem[]>([]);
 
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(INITIAL_FAMILY);
   const [reservations, setReservations] = useState<Reservation[]>(INITIAL_RESERVATIONS);
@@ -572,6 +627,22 @@ export default function TravelAssistantPage() {
   const selectedEmail = useMemo(
     () => EMAIL_SAMPLES.find((sample) => sample.id === selectedEmailId) ?? EMAIL_SAMPLES[0],
     [selectedEmailId],
+  );
+
+  const providerEligibleReservations = useMemo(
+    () =>
+      reservations
+        .filter((reservation) => reservation.type === "flight" || reservation.type === "train" || reservation.type === "ride")
+        .map((reservation) => ({
+          id: reservation.id,
+          type: reservation.type,
+          title: reservation.title,
+          confirmationCode: reservation.confirmationCode,
+          localTime: reservation.localTime,
+          location: reservation.location,
+          timezone: reservation.timezone,
+        })),
+    [reservations],
   );
 
   const canSyncItineraryNow = networkMode === "wifi" || (!wifiOnlySync && networkMode === "cellular");
@@ -883,6 +954,124 @@ export default function TravelAssistantPage() {
     return Math.max(0, Math.min(100, rawScore));
   }, [blockingIssueCount, smartEscalationDueCount, tripStatus, unresolvedReadinessCount, unresolvedReviewCount]);
 
+  const applyProviderUpdates = useCallback((updates: TravelUpdateEvent[], providerName: string): number => {
+    if (updates.length === 0) return 0;
+
+    const appliedAt = new Date().toISOString();
+    const appliedFeed: UpdateFeedItem[] = [];
+    let criticalUpdateApplied = false;
+
+    setReservations((previousReservations) => {
+      return previousReservations.map((reservation) => {
+        const normalizedTitle = normalizeText(reservation.title);
+        const matchingUpdates = updates.filter((update) => {
+          if (update.target.reservationType !== reservation.type) return false;
+          if (update.target.confirmationCode) {
+            return update.target.confirmationCode === reservation.confirmationCode;
+          }
+          if (update.target.titleHint) {
+            return normalizeText(update.target.titleHint) === normalizedTitle;
+          }
+          return false;
+        });
+        if (matchingUpdates.length === 0) return reservation;
+
+        const nextReservation = { ...reservation };
+        matchingUpdates.forEach((update) => {
+          if (update.kind === "delay" && update.delayMinutes) {
+            const parsedTime = parseDateInput(nextReservation.localTime);
+            if (!Number.isNaN(parsedTime)) {
+              nextReservation.localTime = formatDateTimeLocal(parsedTime + update.delayMinutes * 60000);
+            }
+          }
+          if (update.updatedLocation) {
+            nextReservation.location = update.updatedLocation;
+          }
+          if (update.kind === "cancellation") {
+            criticalUpdateApplied = true;
+            nextReservation.confidence = "high";
+          }
+          nextReservation.notes = `${nextReservation.notes}\n[${providerName}] ${update.summary}`.trim();
+          appliedFeed.push({
+            id: nextId("feed"),
+            reservationId: reservation.id,
+            kind: update.kind,
+            severity: update.severity,
+            summary: update.summary,
+            detail: update.detail,
+            provider: providerName,
+            appliedAt,
+          });
+        });
+
+        return nextReservation;
+      });
+    });
+
+    if (criticalUpdateApplied) {
+      setTripStatus("red");
+      setTripStage("recovery");
+    }
+
+    if (appliedFeed.length > 0) {
+      setUpdateFeed((previous) => [...appliedFeed, ...previous].slice(0, 30));
+      setLastSyncAt(appliedAt);
+    }
+    return appliedFeed.length;
+  }, []);
+
+  const runProviderCheck = useCallback(async (trigger: "auto" | "manual"): Promise<void> => {
+    if (isProviderCheckRunning) {
+      return;
+    }
+    if (updateMode === "off") {
+      if (trigger === "manual") {
+        setToast("Provider adapter disabled. Set NEXT_PUBLIC_TRAVEL_UPDATES_MODE=mock to test.");
+      }
+      return;
+    }
+
+    setIsProviderCheckRunning(true);
+    try {
+      const result = await runTravelUpdateCheck({
+        mode: updateMode,
+        reservations: providerEligibleReservations,
+        nowIso: new Date(nowMs).toISOString(),
+      });
+      setLastProviderCheckAt(new Date().toISOString());
+
+      if (result.updates.length === 0) {
+        if (trigger === "manual") {
+          setToast("No new transport updates right now.");
+        }
+        return;
+      }
+
+      if (!canSyncItineraryNow) {
+        setQueuedProviderUpdates((previous) => [...previous, ...result.updates]);
+        setPendingSyncCount((count) => count + result.updates.length);
+        setToast(`Queued ${result.updates.length} provider updates until sync is allowed.`);
+        return;
+      }
+
+      const appliedCount = applyProviderUpdates(result.updates, result.provider ?? "provider");
+      if (appliedCount > 0) {
+        setToast(`Applied ${appliedCount} live transport updates.`);
+      }
+    } finally {
+      setIsProviderCheckRunning(false);
+    }
+  }, [applyProviderUpdates, canSyncItineraryNow, isProviderCheckRunning, nowMs, providerEligibleReservations, updateMode]);
+
+  useEffect(() => {
+    if (!autoTransportUpdates) return;
+    if (updateMode === "off") return;
+    const timer = window.setInterval(() => {
+      void runProviderCheck("auto");
+    }, 90_000);
+    return () => window.clearInterval(timer);
+  }, [autoTransportUpdates, runProviderCheck, updateMode]);
+
   const queueMutation = (message: string): void => {
     if (canSyncItineraryNow) {
       setLastSyncAt(new Date().toISOString());
@@ -893,14 +1082,42 @@ export default function TravelAssistantPage() {
     setToast(`${message} Queued until sync is allowed.`);
   };
 
+  const drainQueuedProviderUpdates = (isSyncAllowed: boolean, reason: string): number => {
+    if (!isSyncAllowed || queuedProviderUpdates.length === 0) {
+      return 0;
+    }
+    const appliedCount = applyProviderUpdates(queuedProviderUpdates, "queued-provider-updates");
+    setQueuedProviderUpdates([]);
+    setPendingSyncCount((count) => Math.max(0, count - queuedProviderUpdates.length));
+    setToast(`Applied ${appliedCount} queued provider updates (${reason}).`);
+    return appliedCount;
+  };
+
+  const handleNetworkModeChange = (nextMode: NetworkMode): void => {
+    setNetworkMode(nextMode);
+    const syncAllowed = nextMode === "wifi" || (!wifiOnlySync && nextMode === "cellular");
+    drainQueuedProviderUpdates(syncAllowed, "network changed");
+  };
+
+  const handleWifiOnlySyncToggle = (nextValue: boolean): void => {
+    setWifiOnlySync(nextValue);
+    const syncAllowed = networkMode === "wifi" || (!nextValue && networkMode === "cellular");
+    drainQueuedProviderUpdates(syncAllowed, "Wi-Fi policy changed");
+  };
+
   const flushPendingSync = (): void => {
     if (networkMode === "offline") {
       setToast("Still offline. Pending updates remain queued.");
       return;
     }
+    const appliedFromQueue = drainQueuedProviderUpdates(true, "manual sync");
     setPendingSyncCount(0);
     setLastSyncAt(new Date().toISOString());
-    setToast("Manual sync completed.");
+    setToast(
+      appliedFromQueue > 0
+        ? `Manual sync completed. Applied ${appliedFromQueue} queued provider updates.`
+        : "Manual sync completed.",
+    );
   };
 
   const evaluateStatus = (): void => {
@@ -1521,7 +1738,7 @@ export default function TravelAssistantPage() {
                 <span className="mb-1 block text-slate-300">Current network</span>
                 <select
                   value={networkMode}
-                  onChange={(event) => setNetworkMode(event.target.value as NetworkMode)}
+                  onChange={(event) => handleNetworkModeChange(event.target.value as NetworkMode)}
                   className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2"
                 >
                   <option value="wifi">Wi-Fi</option>
@@ -1534,7 +1751,7 @@ export default function TravelAssistantPage() {
                 <input
                   type="checkbox"
                   checked={wifiOnlySync}
-                  onChange={(event) => setWifiOnlySync(event.target.checked)}
+                  onChange={(event) => handleWifiOnlySyncToggle(event.target.checked)}
                 />
               </label>
               <label className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">
@@ -1549,7 +1766,28 @@ export default function TravelAssistantPage() {
                 <p className="text-xs text-slate-300">{locationStatusMessage}</p>
                 <p className="mt-1 text-xs text-slate-400">Last sync: {formatClock(lastSyncAt)}</p>
                 <p className="text-xs text-slate-400">Pending updates: {pendingSyncCount}</p>
+                <p className="text-xs text-slate-400">Provider mode: {updateMode}</p>
+                <p className="text-xs text-slate-400">Last provider check: {formatClock(lastProviderCheckAt)}</p>
+                <p className="text-xs text-slate-400">Queued provider updates: {queuedProviderUpdates.length}</p>
               </div>
+              <label className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">
+                <span>Auto transport updates</span>
+                <input
+                  type="checkbox"
+                  checked={autoTransportUpdates}
+                  onChange={(event) => setAutoTransportUpdates(event.target.checked)}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  void runProviderCheck("manual");
+                }}
+                disabled={isProviderCheckRunning}
+                className="w-full rounded-lg bg-cyan-500/90 px-3 py-2 font-semibold text-slate-900 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isProviderCheckRunning ? "Checking providers..." : "Check live delays now"}
+              </button>
               <button
                 type="button"
                 onClick={flushPendingSync}
@@ -1557,6 +1795,21 @@ export default function TravelAssistantPage() {
               >
                 Sync now once
               </button>
+              <div className="rounded-lg border border-slate-700 bg-slate-950/70 p-3">
+                <p className="text-xs font-semibold text-slate-200">Recent live updates</p>
+                <ul className="mt-2 max-h-24 space-y-1 overflow-auto text-xs text-slate-300">
+                  {updateFeed.length > 0 ? (
+                    updateFeed.slice(0, 4).map((feed) => (
+                      <li key={feed.id} className="rounded border border-slate-700 px-2 py-1">
+                        <p className="font-medium">{feed.summary}</p>
+                        <p className="text-[11px] text-slate-400">{formatClock(feed.appliedAt)}</p>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="text-slate-400">No provider updates applied yet.</li>
+                  )}
+                </ul>
+              </div>
             </div>
           </article>
         </section>
