@@ -139,6 +139,14 @@ const REMINDER_MILESTONES: ReminderMilestone[] = [
   { label: "T-45m", thresholdMinutes: 45 },
 ];
 
+const TYPE_REMINDER_THRESHOLDS: Record<ReservationType, number[]> = {
+  flight: [1440, 720, 180, 90, 45],
+  train: [720, 180, 60, 30],
+  ride: [180, 60, 20],
+  hotel: [1440, 240, 60],
+  dinner: [180, 60, 30],
+};
+
 const EMPTY_DRAFT: ReservationDraft = {
   type: "flight",
   title: "",
@@ -413,22 +421,95 @@ function downloadBlob(filename: string, blob: Blob): void {
   URL.revokeObjectURL(url);
 }
 
-function buildWordHtml(rows: ExportRow[], generatedAt: string): string {
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function formatThresholdLabel(minutes: number): string {
+  if (minutes % 60 === 0) {
+    return `T-${minutes / 60}h`;
+  }
+  return `T-${minutes}m`;
+}
+
+function buildPremiumItineraryHtml({
+  rows,
+  generatedAt,
+  stageLabel,
+  statusLabel,
+  confidenceScore,
+  scopeLabel,
+}: {
+  rows: ExportRow[];
+  generatedAt: string;
+  stageLabel: string;
+  statusLabel: string;
+  confidenceScore: number | null;
+  scopeLabel: string;
+}): string {
   const tableRows = rows
-    .map(
-      (row) =>
-        `<tr><td>${row.owner}</td><td>${row.itemType}</td><td>${row.title}</td><td>${row.provider}</td><td>${row.localTime}</td><td>${row.timezone}</td><td>${row.location}</td><td>${row.confirmation}</td><td>${row.notes}</td></tr>`,
-    )
+    .map((row) => {
+      return `<tr>
+        <td>${escapeHtml(row.owner)}</td>
+        <td>${escapeHtml(row.itemType)}</td>
+        <td>${escapeHtml(row.title)}</td>
+        <td>${escapeHtml(row.provider)}</td>
+        <td>${escapeHtml(row.localTime)}</td>
+        <td>${escapeHtml(row.timezone)}</td>
+        <td>${escapeHtml(row.location)}</td>
+        <td>${escapeHtml(row.confirmation)}</td>
+        <td>${escapeHtml(row.notes)}</td>
+      </tr>`;
+    })
     .join("");
+
+  const confidenceMarkup =
+    confidenceScore === null
+      ? ""
+      : `<span class="chip">Confidence score: ${Math.round(confidenceScore)}</span>`;
+
   return [
-    "<html><head><meta charset='utf-8'><title>Travel Itinerary</title></head><body>",
-    "<h1>Adaptive Travel Assistant - Static Itinerary</h1>",
-    `<p>Generated at: ${generatedAt}</p>`,
-    "<p>This is a static copy. Always confirm live itinerary for last-minute updates.</p>",
-    "<table border='1' cellspacing='0' cellpadding='6'>",
-    "<tr><th>Owner</th><th>Type</th><th>Title</th><th>Provider</th><th>Local Time</th><th>Timezone</th><th>Location</th><th>Confirmation</th><th>Notes</th></tr>",
-    tableRows,
-    "</table></body></html>",
+    "<html><head><meta charset='utf-8'><title>Travel Itinerary</title>",
+    "<style>",
+    "body { font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; color: #0f172a; margin: 0; background: #f8fafc; }",
+    ".wrap { padding: 28px; }",
+    ".hero { border: 1px solid #cbd5e1; border-radius: 18px; background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 55%, #111827 100%); color: #e2e8f0; padding: 20px; }",
+    ".hero h1 { margin: 0 0 8px; font-size: 24px; }",
+    ".hero p { margin: 0; font-size: 13px; color: #cbd5e1; }",
+    ".chips { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }",
+    ".chip { display: inline-block; font-size: 12px; background: rgba(148, 163, 184, 0.2); border: 1px solid rgba(148, 163, 184, 0.4); border-radius: 999px; padding: 4px 10px; }",
+    ".section { margin-top: 16px; border: 1px solid #dbeafe; border-radius: 14px; background: #ffffff; padding: 16px; }",
+    ".section h2 { margin: 0 0 8px; font-size: 15px; color: #0f172a; }",
+    ".meta { margin: 0; font-size: 12px; color: #475569; }",
+    "table { width: 100%; border-collapse: collapse; margin-top: 12px; }",
+    "th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; font-size: 12px; vertical-align: top; }",
+    "th { background: #eff6ff; color: #1e293b; font-weight: 600; }",
+    "tfoot td { font-size: 11px; color: #475569; background: #f8fafc; }",
+    "</style></head><body>",
+    "<div class='wrap'>",
+    "<div class='hero'>",
+    "<h1>Adaptive Travel Assistant - Premium Static Itinerary</h1>",
+    "<p>Logistics-first execution snapshot for travel day reliability.</p>",
+    "<div class='chips'>",
+    `<span class='chip'>Generated: ${escapeHtml(generatedAt)}</span>`,
+    `<span class='chip'>Stage: ${escapeHtml(stageLabel)}</span>`,
+    `<span class='chip'>Status: ${escapeHtml(statusLabel)}</span>`,
+    `<span class='chip'>Scope: ${escapeHtml(scopeLabel)}</span>`,
+    confidenceMarkup,
+    "</div></div>",
+    "<div class='section'>",
+    "<h2>Static copy safety note</h2>",
+    "<p class='meta'>This document is a point-in-time export. Re-check the live app before critical transitions (check-in, gate changes, transfers, and shared meeting points).</p>",
+    "<table>",
+    "<thead><tr><th>Owner</th><th>Type</th><th>Title</th><th>Provider</th><th>Local Time</th><th>Timezone</th><th>Location</th><th>Confirmation</th><th>Notes</th></tr></thead>",
+    `<tbody>${tableRows}</tbody>`,
+    "<tfoot><tr><td colspan='9'>Timezone labels and assignment owners are included to reduce missed-event risk in static handoffs.</td></tr></tfoot>",
+    "</table></div></div></body></html>",
   ].join("");
 }
 
@@ -629,6 +710,86 @@ export default function TravelAssistantPage() {
     });
   }, [minutesUntilNextCritical]);
 
+  const perReservationEscalations = useMemo(() => {
+    return reservations
+      .map((reservation) => {
+        const eventMs = parseDateInput(reservation.localTime);
+        if (Number.isNaN(eventMs)) {
+          return {
+            id: reservation.id,
+            title: reservation.title,
+            type: reservation.type,
+            minutesUntil: Number.NaN,
+            timezone: reservation.timezone,
+            confidence: reservation.confidence,
+            level: "invalid" as const,
+            guidance: "Cannot evaluate reminders until local time is corrected.",
+            nextThreshold: null as number | null,
+          };
+        }
+
+        const minutesUntil = Math.round((eventMs - nowMs) / 60000);
+        const thresholds = TYPE_REMINDER_THRESHOLDS[reservation.type];
+        const dueThreshold = thresholds.find((threshold) => minutesUntil <= threshold && minutesUntil > -30);
+        const nextThreshold = thresholds.find((threshold) => minutesUntil > threshold) ?? null;
+
+        if (minutesUntil < -30) {
+          return {
+            id: reservation.id,
+            title: reservation.title,
+            type: reservation.type,
+            minutesUntil,
+            timezone: reservation.timezone,
+            confidence: reservation.confidence,
+            level: "expired" as const,
+            guidance: "Event has passed. Confirm if completion updates were logged.",
+            nextThreshold: null as number | null,
+          };
+        }
+
+        if (dueThreshold !== undefined) {
+          const urgency =
+            reservation.type === "flight" && dueThreshold <= 90
+              ? "critical"
+              : dueThreshold <= 60
+                ? "high"
+                : "medium";
+          return {
+            id: reservation.id,
+            title: reservation.title,
+            type: reservation.type,
+            minutesUntil,
+            timezone: reservation.timezone,
+            confidence: reservation.confidence,
+            level: urgency as "critical" | "high" | "medium",
+            guidance: `Dispatch ${formatThresholdLabel(dueThreshold)} reminder now.`,
+            nextThreshold: dueThreshold,
+          };
+        }
+
+        return {
+          id: reservation.id,
+          title: reservation.title,
+          type: reservation.type,
+          minutesUntil,
+          timezone: reservation.timezone,
+          confidence: reservation.confidence,
+          level: "upcoming" as const,
+          guidance:
+            nextThreshold === null
+              ? "No additional checkpoints configured."
+              : `${formatThresholdLabel(nextThreshold)} checkpoint is upcoming.`,
+          nextThreshold,
+        };
+      })
+      .sort((left, right) => {
+        if (Number.isNaN(left.minutesUntil) && Number.isNaN(right.minutesUntil)) return 0;
+        if (Number.isNaN(left.minutesUntil)) return 1;
+        if (Number.isNaN(right.minutesUntil)) return -1;
+        return left.minutesUntil - right.minutesUntil;
+      });
+  }, [nowMs, reservations]);
+
   const timelineIssues = useMemo<TimelineIssue[]>(() => {
     const issues: TimelineIssue[] = [];
 
@@ -708,15 +869,19 @@ export default function TravelAssistantPage() {
 
   const blockingIssueCount = timelineIssues.filter((issue) => issue.severity === "high").length;
   const dueReminderCount = reminderLadder.filter((item) => item.state === "due").length;
+  const smartEscalationDueCount = perReservationEscalations.filter(
+    (item) => item.level === "critical" || item.level === "high" || item.level === "medium",
+  ).length;
   const operationalConfidenceScore = useMemo(() => {
     const rawScore =
       100 -
       unresolvedReviewCount * 8 -
       unresolvedReadinessCount * 7 -
       blockingIssueCount * 14 -
+      smartEscalationDueCount * 2 -
       (tripStatus === "red" ? 10 : tripStatus === "yellow" ? 4 : 0);
     return Math.max(0, Math.min(100, rawScore));
-  }, [blockingIssueCount, tripStatus, unresolvedReadinessCount, unresolvedReviewCount]);
+  }, [blockingIssueCount, smartEscalationDueCount, tripStatus, unresolvedReadinessCount, unresolvedReviewCount]);
 
   const queueMutation = (message: string): void => {
     if (canSyncItineraryNow) {
@@ -763,6 +928,24 @@ export default function TravelAssistantPage() {
     }
     setLastReminderSentAt(new Date().toISOString());
     queueMutation(`Dispatched ${dueCheckpoints.length} reminder checkpoints.`);
+  };
+
+  const runSmartEscalation = (): void => {
+    const dueItems = perReservationEscalations.filter(
+      (item) => item.level === "critical" || item.level === "high" || item.level === "medium",
+    );
+    if (dueItems.length === 0) {
+      setToast("Smart reminder engine found no due escalations.");
+      return;
+    }
+    if (dueItems.some((item) => item.level === "critical")) {
+      setTripStatus("red");
+      setTripStage("airport");
+    } else if (dueItems.some((item) => item.level === "high") && tripStatus === "green") {
+      setTripStatus("yellow");
+    }
+    setLastReminderSentAt(new Date().toISOString());
+    queueMutation(`Smart escalation pushed for ${dueItems.length} reservation checkpoints.`);
   };
 
   const simulateDisruption = (scenario: Exclude<DisruptionScenario, "none">): void => {
@@ -986,7 +1169,14 @@ export default function TravelAssistantPage() {
   };
 
   const handleExportWord = (): void => {
-    const html = buildWordHtml(exportRows, new Date().toLocaleString());
+    const html = buildPremiumItineraryHtml({
+      rows: exportRows,
+      generatedAt: new Date().toLocaleString(),
+      stageLabel: STAGE_LABEL[tripStage],
+      statusLabel: STATUS_LABEL[tripStatus],
+      confidenceScore: operationalConfidenceScore,
+      scopeLabel: exportScope === "full-trip" ? "Full trip" : `${selectedFamilyMember.name} schedule`,
+    });
     downloadBlob(
       `itinerary-${new Date().toISOString().slice(0, 10)}.doc`,
       new Blob([html], { type: "application/msword" }),
@@ -1000,37 +1190,15 @@ export default function TravelAssistantPage() {
       setToast("Please allow popups to generate PDF.");
       return;
     }
-    const generatedAt = new Date().toLocaleString();
-    const rowHtml = exportRows
-      .map(
-        (row) =>
-          `<tr><td>${row.owner}</td><td>${row.itemType}</td><td>${row.title}</td><td>${row.provider}</td><td>${row.localTime}</td><td>${row.timezone}</td><td>${row.location}</td><td>${row.confirmation}</td></tr>`,
-      )
-      .join("");
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Static Itinerary PDF</title>
-          <style>
-            body { font-family: Inter, system-ui, sans-serif; color: #111827; padding: 24px; }
-            h1 { margin: 0 0 12px; }
-            p { margin: 0 0 10px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-            th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; font-size: 12px; }
-            th { background: #f1f5f9; }
-          </style>
-        </head>
-        <body>
-          <h1>Adaptive Travel Assistant - Static Itinerary</h1>
-          <p>Generated at: ${generatedAt}</p>
-          <p>Static copy: verify live itinerary for last-minute updates.</p>
-          <table>
-            <tr><th>Owner</th><th>Type</th><th>Title</th><th>Provider</th><th>Local Time</th><th>Timezone</th><th>Location</th><th>Confirmation</th></tr>
-            ${rowHtml}
-          </table>
-        </body>
-      </html>
-    `);
+    const printable = buildPremiumItineraryHtml({
+      rows: exportRows,
+      generatedAt: new Date().toLocaleString(),
+      stageLabel: STAGE_LABEL[tripStage],
+      statusLabel: STATUS_LABEL[tripStatus],
+      confidenceScore: operationalConfidenceScore,
+      scopeLabel: exportScope === "full-trip" ? "Full trip" : `${selectedFamilyMember.name} schedule`,
+    });
+    printWindow.document.write(printable);
     printWindow.document.close();
     printWindow.focus();
     printWindow.print();
@@ -1130,9 +1298,9 @@ export default function TravelAssistantPage() {
   return (
     <main className="relative min-h-screen overflow-x-hidden bg-slate-950 text-slate-100">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_10%,rgba(56,189,248,0.14),transparent_45%),radial-gradient(circle_at_85%_25%,rgba(129,140,248,0.18),transparent_42%),radial-gradient(circle_at_50%_100%,rgba(34,197,94,0.08),transparent_45%)]" />
-      <div className="relative z-10 mx-auto max-w-[1400px] space-y-6 px-4 py-6 md:px-6">
+      <div className="relative z-10 mx-auto max-w-[1400px] space-y-5 px-3 py-5 sm:space-y-6 sm:px-4 sm:py-6 md:px-6">
         <section className="overflow-hidden rounded-3xl border border-slate-700/70 bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950/40 shadow-2xl shadow-indigo-950/30">
-          <div className="grid gap-6 p-6 lg:grid-cols-[1.8fr_1fr]">
+          <div className="grid gap-5 p-5 sm:gap-6 sm:p-6 lg:grid-cols-[1.8fr_1fr]">
             <div className="space-y-4">
               <p className="text-xs uppercase tracking-[0.24em] text-cyan-300">Adaptive Travel Assistant</p>
               <h1 className="text-3xl font-semibold leading-tight md:text-4xl">
@@ -1237,7 +1405,47 @@ export default function TravelAssistantPage() {
           </div>
         </section>
 
-        <section className="grid gap-6 lg:grid-cols-[1.2fr_1fr_1fr]">
+        <section className="sticky top-2 z-20 -mx-1 rounded-2xl border border-slate-700/80 bg-slate-900/90 p-2 backdrop-blur md:static md:mx-0">
+          <div className="flex gap-2 overflow-x-auto pb-1 text-xs">
+            <button
+              type="button"
+              onClick={evaluateStatus}
+              className="shrink-0 rounded-full bg-cyan-500/90 px-3 py-1.5 font-semibold text-slate-900 hover:bg-cyan-400"
+            >
+              Auto-evaluate
+            </button>
+            <button
+              type="button"
+              onClick={runSmartEscalation}
+              className="shrink-0 rounded-full bg-indigo-500/90 px-3 py-1.5 font-semibold text-slate-100 hover:bg-indigo-400"
+            >
+              Smart escalation
+            </button>
+            <button
+              type="button"
+              onClick={triggerReminderDispatch}
+              className="shrink-0 rounded-full bg-amber-500/90 px-3 py-1.5 font-semibold text-slate-900 hover:bg-amber-400"
+            >
+              Dispatch reminders
+            </button>
+            <button
+              type="button"
+              onClick={flushPendingSync}
+              className="shrink-0 rounded-full bg-slate-800 px-3 py-1.5 font-semibold ring-1 ring-slate-700 hover:bg-slate-700"
+            >
+              Sync now
+            </button>
+            <button
+              type="button"
+              onClick={() => setPersonalTimelineOnly((value) => !value)}
+              className="shrink-0 rounded-full bg-slate-800 px-3 py-1.5 font-semibold ring-1 ring-slate-700 hover:bg-slate-700"
+            >
+              {personalTimelineOnly ? "Show group timeline" : "Show my timeline"}
+            </button>
+          </div>
+        </section>
+
+        <section className="grid gap-4 sm:gap-6 xl:grid-cols-[1.2fr_1fr_1fr]">
           <article className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
             <h2 className="text-lg font-semibold">Adaptive stage actions</h2>
             <p className="text-xs text-slate-400">
@@ -1353,22 +1561,31 @@ export default function TravelAssistantPage() {
           </article>
         </section>
 
-        <section className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+        <section className="grid gap-4 sm:gap-6 xl:grid-cols-[1.2fr_1fr]">
           <article className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
                 <h2 className="text-lg font-semibold">Anti-miss automation cockpit</h2>
                 <p className="text-xs text-slate-400">
-                  Reminder cadence, next critical event timing, and one-click reminder dispatch.
+                  Reminder cadence, per-reservation escalation intelligence, and one-click dispatch controls.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={triggerReminderDispatch}
-                className="rounded-lg bg-cyan-500/90 px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400"
-              >
-                Dispatch due reminders
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={runSmartEscalation}
+                  className="rounded-lg bg-indigo-500/90 px-3 py-2 text-sm font-semibold text-slate-100 hover:bg-indigo-400"
+                >
+                  Run smart escalation
+                </button>
+                <button
+                  type="button"
+                  onClick={triggerReminderDispatch}
+                  className="rounded-lg bg-cyan-500/90 px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400"
+                >
+                  Dispatch due reminders
+                </button>
+              </div>
             </div>
 
             <div className="mt-3 rounded-xl border border-slate-700 bg-slate-950/70 p-3">
@@ -1410,6 +1627,41 @@ export default function TravelAssistantPage() {
                 </div>
               ))}
             </div>
+
+            <div className="mt-3 rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+              <p className="text-sm font-semibold text-slate-100">Per-reservation escalation queue</p>
+              <p className="text-xs text-slate-400">
+                Type-aware checkpoints ensure flights, trains, rides, and dinners trigger at the right lead times.
+              </p>
+              <ul className="mt-2 max-h-44 space-y-2 overflow-auto pr-1 text-xs">
+                {perReservationEscalations.map((item) => (
+                  <li
+                    key={item.id}
+                    className={`rounded-md border px-2 py-1.5 ${
+                      item.level === "critical"
+                        ? "border-red-400/60 bg-red-500/15 text-red-100"
+                        : item.level === "high"
+                          ? "border-amber-400/60 bg-amber-500/15 text-amber-100"
+                          : item.level === "medium"
+                            ? "border-cyan-400/60 bg-cyan-500/10 text-cyan-100"
+                            : item.level === "invalid"
+                              ? "border-red-400/40 bg-red-500/10 text-red-100"
+                              : "border-slate-700 bg-slate-900 text-slate-300"
+                    }`}
+                  >
+                    <p className="font-semibold">
+                      {item.title} • {RESERVATION_TYPE_LABEL[item.type]}
+                    </p>
+                    <p>{item.guidance}</p>
+                    <p className="opacity-80">
+                      {Number.isNaN(item.minutesUntil)
+                        ? "Time unavailable"
+                        : `${item.minutesUntil} min • ${item.timezone} • confidence ${item.confidence}`}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </article>
 
           <article className="space-y-4 rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
@@ -1422,7 +1674,8 @@ export default function TravelAssistantPage() {
             <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3">
               <p className="text-sm font-semibold">Detected issues: {timelineIssues.length}</p>
               <p className="text-xs text-slate-400">
-                Blocking: {blockingIssueCount} • Due reminders: {dueReminderCount}
+                Blocking: {blockingIssueCount} • Due reminders: {dueReminderCount} • Smart escalations:{" "}
+                {smartEscalationDueCount}
               </p>
               <ul className="mt-2 max-h-52 space-y-2 overflow-auto pr-1 text-xs">
                 {timelineIssues.length > 0 ? (
@@ -1449,7 +1702,7 @@ export default function TravelAssistantPage() {
           </article>
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[1.2fr_1fr]">
+        <section className="grid gap-4 sm:gap-6 xl:grid-cols-[1.2fr_1fr]">
           <article className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -1689,7 +1942,7 @@ export default function TravelAssistantPage() {
           </article>
         </section>
 
-        <section className="grid gap-6 lg:grid-cols-2">
+        <section className="grid gap-4 sm:gap-6 xl:grid-cols-2">
           <article className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
             <h2 className="text-lg font-semibold">Static itinerary exports</h2>
             <p className="text-xs text-slate-400">
