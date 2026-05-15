@@ -32,6 +32,7 @@ Out of scope:
 4. Deliver a premium, easy-on-the-eyes visual experience
 5. Provide dependable static itinerary outputs for travelers and companions (PDF/Word/Excel)
 6. Support shared family coordination with person-specific schedule views
+7. Offer optional family location awareness with explicit on/off consent controls
 
 ## 3) Target User
 
@@ -199,6 +200,27 @@ Core requirements:
   - Conflicts are surfaced when individual schedules diverge from group-critical moments
   - Shared transport/meeting points include attendance visibility
 
+### H. Optional Family Location Map (Consent-Driven)
+
+Family members may optionally share real-time location during active trip windows to reduce separation risk.
+
+Core requirements:
+
+- Explicit consent model:
+  - Location sharing is off by default
+  - Each person can enable/disable their own sharing at any time
+- Visibility controls:
+  - "Who can see me" options (all trip members, selected members, organizer only)
+  - Per-person visibility indicator in member roster
+- Map behavior:
+  - Optional family map view with member markers
+  - Last-updated timestamp and stale-location indicator
+  - Graceful fallback when a member is offline or has location disabled
+- Safety and privacy:
+  - Clear in-app disclosure of what is shared and when
+  - Quick "pause sharing" control from main UI
+  - No background sharing outside user-defined trip windows
+
 ## 7) Non-Functional Requirements
 
 - Premium visual hierarchy: legible typography, low eye strain, high contrast for critical actions
@@ -210,6 +232,7 @@ Core requirements:
 - Defensive data handling for partial/ambiguous imports
 - Export generation must be deterministic and consistent with current visible trip state
 - Sync policy behavior must be explicit, testable, and user-visible
+- Location sharing controls must be privacy-safe, explicit, and reversible
 
 ## 7.1) Accuracy and Reliability Requirements (Anti-Miss)
 
@@ -281,6 +304,7 @@ Required safeguards:
 - Per-person export matches the selected person's filtered itinerary exactly
 - Wi-Fi-only mode prevents background sync on cellular while preserving queued updates
 - Shared-trip person switch updates visible timeline/actions without cross-person data leakage
+- Location map is optional, off by default, and respects per-person sharing consent/visibility settings
 
 ### Scope Guardrail
 

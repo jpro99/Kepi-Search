@@ -25,6 +25,7 @@ The product focus is logistics and trip execution, not travel insurance. Travel 
 5. High accuracy and missed-event prevention so users do not miss flights, trains, rides, or time-critical plans due to app mistakes
 6. Exportable static itineraries (PDF/Word/Excel) for offline/reference use
 7. Family sharing with per-person schedule views and coordination safeguards
+8. Optional family location map to prevent people getting separated, with clear on/off sharing controls
 
 ## Current Prototype Includes
 
@@ -75,11 +76,12 @@ Confirmed directory contents currently show:
 6. Add static itinerary export options (PDF/Word/Excel) with per-person and date-range filters
 7. Add a user setting for "update only on Wi-Fi" with visible sync status and queued update behavior
 8. Add family-sharing controls with in-app "who am I" selection and person-specific timelines
+9. Add an optional family map with consent-based location sharing toggles, visibility controls, and stale-location indicators
 
 ## Copy-Ready Prompt
 
 Build on this file: `~/output/travel-app/adaptive-travel-assistant.html`.
 
-We are creating a premium adaptive travel app prototype. Keep the existing concepts: readiness checklist, imported reservation cards, intake review queue, adaptive trip-stage screens, green/yellow/red status system, email-forwarding intake, and one-button voice input. Add static itinerary export support (PDF/Word/Excel), optional Wi-Fi-only sync updates, and shared family views with person-specific timelines. Do not add travel insurance; that is explicitly excluded from this app.
+We are creating a premium adaptive travel app prototype. Keep the existing concepts: readiness checklist, imported reservation cards, intake review queue, adaptive trip-stage screens, green/yellow/red status system, email-forwarding intake, and one-button voice input. Add static itinerary export support (PDF/Word/Excel), optional Wi-Fi-only sync updates, shared family views with person-specific timelines, and an optional family location map with explicit on/off controls. Do not add travel insurance; that is explicitly excluded from this app.
 
 Important delivery rules: give me the complete full file, not snippets, and put the exact file path at the top of the response. The next version should add a realistic inbox-import flow, reservation detail drawers, review-queue actions, and a stronger missed-flight recovery workflow with operational guidance while preserving premium visual quality and anti-miss reliability.

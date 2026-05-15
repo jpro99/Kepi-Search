@@ -16,6 +16,7 @@ Use this checklist when implementing the next version of:
 - [ ] Support static itinerary exports (PDF/Word/Excel)
 - [ ] Support optional "update only on Wi-Fi" sync policy
 - [ ] Support family sharing with per-person schedule views
+- [ ] Support optional family location map with per-person on/off sharing control
 
 ## Phase 1: Preserve Existing Core Behaviors
 
@@ -147,6 +148,11 @@ Use this checklist when implementing the next version of:
   - [ ] missed-flight playbook appears with prioritized actions
   - [ ] call script content populates with reservation context
   - [ ] queue resolution updates live itinerary deterministically
+- [ ] Family location tests:
+  - [ ] map does not show member until sharing is enabled
+  - [ ] disabling sharing removes/hides location promptly
+  - [ ] visibility permissions are enforced correctly
+  - [ ] stale/offline indicator appears when location is outdated
 
 ## Phase 9: Static Export, Sync Policy, and Family Collaboration
 
@@ -183,6 +189,11 @@ Use this checklist when implementing the next version of:
 - [ ] Filter timeline/actions based on selected person
 - [ ] Support group-assigned and individual-assigned items
 - [ ] Surface conflicts where person-level schedules risk missing group-critical events
+- [ ] Add optional family map view with member markers
+- [ ] Default location sharing to OFF for each person
+- [ ] Add per-person location sharing toggle (self-controlled)
+- [ ] Add visibility controls ("who can see me")
+- [ ] Show last-updated timestamp and stale-location state per member
 
 ## Minimum Acceptance Gate (Must Pass)
 
@@ -198,6 +209,8 @@ Use this checklist when implementing the next version of:
 - [ ] PDF/Word/Excel exports are generated and accurate for selected scope
 - [ ] Wi-Fi-only mode blocks cellular sync and preserves queued updates
 - [ ] Person selector correctly personalizes itinerary without data bleed
+- [ ] Family map remains optional and off by default
+- [ ] Location visibility always matches each person's consent settings
 - [ ] No insurance references are present
 
 ## Suggested Demo Script (Optional but Recommended)
