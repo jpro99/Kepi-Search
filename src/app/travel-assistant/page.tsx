@@ -599,6 +599,7 @@ export default function TravelAssistantPage() {
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(new Date().toISOString());
   const [lastReminderSentAt, setLastReminderSentAt] = useState<string | null>(null);
   const [lastProviderCheckAt, setLastProviderCheckAt] = useState<string | null>(null);
+  const [lastProviderError, setLastProviderError] = useState<string | null>(null);
   const [autoTransportUpdates, setAutoTransportUpdates] = useState(true);
   const [isProviderCheckRunning, setIsProviderCheckRunning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -1039,6 +1040,7 @@ export default function TravelAssistantPage() {
         nowIso: new Date(nowMs).toISOString(),
       });
       setLastProviderCheckAt(new Date().toISOString());
+      setLastProviderError(null);
 
       if (result.updates.length === 0) {
         if (trigger === "manual") {
@@ -1057,6 +1059,13 @@ export default function TravelAssistantPage() {
       const appliedCount = applyProviderUpdates(result.updates, result.provider ?? "provider");
       if (appliedCount > 0) {
         setToast(`Applied ${appliedCount} live transport updates.`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown provider adapter failure";
+      setLastProviderCheckAt(new Date().toISOString());
+      setLastProviderError(message);
+      if (trigger === "manual") {
+        setToast(`Provider check failed: ${message}`);
       }
     } finally {
       setIsProviderCheckRunning(false);
@@ -1769,6 +1778,9 @@ export default function TravelAssistantPage() {
                 <p className="text-xs text-slate-400">Provider mode: {updateMode}</p>
                 <p className="text-xs text-slate-400">Last provider check: {formatClock(lastProviderCheckAt)}</p>
                 <p className="text-xs text-slate-400">Queued provider updates: {queuedProviderUpdates.length}</p>
+                {lastProviderError ? (
+                  <p className="text-xs text-red-200">Provider error: {lastProviderError}</p>
+                ) : null}
               </div>
               <label className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">
                 <span>Auto transport updates</span>

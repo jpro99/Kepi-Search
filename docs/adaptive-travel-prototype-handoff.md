@@ -48,6 +48,7 @@ The product focus is logistics and trip execution, not travel insurance. Travel 
 - Always provide full complete files, never partial snippets or diffs
 - Always put the exact file path at the top of any code handoff
 - Write comprehensively and anticipate next-needed features instead of tiny incremental edits
+- Follow enterprise release gates documented in `docs/enterprise-quality-charter.md`
 
 ## File Location
 

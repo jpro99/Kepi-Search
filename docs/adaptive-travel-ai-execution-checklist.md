@@ -8,6 +8,7 @@ Use this checklist when implementing the next version of:
 
 - [ ] Provide the complete full file in every delivery (no snippets or diffs)
 - [ ] Put the exact file path at the top of the response
+- [ ] Meet enterprise quality standards from `docs/enterprise-quality-charter.md`
 - [ ] Preserve premium adaptive UX direction
 - [ ] Deliver a visually stunning, premium-quality interface (without sacrificing clarity)
 - [ ] Keep app focused on trip logistics/execution

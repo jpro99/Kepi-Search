@@ -214,6 +214,27 @@ function resolveProvider(mode: TravelUpdateMode): TravelUpdateProvider | null {
   return createMockTravelUpdateProvider();
 }
 
+function dedupeUpdates(updates: TravelUpdateEvent[]): TravelUpdateEvent[] {
+  const seen = new Set<string>();
+  const unique: TravelUpdateEvent[] = [];
+  updates.forEach((update) => {
+    const key = [
+      update.provider,
+      update.kind,
+      update.target.reservationType,
+      update.target.confirmationCode ?? "",
+      update.target.titleHint ?? "",
+      update.delayMinutes ?? "",
+      update.updatedLocation ?? "",
+      update.summary,
+    ].join("|");
+    if (seen.has(key)) return;
+    seen.add(key);
+    unique.push(update);
+  });
+  return unique;
+}
+
 export async function runTravelUpdateCheck({
   mode,
   reservations,
@@ -232,5 +253,5 @@ export async function runTravelUpdateCheck({
     return { mode, provider: null, updates: [] };
   }
   const updates = await provider.fetchUpdates({ reservations, nowIso });
-  return { mode, provider: provider.name, updates };
+  return { mode, provider: provider.name, updates: dedupeUpdates(updates) };
 }
