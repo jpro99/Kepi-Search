@@ -9,8 +9,10 @@ Use this checklist when implementing the next version of:
 - [ ] Provide the complete full file in every delivery (no snippets or diffs)
 - [ ] Put the exact file path at the top of the response
 - [ ] Preserve premium adaptive UX direction
+- [ ] Deliver a visually stunning, premium-quality interface (without sacrificing clarity)
 - [ ] Keep app focused on trip logistics/execution
 - [ ] Do not add travel insurance content or workflows
+- [ ] Prioritize accuracy and missed-event prevention over cosmetic scope
 
 ## Phase 1: Preserve Existing Core Behaviors
 
@@ -108,6 +110,40 @@ Use this checklist when implementing the next version of:
 - [ ] Confirm stage transitions visibly change available actions
 - [ ] Validate voice-input CTA remains one-button and prominent
 - [ ] Add empty/error states for import parsing and queue actions
+- [ ] Reserve green/yellow/red for trip-critical urgency only
+- [ ] Ensure no layout shift/jank during stage or severity transitions
+- [ ] Add premium motion polish (subtle, fast, purposeful)
+
+## Phase 7: Accuracy, Safety, and Miss-Prevention
+
+- [ ] Add timezone-aware date/time model across all reservations
+- [ ] Validate parsed event times against location/timezone and flag conflicts
+- [ ] Compute and display "latest safe departure" for airport/train/dinner commitments
+- [ ] Add escalating alert schedule (for example: T-24h, T-12h, T-3h, T-90m, T-45m)
+- [ ] Block "confirmed" state for critical cards with unresolved required fields
+- [ ] Keep prior trusted itinerary active when new import confidence is low
+- [ ] Add audit log entries for critical timeline changes
+- [ ] Add one-tap undo for recent critical edits
+
+## Phase 8: Test Matrix (Must Run)
+
+- [ ] Parser contract tests:
+  - [ ] clean reservation email
+  - [ ] missing-time email
+  - [ ] duplicate reservation email
+  - [ ] conflicting-time email
+- [ ] Timezone tests:
+  - [ ] same-day domestic trip
+  - [ ] overnight trip crossing timezone
+  - [ ] daylight saving boundary case
+- [ ] State-machine tests:
+  - [ ] readiness -> pre-departure -> airport -> arrival
+  - [ ] any stage -> recovery on disruption trigger
+  - [ ] green -> yellow -> red escalation behavior
+- [ ] E2E disruption tests:
+  - [ ] missed-flight playbook appears with prioritized actions
+  - [ ] call script content populates with reservation context
+  - [ ] queue resolution updates live itinerary deterministically
 
 ## Minimum Acceptance Gate (Must Pass)
 
@@ -116,6 +152,10 @@ Use this checklist when implementing the next version of:
 - [ ] Review queue supports meaningful triage actions
 - [ ] Recovery mode has operational scripts and decision guidance
 - [ ] Green/yellow/red status meaning is visible across the app
+- [ ] Visual quality is premium and stable under all stage transitions
+- [ ] Time-critical cards cannot be confirmed with unresolved ambiguity
+- [ ] Timezone-aware countdowns and leave-by times pass fixture tests
+- [ ] Critical edit audit + undo flow works for timeline changes
 - [ ] No insurance references are present
 
 ## Suggested Demo Script (Optional but Recommended)

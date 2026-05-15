@@ -22,6 +22,7 @@ The product focus is logistics and trip execution, not travel insurance. Travel 
    - Behind (yellow)
    - Urgent (red)
 4. A premium, easy-on-the-eyes interface with clear operational guidance
+5. High accuracy and missed-event prevention so users do not miss flights, trains, rides, or time-critical plans due to app mistakes
 
 ## Current Prototype Includes
 
@@ -64,6 +65,11 @@ Confirmed directory contents currently show:
    - What to say
    - Decision-path guidance based on status or card benefits
 4. Preserve premium adaptive design and keep the app centered on trip logistics, not insurance
+5. Add anti-miss safeguards:
+   - Timezone-aware timeline validation
+   - Escalating reminder cadence
+   - "Latest safe departure" recommendations
+   - Audit log + undo for critical time edits
 
 ## Copy-Ready Prompt
 

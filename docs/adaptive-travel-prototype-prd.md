@@ -59,6 +59,27 @@ Out of scope:
 3. Trust through structure: imported data is editable and auditable
 4. Calm urgency: premium visual design with strong emphasis cues only when needed
 
+## 5.1) Premium Visual System Requirements (Visually Stunning)
+
+The interface must look premium while preserving operational speed and clarity:
+
+- Tiered visual hierarchy:
+  - Primary action strip always visible in each stage
+  - Secondary details in drawers/modals
+  - Contextual metadata in subdued but legible styles
+- High-end interaction quality:
+  - Smooth, short animations for stage transitions and panel opens
+  - No jitter or layout shift when status changes
+- Color discipline:
+  - Green/yellow/red reserved for trip-critical status and urgency
+  - Neutral palette for baseline content to reduce eye fatigue
+- Typography and spacing:
+  - Large readable headings for moment awareness
+  - Scannable card rows with generous spacing and clear iconography
+- Accessibility-grade contrast and focus states on all actionable controls
+
+The product should feel "concierge premium," but never trade clarity for decoration.
+
 ## 6) Feature Requirements
 
 ### A. Email Import Workflow (Realistic)
@@ -124,6 +145,34 @@ Recovery must prioritize immediate execution over information density.
 - Responsive layout for laptop and tablet portrait/landscape
 - Fast interaction response for stage switching and drawer/modals
 - Clear empty/error states for import and review workflows
+- Deterministic status calculations (no hidden/random transitions)
+- Timezone-safe scheduling and countdown logic
+- Defensive data handling for partial/ambiguous imports
+
+## 7.1) Accuracy and Reliability Requirements (Anti-Miss)
+
+Because users depend on this app for time-critical execution, missed-event prevention is a first-class requirement.
+
+Required safeguards:
+
+1. Multi-signal timing validation:
+   - Cross-check parsed times against known airport/hotel/city timezone
+   - Flag impossible or conflicting timelines before activation
+2. Redundant reminders:
+   - T-24h, T-12h, T-3h, T-90m, T-45m, and user-configurable critical alerts
+   - Escalate reminder tone and UI prominence by green/yellow/red
+3. Readiness gating:
+   - Do not mark key segments "ready" when required fields are missing
+   - Require explicit user confirmation on high-risk unresolved items
+4. Miss-prevention buffers:
+   - Precompute leave-by times for airport/train/dinner transfers
+   - Surface "latest safe departure" timestamps and fallback options
+5. Fallback mode:
+   - If parsing confidence is low, route to review and keep prior trusted itinerary active
+   - Never silently overwrite confirmed trip-critical details
+6. Full auditability:
+   - Log who/what changed a critical time, when, and from which source
+   - Provide one-tap undo for recent critical edits
 
 ## 8) Content and Tone Requirements
 
@@ -156,6 +205,13 @@ Recovery must prioritize immediate execution over information density.
 - Red-state disruption view provides a prioritized action list
 - Includes "who to call" and "what to say" guidance blocks
 - Presents a branching decision path for at least one disruption scenario (for example, missed flight)
+
+### Accuracy / Safety Gate
+
+- No critical segment (flight/train/transfer/reservation) can enter "confirmed" state with unresolved time or timezone ambiguity
+- Countdown and leave-by recommendations are validated against timezone-aware test fixtures
+- Alert escalation behavior is deterministic and test-covered for green/yellow/red transitions
+- Critical timeline edits are logged and reversible (undo path verified)
 
 ### Scope Guardrail
 
