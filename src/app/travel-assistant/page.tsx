@@ -8,6 +8,7 @@ type NetworkMode = "wifi" | "cellular" | "offline";
 type ReservationType = "flight" | "hotel" | "train" | "ride" | "dinner";
 type Confidence = "high" | "medium" | "low";
 type VisibilityMode = "all-members" | "organizer-only";
+type DisruptionScenario = "none" | "missed-flight" | "train-delay" | "ride-no-show";
 
 interface LocationPoint {
   lat: number;
@@ -89,6 +90,18 @@ interface ExportRow {
   notes: string;
 }
 
+interface ReminderMilestone {
+  label: string;
+  thresholdMinutes: number;
+}
+
+interface TimelineIssue {
+  id: string;
+  severity: "high" | "medium";
+  message: string;
+  recommendation: string;
+}
+
 const STAGES: TripStage[] = ["readiness", "pre-departure", "airport", "arrival", "recovery"];
 const STATUS_BADGE: Record<TripStatus, string> = {
   green: "bg-emerald-500/20 text-emerald-200 ring-emerald-400/40",
@@ -117,6 +130,14 @@ const RESERVATION_TYPE_LABEL: Record<ReservationType, string> = {
   ride: "Ride",
   dinner: "Dinner",
 };
+
+const REMINDER_MILESTONES: ReminderMilestone[] = [
+  { label: "T-24h", thresholdMinutes: 1440 },
+  { label: "T-12h", thresholdMinutes: 720 },
+  { label: "T-3h", thresholdMinutes: 180 },
+  { label: "T-90m", thresholdMinutes: 90 },
+  { label: "T-45m", thresholdMinutes: 45 },
+];
 
 const EMPTY_DRAFT: ReservationDraft = {
   type: "flight",
@@ -441,9 +462,11 @@ export default function TravelAssistantPage() {
   const [showFamilyMap, setShowFamilyMap] = useState(true);
   const [selectedFamilyMemberId, setSelectedFamilyMemberId] = useState("alex");
   const [personalTimelineOnly, setPersonalTimelineOnly] = useState(false);
+  const [activeScenario, setActiveScenario] = useState<DisruptionScenario>("none");
   const [minutesToDeparture, setMinutesToDeparture] = useState(165);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(new Date().toISOString());
+  const [lastReminderSentAt, setLastReminderSentAt] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
@@ -570,6 +593,131 @@ export default function TravelAssistantPage() {
     return base + riskPenalty;
   }, [tripStatus, unresolvedReviewCount]);
 
+  const criticalReservations = useMemo(
+    () =>
+      reservations
+        .filter((reservation) => reservation.critical)
+        .map((reservation) => ({ reservation, timeMs: parseDateInput(reservation.localTime) }))
+        .filter((item) => !Number.isNaN(item.timeMs))
+        .sort((left, right) => left.timeMs - right.timeMs),
+    [reservations],
+  );
+
+  const nextCriticalReservation = useMemo(() => {
+    if (criticalReservations.length === 0) return null;
+    return criticalReservations.find((item) => item.timeMs >= nowMs) ?? criticalReservations[0];
+  }, [criticalReservations, nowMs]);
+
+  const minutesUntilNextCritical = useMemo(() => {
+    if (!nextCriticalReservation) return null;
+    return Math.round((nextCriticalReservation.timeMs - nowMs) / 60000);
+  }, [nextCriticalReservation, nowMs]);
+
+  const reminderLadder = useMemo(() => {
+    return REMINDER_MILESTONES.map((milestone) => {
+      if (minutesUntilNextCritical === null) {
+        return { ...milestone, state: "inactive" as const, detail: "No critical events" };
+      }
+      if (minutesUntilNextCritical < 0) {
+        return { ...milestone, state: "missed" as const, detail: "Event already passed" };
+      }
+      if (minutesUntilNextCritical <= milestone.thresholdMinutes) {
+        return { ...milestone, state: "due" as const, detail: "Dispatch now" };
+      }
+      const remaining = minutesUntilNextCritical - milestone.thresholdMinutes;
+      return { ...milestone, state: "upcoming" as const, detail: `Due in ${remaining} min` };
+    });
+  }, [minutesUntilNextCritical]);
+
+  const timelineIssues = useMemo<TimelineIssue[]>(() => {
+    const issues: TimelineIssue[] = [];
+
+    reservations.forEach((reservation) => {
+      const parsedTime = parseDateInput(reservation.localTime);
+      if (Number.isNaN(parsedTime)) {
+        issues.push({
+          id: `invalid-time-${reservation.id}`,
+          severity: "high",
+          message: `${reservation.title} has an invalid local time format.`,
+          recommendation: "Correct the local time before confirming this segment.",
+        });
+      }
+      if (!reservation.timezone.includes("/")) {
+        issues.push({
+          id: `timezone-${reservation.id}`,
+          severity: "high",
+          message: `${reservation.title} is missing a canonical timezone identifier.`,
+          recommendation: "Use an IANA timezone such as America/New_York.",
+        });
+      }
+      if (reservation.critical && reservation.confidence === "low") {
+        issues.push({
+          id: `confidence-${reservation.id}`,
+          severity: "high",
+          message: `${reservation.title} is critical but still low confidence.`,
+          recommendation: "Keep this item in review until key fields are verified.",
+        });
+      }
+    });
+
+    const confirmationMap = new Map<string, Reservation[]>();
+    reservations.forEach((reservation) => {
+      const key = reservation.confirmationCode.trim();
+      if (!key) return;
+      const existing = confirmationMap.get(key) ?? [];
+      existing.push(reservation);
+      confirmationMap.set(key, existing);
+    });
+    confirmationMap.forEach((group, confirmationCode) => {
+      if (group.length < 2) return;
+      const distinctLocations = new Set(group.map((item) => item.location)).size;
+      const distinctTimes = new Set(group.map((item) => item.localTime)).size;
+      if (distinctLocations > 1 || distinctTimes > 1) {
+        issues.push({
+          id: `duplicate-code-${confirmationCode}`,
+          severity: "medium",
+          message: `Confirmation ${confirmationCode} appears in multiple reservations with conflicting details.`,
+          recommendation: "Merge or correct duplicate cards before departure.",
+        });
+      }
+    });
+
+    familyMembers.forEach((member) => {
+      const assigned = reservations
+        .filter((reservation) => reservation.assignedTo.includes(member.id))
+        .map((reservation) => ({ reservation, timeMs: parseDateInput(reservation.localTime) }))
+        .filter((item) => !Number.isNaN(item.timeMs))
+        .sort((left, right) => left.timeMs - right.timeMs);
+      for (let index = 0; index < assigned.length - 1; index += 1) {
+        const current = assigned[index];
+        const next = assigned[index + 1];
+        const minuteGap = Math.abs(next.timeMs - current.timeMs) / 60000;
+        if (minuteGap <= 90 && current.reservation.location !== next.reservation.location) {
+          issues.push({
+            id: `conflict-${member.id}-${current.reservation.id}-${next.reservation.id}`,
+            severity: "medium",
+            message: `${member.name} has near-overlapping commitments (${current.reservation.title} and ${next.reservation.title}).`,
+            recommendation: "Adjust assigned schedules or add transfer buffers.",
+          });
+        }
+      }
+    });
+
+    return issues;
+  }, [familyMembers, reservations]);
+
+  const blockingIssueCount = timelineIssues.filter((issue) => issue.severity === "high").length;
+  const dueReminderCount = reminderLadder.filter((item) => item.state === "due").length;
+  const operationalConfidenceScore = useMemo(() => {
+    const rawScore =
+      100 -
+      unresolvedReviewCount * 8 -
+      unresolvedReadinessCount * 7 -
+      blockingIssueCount * 14 -
+      (tripStatus === "red" ? 10 : tripStatus === "yellow" ? 4 : 0);
+    return Math.max(0, Math.min(100, rawScore));
+  }, [blockingIssueCount, tripStatus, unresolvedReadinessCount, unresolvedReviewCount]);
+
   const queueMutation = (message: string): void => {
     if (canSyncItineraryNow) {
       setLastSyncAt(new Date().toISOString());
@@ -591,7 +739,12 @@ export default function TravelAssistantPage() {
   };
 
   const evaluateStatus = (): void => {
-    if (minutesToDeparture <= 75 || unresolvedReviewCount >= 2 || unresolvedReadinessCount >= 2) {
+    if (
+      minutesToDeparture <= 75 ||
+      unresolvedReviewCount >= 2 ||
+      unresolvedReadinessCount >= 2 ||
+      blockingIssueCount > 0
+    ) {
       setTripStatus("red");
       return;
     }
@@ -600,6 +753,42 @@ export default function TravelAssistantPage() {
       return;
     }
     setTripStatus("green");
+  };
+
+  const triggerReminderDispatch = (): void => {
+    const dueCheckpoints = reminderLadder.filter((item) => item.state === "due" || item.state === "missed");
+    if (dueCheckpoints.length === 0) {
+      setToast("No due reminders to dispatch right now.");
+      return;
+    }
+    setLastReminderSentAt(new Date().toISOString());
+    queueMutation(`Dispatched ${dueCheckpoints.length} reminder checkpoints.`);
+  };
+
+  const simulateDisruption = (scenario: Exclude<DisruptionScenario, "none">): void => {
+    setActiveScenario(scenario);
+    setTripStage("recovery");
+
+    if (scenario === "missed-flight") {
+      setTripStatus("red");
+      setMinutesToDeparture(35);
+      queueMutation("Simulation: missed flight recovery triggered.");
+      return;
+    }
+    if (scenario === "train-delay") {
+      setTripStatus("yellow");
+      setMinutesToDeparture(85);
+      queueMutation("Simulation: train delay recovery triggered.");
+      return;
+    }
+    setTripStatus("red");
+    setMinutesToDeparture(50);
+    queueMutation("Simulation: ride no-show recovery triggered.");
+  };
+
+  const clearScenarioSimulation = (): void => {
+    setActiveScenario("none");
+    setToast("Disruption simulation cleared.");
   };
 
   const handleImportAction = (target: "live" | "review"): void => {
@@ -882,6 +1071,51 @@ export default function TravelAssistantPage() {
     return "Wi-Fi active: full sync and location updates enabled.";
   }, [allowCellularLocationUpdates, networkMode]);
 
+  const activeScenarioPlaybook = useMemo(() => {
+    if (activeScenario === "missed-flight") {
+      return {
+        title: "Missed flight protocol",
+        tone: "text-red-200",
+        steps: [
+          "Call airline rebooking desk with confirmation and ask for fastest protected seat.",
+          "Notify hotel of revised ETA to preserve reservation.",
+          "Confirm transfer fallback and notify family meeting plan.",
+        ],
+      };
+    }
+    if (activeScenario === "train-delay") {
+      return {
+        title: "Train delay protocol",
+        tone: "text-amber-200",
+        steps: [
+          "Confirm new arrival estimate and platform update.",
+          "Adjust rides/dinner windows for affected members.",
+          "Re-export per-person static itinerary if delay exceeds 60 minutes.",
+        ],
+      };
+    }
+    if (activeScenario === "ride-no-show") {
+      return {
+        title: "Ride no-show protocol",
+        tone: "text-red-200",
+        steps: [
+          "Initiate backup ride provider immediately.",
+          "Send live location ping and meeting point to family group.",
+          "Escalate to organizer if transfer exceeds safe buffer.",
+        ],
+      };
+    }
+    return {
+      title: "No active disruption simulation",
+      tone: "text-slate-300",
+      steps: [
+        "Run proactive readiness checks.",
+        "Dispatch due reminders on cadence.",
+        "Keep queue and timeline integrity panel clear.",
+      ],
+    };
+  }, [activeScenario]);
+
   const recoveryScript = useMemo(() => {
     const flight = reservations.find((item) => item.type === "flight");
     if (!flight) return "I need rebooking assistance for an urgent disruption. Please confirm next available options.";
@@ -894,8 +1128,9 @@ export default function TravelAssistantPage() {
   }, [reservations, selectedFamilyMember.name]);
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="mx-auto max-w-[1400px] space-y-6 px-4 py-6 md:px-6">
+    <main className="relative min-h-screen overflow-x-hidden bg-slate-950 text-slate-100">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_10%,rgba(56,189,248,0.14),transparent_45%),radial-gradient(circle_at_85%_25%,rgba(129,140,248,0.18),transparent_42%),radial-gradient(circle_at_50%_100%,rgba(34,197,94,0.08),transparent_45%)]" />
+      <div className="relative z-10 mx-auto max-w-[1400px] space-y-6 px-4 py-6 md:px-6">
         <section className="overflow-hidden rounded-3xl border border-slate-700/70 bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950/40 shadow-2xl shadow-indigo-950/30">
           <div className="grid gap-6 p-6 lg:grid-cols-[1.8fr_1fr]">
             <div className="space-y-4">
@@ -920,11 +1155,35 @@ export default function TravelAssistantPage() {
                 <span className="rounded-full bg-slate-800 px-3 py-1 text-sm text-slate-300 ring-1 ring-slate-700">
                   Review queue: {reviewQueue.length}
                 </span>
+                <span className="rounded-full bg-indigo-500/20 px-3 py-1 text-sm text-indigo-100 ring-1 ring-indigo-300/40">
+                  Confidence score: {operationalConfidenceScore}
+                </span>
+                <span className="rounded-full bg-slate-800 px-3 py-1 text-sm text-slate-300 ring-1 ring-slate-700">
+                  Blocking issues: {blockingIssueCount}
+                </span>
               </div>
             </div>
             <div className="rounded-2xl border border-slate-700 bg-slate-900/60 p-4">
               <p className="text-sm font-semibold text-slate-100">Trip-state editor (live)</p>
               <p className="mt-1 text-xs text-slate-400">Controls update status and screens in real time.</p>
+              <div className="mt-3 rounded-lg border border-slate-700 bg-slate-950/60 p-3">
+                <div className="flex items-center justify-between text-xs text-slate-300">
+                  <span>Operational confidence</span>
+                  <span>{operationalConfidenceScore}%</span>
+                </div>
+                <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-800">
+                  <div
+                    className={`h-full rounded-full ${
+                      operationalConfidenceScore >= 80
+                        ? "bg-emerald-400"
+                        : operationalConfidenceScore >= 60
+                          ? "bg-amber-400"
+                          : "bg-red-400"
+                    }`}
+                    style={{ width: `${operationalConfidenceScore}%` }}
+                  />
+                </div>
+              </div>
               <div className="mt-3 space-y-3 text-sm">
                 <label className="block">
                   <span className="mb-1 block text-slate-300">Trip stage</span>
@@ -1090,6 +1349,102 @@ export default function TravelAssistantPage() {
               >
                 Sync now once
               </button>
+            </div>
+          </article>
+        </section>
+
+        <section className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+          <article className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-semibold">Anti-miss automation cockpit</h2>
+                <p className="text-xs text-slate-400">
+                  Reminder cadence, next critical event timing, and one-click reminder dispatch.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={triggerReminderDispatch}
+                className="rounded-lg bg-cyan-500/90 px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400"
+              >
+                Dispatch due reminders
+              </button>
+            </div>
+
+            <div className="mt-3 rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+              <p className="text-sm font-semibold text-slate-100">Next critical segment</p>
+              {nextCriticalReservation ? (
+                <div className="mt-1 text-xs text-slate-300">
+                  <p>
+                    {nextCriticalReservation.reservation.title} • {nextCriticalReservation.reservation.localTime} (
+                    {nextCriticalReservation.reservation.timezone})
+                  </p>
+                  <p className="text-slate-400">
+                    {minutesUntilNextCritical !== null && minutesUntilNextCritical >= 0
+                      ? `${minutesUntilNextCritical} minutes remaining`
+                      : "Critical event appears to be in the past"}
+                  </p>
+                </div>
+              ) : (
+                <p className="mt-1 text-xs text-slate-400">No critical segments yet.</p>
+              )}
+              <p className="mt-2 text-xs text-slate-400">Last reminder dispatch: {formatClock(lastReminderSentAt)}</p>
+            </div>
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+              {reminderLadder.map((checkpoint) => (
+                <div
+                  key={checkpoint.label}
+                  className={`rounded-lg border p-2 text-xs ${
+                    checkpoint.state === "due"
+                      ? "border-amber-400/60 bg-amber-500/15 text-amber-100"
+                      : checkpoint.state === "missed"
+                        ? "border-red-400/60 bg-red-500/15 text-red-100"
+                        : checkpoint.state === "upcoming"
+                          ? "border-slate-700 bg-slate-900 text-slate-200"
+                          : "border-slate-700/60 bg-slate-900/50 text-slate-400"
+                  }`}
+                >
+                  <p className="font-semibold">{checkpoint.label}</p>
+                  <p>{checkpoint.detail}</p>
+                </div>
+              ))}
+            </div>
+          </article>
+
+          <article className="space-y-4 rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
+            <div>
+              <h2 className="text-lg font-semibold">Timeline integrity scanner</h2>
+              <p className="text-xs text-slate-400">
+                Detects timezone ambiguity, parsing gaps, duplicates, and person-level schedule conflicts.
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3">
+              <p className="text-sm font-semibold">Detected issues: {timelineIssues.length}</p>
+              <p className="text-xs text-slate-400">
+                Blocking: {blockingIssueCount} • Due reminders: {dueReminderCount}
+              </p>
+              <ul className="mt-2 max-h-52 space-y-2 overflow-auto pr-1 text-xs">
+                {timelineIssues.length > 0 ? (
+                  timelineIssues.map((issue) => (
+                    <li
+                      key={issue.id}
+                      className={`rounded-md border px-2 py-1.5 ${
+                        issue.severity === "high"
+                          ? "border-red-400/60 bg-red-500/10 text-red-100"
+                          : "border-amber-400/50 bg-amber-500/10 text-amber-100"
+                      }`}
+                    >
+                      <p className="font-semibold">{issue.message}</p>
+                      <p className="text-[11px] opacity-90">{issue.recommendation}</p>
+                    </li>
+                  ))
+                ) : (
+                  <li className="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2 py-1.5 text-emerald-100">
+                    No timeline conflicts detected.
+                  </li>
+                )}
+              </ul>
             </div>
           </article>
         </section>
@@ -1518,6 +1873,36 @@ export default function TravelAssistantPage() {
           <p className="text-xs text-slate-400">
             Who to call, what to say, and decision path guidance by urgency level.
           </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => simulateDisruption("missed-flight")}
+              className="rounded-lg bg-red-500/90 px-3 py-1.5 text-xs font-semibold text-slate-100 hover:bg-red-400"
+            >
+              Simulate missed flight
+            </button>
+            <button
+              type="button"
+              onClick={() => simulateDisruption("train-delay")}
+              className="rounded-lg bg-amber-500/90 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-amber-400"
+            >
+              Simulate train delay
+            </button>
+            <button
+              type="button"
+              onClick={() => simulateDisruption("ride-no-show")}
+              className="rounded-lg bg-red-500/70 px-3 py-1.5 text-xs font-semibold text-slate-100 hover:bg-red-400"
+            >
+              Simulate ride no-show
+            </button>
+            <button
+              type="button"
+              onClick={clearScenarioSimulation}
+              className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold ring-1 ring-slate-700 hover:bg-slate-700"
+            >
+              Clear simulation
+            </button>
+          </div>
           <div className="mt-3 grid gap-4 lg:grid-cols-3">
             <div className="rounded-xl border border-slate-700 bg-slate-950/70 p-3">
               <p className="text-sm font-semibold text-slate-100">Who to call now</p>
@@ -1540,12 +1925,11 @@ export default function TravelAssistantPage() {
               </button>
             </div>
             <div className="rounded-xl border border-slate-700 bg-slate-950/70 p-3">
-              <p className="text-sm font-semibold text-slate-100">Decision path</p>
+              <p className={`text-sm font-semibold ${activeScenarioPlaybook.tone}`}>{activeScenarioPlaybook.title}</p>
               <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-slate-300">
-                <li>Missed flight confirmed? If yes, switch status to red and enter recovery stage.</li>
-                <li>Rebooking available within 3 hours? If yes, keep hotel and transfer timeline.</li>
-                <li>If no, notify hotel and split family schedule by person assignments.</li>
-                <li>Re-export static itinerary and resync shared timeline.</li>
+                {activeScenarioPlaybook.steps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
               </ol>
             </div>
           </div>
