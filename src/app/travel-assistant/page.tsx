@@ -20,6 +20,10 @@ import {
   replayOfflineOutbox,
   type OfflineOutboxSnapshot,
 } from "@/lib/travelAssistant/offlineOutbox";
+import {
+  parseTravelClientSessionState,
+  stringifyTravelClientSessionState,
+} from "@/lib/travelAssistant/clientSessionState";
 import type {
   TravelOpsSnapshot,
   TravelUpdateAuditSummary,
@@ -232,6 +236,7 @@ const TYPE_REMINDER_THRESHOLDS: Record<ReservationType, number[]> = {
   dinner: [180, 60, 30],
 };
 const UPDATE_REPLAY_WINDOW_MS = 30 * 60_000;
+const SESSION_STORAGE_KEY = "travel-assistant-session-v1";
 
 const EMPTY_DRAFT: ReservationDraft = {
   type: "flight",
@@ -684,6 +689,7 @@ export default function TravelAssistantPage() {
     createOfflineOutboxSnapshot(),
   );
   const [lastOutboxReplayAt, setLastOutboxReplayAt] = useState<string | null>(null);
+  const [lastSessionRestoreAt, setLastSessionRestoreAt] = useState<string | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(new Date().toISOString());
   const [lastReminderSentAt, setLastReminderSentAt] = useState<string | null>(null);
   const [lastVoiceCaptureAt, setLastVoiceCaptureAt] = useState<string | null>(null);
@@ -714,6 +720,7 @@ export default function TravelAssistantPage() {
   );
   const recentAppliedUpdateKeysRef = useRef<Map<string, number>>(new Map());
   const opsFetchInFlightRef = useRef(false);
+  const sessionHydratedRef = useRef(false);
   const toastPolicyRef = useRef<{
     tone: GuidanceTone;
     lastMessage: string | null;
@@ -875,6 +882,79 @@ export default function TravelAssistantPage() {
     const timeout = window.setTimeout(() => setToastRaw(null), timeoutMs);
     return () => window.clearTimeout(timeout);
   }, [guidanceTone, toast]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      const restored = parseTravelClientSessionState(raw);
+      if (!restored) {
+        return;
+      }
+      setTripStage(restored.tripStage);
+      setTripStatus(restored.tripStatus);
+      setNetworkMode(restored.networkMode);
+      setWifiOnlySync(restored.wifiOnlySync);
+      setAllowCellularLocationUpdates(restored.allowCellularLocationUpdates);
+      setShowFamilyMap(restored.showFamilyMap);
+      setSelectedFamilyMemberId(restored.selectedFamilyMemberId);
+      setPersonalTimelineOnly(restored.personalTimelineOnly);
+      setGuidanceTone(restored.guidanceTone);
+      setStageFocusMode(restored.stageFocusMode);
+      setOfflineOutbox(restored.offlineOutbox);
+      setReservations(restored.reservations as Reservation[]);
+      setReviewQueue(restored.reviewQueue as ReviewItem[]);
+      setReadinessItems(restored.readinessItems as ReadinessItem[]);
+      setLastSessionRestoreAt(restored.savedAt);
+      setToastRaw("Recovered previous trip session.");
+    } finally {
+      sessionHydratedRef.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!sessionHydratedRef.current) return;
+    const snapshot = {
+      version: 1 as const,
+      savedAt: new Date().toISOString(),
+      tripStage,
+      tripStatus,
+      networkMode,
+      wifiOnlySync,
+      allowCellularLocationUpdates,
+      showFamilyMap,
+      selectedFamilyMemberId,
+      personalTimelineOnly,
+      guidanceTone,
+      stageFocusMode,
+      offlineOutbox,
+      reservations,
+      reviewQueue,
+      readinessItems,
+    };
+    try {
+      window.localStorage.setItem(SESSION_STORAGE_KEY, stringifyTravelClientSessionState(snapshot));
+    } catch {
+      // Ignore persistence failures in restricted storage contexts.
+    }
+  }, [
+    allowCellularLocationUpdates,
+    guidanceTone,
+    networkMode,
+    offlineOutbox,
+    personalTimelineOnly,
+    readinessItems,
+    reservations,
+    reviewQueue,
+    selectedFamilyMemberId,
+    showFamilyMap,
+    stageFocusMode,
+    tripStage,
+    tripStatus,
+    wifiOnlySync,
+  ]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
@@ -2361,6 +2441,11 @@ export default function TravelAssistantPage() {
                 <span className="rounded-full bg-slate-800 px-3 py-1 text-sm text-slate-300 ring-1 ring-slate-700">
                   Nudges: {guidanceTone} • filtered {suppressedNudgeCount}
                 </span>
+                {lastSessionRestoreAt ? (
+                  <span className="rounded-full bg-violet-500/15 px-3 py-1 text-sm text-violet-100 ring-1 ring-violet-400/40">
+                    Session restored: {formatClock(lastSessionRestoreAt)}
+                  </span>
+                ) : null}
               </div>
             </div>
             <div className="rounded-2xl border border-slate-700 bg-slate-900/60 p-4">
