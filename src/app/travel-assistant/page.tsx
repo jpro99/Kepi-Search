@@ -12,6 +12,14 @@ import {
   shouldShowFocusPanel,
   type TripFlowStage,
 } from "@/lib/travelAssistant/tripFlowControls";
+import {
+  appendOfflineOutboxEvent,
+  countPendingOfflineOutboxEntries,
+  createOfflineOutboxSnapshot,
+  listPendingOfflineOutboxEntries,
+  replayOfflineOutbox,
+  type OfflineOutboxSnapshot,
+} from "@/lib/travelAssistant/offlineOutbox";
 import type {
   TravelOpsSnapshot,
   TravelUpdateAuditSummary,
@@ -672,7 +680,10 @@ export default function TravelAssistantPage() {
   const [personalTimelineOnly, setPersonalTimelineOnly] = useState(false);
   const [activeScenario, setActiveScenario] = useState<DisruptionScenario>("none");
   const [minutesToDeparture, setMinutesToDeparture] = useState(165);
-  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [offlineOutbox, setOfflineOutbox] = useState<OfflineOutboxSnapshot>(() =>
+    createOfflineOutboxSnapshot(),
+  );
+  const [lastOutboxReplayAt, setLastOutboxReplayAt] = useState<string | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(new Date().toISOString());
   const [lastReminderSentAt, setLastReminderSentAt] = useState<string | null>(null);
   const [lastVoiceCaptureAt, setLastVoiceCaptureAt] = useState<string | null>(null);
@@ -894,6 +905,21 @@ export default function TravelAssistantPage() {
 
   const unresolvedReviewCount = reviewQueue.length;
   const unresolvedReadinessCount = readinessItems.filter((item) => item.required && !item.complete).length;
+  const pendingOutboxEntries = useMemo(() => listPendingOfflineOutboxEntries(offlineOutbox), [offlineOutbox]);
+  const pendingOutboxCount = countPendingOfflineOutboxEntries(offlineOutbox);
+  const pendingSyncCount = queuedProviderUpdates.length + pendingOutboxCount;
+  const pendingOutboxByReservationId = useMemo(() => {
+    const counts = new Map<string, number>();
+    pendingOutboxEntries.forEach((entry) => {
+      if (!entry.reservationId) return;
+      counts.set(entry.reservationId, (counts.get(entry.reservationId) ?? 0) + 1);
+    });
+    return counts;
+  }, [pendingOutboxEntries]);
+  const hasGlobalOutboxPending = useMemo(
+    () => pendingOutboxEntries.some((entry) => entry.reservationId === null),
+    [pendingOutboxEntries],
+  );
   const visibleReservations = useMemo(() => {
     const fromMs = parseDateInput(exportFrom);
     const toMs = parseDateInput(exportTo);
@@ -1519,7 +1545,6 @@ export default function TravelAssistantPage() {
 
       if (!canSyncItineraryNow) {
         setQueuedProviderUpdates((previous) => [...previous, ...result.updates]);
-        setPendingSyncCount((count) => count + result.updates.length);
         setToast(`Queued ${result.updates.length} provider updates until sync is allowed.`);
         return;
       }
@@ -1573,15 +1598,75 @@ export default function TravelAssistantPage() {
     return () => window.clearInterval(timer);
   }, [fetchOpsSnapshot]);
 
-  const queueMutation = (message: string): void => {
-    if (canSyncItineraryNow) {
-      setLastSyncAt(new Date().toISOString());
-      setToast(`${message} Synced.`);
-      return;
-    }
-    setPendingSyncCount((count) => count + 1);
-    setToast(`${message} Queued until sync is allowed.`);
-  };
+  const replayPendingOutbox = useCallback(
+    (_reason: string, nowIso = new Date().toISOString()): number => {
+      let replayed = 0;
+      setOfflineOutbox((previous) => {
+        const result = replayOfflineOutbox({
+          snapshot: previous,
+          nowIso,
+          maxBatch: 60,
+        });
+        replayed = result.replayed;
+        return result.snapshot;
+      });
+      if (replayed > 0) {
+        setLastOutboxReplayAt(nowIso);
+        setLastSyncAt(nowIso);
+      }
+      return replayed;
+    },
+    [],
+  );
+
+  const queueMutation = useCallback(
+    (
+      message: string,
+      options?: {
+        key?: string;
+        reservationId?: string | null;
+        fingerprint?: string;
+      },
+    ): void => {
+      const nowIso = new Date().toISOString();
+      let duplicateSuppressed = false;
+      setOfflineOutbox((previous) => {
+        const appended = appendOfflineOutboxEvent({
+          snapshot: previous,
+          nowIso,
+          event: {
+            key: options?.key ?? "mutation",
+            message,
+            fingerprint: options?.fingerprint,
+            reservationId: options?.reservationId ?? null,
+          },
+        });
+        duplicateSuppressed = appended.duplicateSuppressed;
+        if (!canSyncItineraryNow) {
+          return appended.snapshot;
+        }
+        const replayed = replayOfflineOutbox({
+          snapshot: appended.snapshot,
+          nowIso,
+          maxBatch: 60,
+        });
+        if (replayed.replayed > 0) {
+          setLastOutboxReplayAt(nowIso);
+          setLastSyncAt(nowIso);
+        }
+        return replayed.snapshot;
+      });
+      if (duplicateSuppressed) {
+        return;
+      }
+      if (canSyncItineraryNow) {
+        setToast(`${message} Synced.`);
+        return;
+      }
+      setToast(`${message} Queued until sync is allowed.`);
+    },
+    [canSyncItineraryNow, setToast],
+  );
 
   const drainQueuedProviderUpdates = (isSyncAllowed: boolean, reason: string): number => {
     if (!isSyncAllowed || queuedProviderUpdates.length === 0) {
@@ -1589,7 +1674,6 @@ export default function TravelAssistantPage() {
     }
     const appliedCount = applyProviderUpdates(queuedProviderUpdates, "queued-provider-updates");
     setQueuedProviderUpdates([]);
-    setPendingSyncCount((count) => Math.max(0, count - queuedProviderUpdates.length));
     setToast(`Applied ${appliedCount} queued provider updates (${reason}).`);
     return appliedCount;
   };
@@ -1598,12 +1682,24 @@ export default function TravelAssistantPage() {
     setNetworkMode(nextMode);
     const syncAllowed = nextMode === "wifi" || (!wifiOnlySync && nextMode === "cellular");
     drainQueuedProviderUpdates(syncAllowed, "network changed");
+    if (syncAllowed) {
+      const replayed = replayPendingOutbox("network changed");
+      if (replayed > 0) {
+        setToast(`Replayed ${replayed} queued actions after network change.`);
+      }
+    }
   };
 
   const handleWifiOnlySyncToggle = (nextValue: boolean): void => {
     setWifiOnlySync(nextValue);
     const syncAllowed = networkMode === "wifi" || (!nextValue && networkMode === "cellular");
     drainQueuedProviderUpdates(syncAllowed, "Wi-Fi policy changed");
+    if (syncAllowed) {
+      const replayed = replayPendingOutbox("Wi-Fi policy changed");
+      if (replayed > 0) {
+        setToast(`Replayed ${replayed} queued actions after policy change.`);
+      }
+    }
   };
 
   const flushPendingSync = (): void => {
@@ -1612,11 +1708,11 @@ export default function TravelAssistantPage() {
       return;
     }
     const appliedFromQueue = drainQueuedProviderUpdates(true, "manual sync");
-    setPendingSyncCount(0);
+    const replayedActions = replayPendingOutbox("manual sync");
     setLastSyncAt(new Date().toISOString());
     setToast(
-      appliedFromQueue > 0
-        ? `Manual sync completed. Applied ${appliedFromQueue} queued provider updates.`
+      appliedFromQueue > 0 || replayedActions > 0
+        ? `Manual sync completed. Applied ${appliedFromQueue} queued provider updates and replayed ${replayedActions} actions.`
         : "Manual sync completed.",
     );
   };
@@ -1759,7 +1855,10 @@ export default function TravelAssistantPage() {
     setReviewQueue((prev) => [queueItem, ...prev]);
     setVoiceCaptureCount((count) => count + 1);
     setLastVoiceCaptureAt(capturedAt);
-    queueMutation("One-tap voice capture added to review queue.");
+    queueMutation("One-tap voice capture added to review queue.", {
+      key: "voice-capture",
+      fingerprint: `voice:${capturedAt}`,
+    });
   };
 
   const handleQuickAdd = (source: "email-paste" | "manual"): void => {
@@ -1823,7 +1922,10 @@ export default function TravelAssistantPage() {
           impact: "Imported item was blocked from live itinerary due to invalid critical fields.",
           prependReason: "Quarantined: import failed integrity checks.",
         });
-        queueMutation("Unsafe import quarantined for manual correction.");
+        queueMutation("Unsafe import quarantined for manual correction.", {
+          key: "import-quarantine",
+          fingerprint: `import:${selectedEmail.id}:quarantine`,
+        });
         return;
       }
       const reservation: Reservation = {
@@ -1832,7 +1934,11 @@ export default function TravelAssistantPage() {
         source: "imported",
       };
       setReservations((prev) => [reservation, ...prev]);
-      queueMutation("Imported reservation to live trip.");
+      queueMutation("Imported reservation to live trip.", {
+        key: "import-live",
+        reservationId: reservation.id,
+        fingerprint: `import:${selectedEmail.id}:live`,
+      });
       return;
     }
     const queueItem: ReviewItem = {
@@ -1843,7 +1949,10 @@ export default function TravelAssistantPage() {
       draft: selectedEmail.parsed,
     };
     setReviewQueue((prev) => [queueItem, ...prev]);
-    queueMutation("Import sent to review queue.");
+    queueMutation("Import sent to review queue.", {
+      key: "import-review",
+      fingerprint: `import:${selectedEmail.id}:review`,
+    });
   };
 
   const openDrawer = (kind: "reservation" | "review", id: string): void => {
@@ -1890,7 +1999,10 @@ export default function TravelAssistantPage() {
           impact: "Edited reservation was quarantined because integrity checks failed.",
           prependReason: "Quarantined: edited live reservation became unsafe.",
         });
-        queueMutation("Unsafe live reservation moved to review queue.");
+        queueMutation("Unsafe live reservation moved to review queue.", {
+          key: "reservation-quarantine",
+          reservationId: activeDrawer.id,
+        });
         closeDrawer();
         return;
       }
@@ -1904,7 +2016,10 @@ export default function TravelAssistantPage() {
             : item,
         ),
       );
-      queueMutation("Reservation updated.");
+      queueMutation("Reservation updated.", {
+        key: "reservation-update",
+        reservationId: activeDrawer.id,
+      });
     } else {
       setReviewQueue((prev) =>
         prev.map((item) => (item.id === activeDrawer.id ? { ...item, draft: drawerDraft } : item)),
@@ -1946,7 +2061,10 @@ export default function TravelAssistantPage() {
     };
     setReservations((prev) => [newReservation, ...prev]);
     setReviewQueue((prev) => prev.filter((item) => item.id !== reviewId));
-    queueMutation("Review item accepted into live trip.");
+    queueMutation("Review item accepted into live trip.", {
+      key: "review-accept",
+      reservationId: newReservation.id,
+    });
   };
 
   const handleRejectReview = (reviewId: string): void => {
@@ -2014,7 +2132,10 @@ export default function TravelAssistantPage() {
       }),
     );
     setReviewQueue((prev) => prev.filter((item) => item.id !== reviewId));
-    queueMutation("Review item merged into existing reservation.");
+    queueMutation("Review item merged into existing reservation.", {
+      key: "review-merge",
+      reservationId: targetReservationId,
+    });
   };
 
   const handleChecklistToggle = (id: string): void => {
@@ -2711,6 +2832,8 @@ export default function TravelAssistantPage() {
                 <p className="text-xs text-slate-300">{locationStatusMessage}</p>
                 <p className="mt-1 text-xs text-slate-400">Last sync: {formatClock(lastSyncAt)}</p>
                 <p className="text-xs text-slate-400">Pending updates: {pendingSyncCount}</p>
+                <p className="text-xs text-slate-400">Queued actions outbox: {pendingOutboxCount}</p>
+                <p className="text-xs text-slate-400">Last outbox replay: {formatClock(lastOutboxReplayAt)}</p>
                 <p className="text-xs text-slate-400">Provider mode: {updateMode}</p>
                 <p className="text-xs text-slate-400">Last provider check: {formatClock(lastProviderCheckAt)}</p>
                 <p className="text-xs text-slate-400">Provider attempts (last check): {lastProviderAttempts}</p>
@@ -3209,6 +3332,19 @@ export default function TravelAssistantPage() {
                     {reservation.assignedTo
                       .map((memberId) => familyMembers.find((member) => member.id === memberId)?.name ?? memberId)
                       .join(", ")}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Sync status:{" "}
+                    {(() => {
+                      const reservationPending = pendingOutboxByReservationId.get(reservation.id) ?? 0;
+                      if (reservationPending > 0) {
+                        return `${reservationPending} pending action${reservationPending > 1 ? "s" : ""}`;
+                      }
+                      if (reservation.critical && hasGlobalOutboxPending) {
+                        return "Partially synced (pending global actions)";
+                      }
+                      return "Synced";
+                    })()}
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2 text-xs">
                     <button
