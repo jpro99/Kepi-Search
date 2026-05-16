@@ -1,4 +1,3 @@
-import "server-only";
 import { createFlightStatusProviderFromEnv } from "@/lib/travelAssistant/providers/flightStatusProvider";
 import { createMockTravelUpdateProvider } from "@/lib/travelAssistant/providers/mockTransportProvider";
 import { createRailStatusProviderFromEnv } from "@/lib/travelAssistant/providers/railStatusProvider";
