@@ -24,6 +24,11 @@ import {
   parseTravelClientSessionState,
   stringifyTravelClientSessionState,
 } from "@/lib/travelAssistant/clientSessionState";
+import {
+  buildIncidentAutopilotPlan,
+  type IncidentAutopilotAction,
+  type IncidentAutopilotRecommendation,
+} from "@/lib/travelAssistant/incidentAutopilot";
 import type {
   TravelOpsSnapshot,
   TravelUpdateAuditSummary,
@@ -718,6 +723,7 @@ export default function TravelAssistantPage() {
   >(
     null,
   );
+  const [autopilotActionPending, setAutopilotActionPending] = useState<IncidentAutopilotAction | null>(null);
   const recentAppliedUpdateKeysRef = useRef<Map<string, number>>(new Map());
   const opsFetchInFlightRef = useRef(false);
   const sessionHydratedRef = useRef(false);
@@ -1367,6 +1373,35 @@ export default function TravelAssistantPage() {
     stage: tripStage,
     focusMode: stageFocusMode,
   });
+  const incidentAutopilotRecommendations = useMemo(
+    () =>
+      buildIncidentAutopilotPlan({
+        tripStage,
+        tripStatus,
+        activeScenario,
+        unresolvedReviewCount,
+        blockingIssueCount,
+        dueReminderCount,
+        pendingSyncCount,
+        canSyncItineraryNow,
+        providerCircuitOpen,
+        opsHealth: opsSnapshot?.health ?? null,
+        workerHealth: opsSnapshot?.worker.health ?? null,
+      }),
+    [
+      activeScenario,
+      blockingIssueCount,
+      canSyncItineraryNow,
+      dueReminderCount,
+      opsSnapshot?.health,
+      opsSnapshot?.worker,
+      pendingSyncCount,
+      providerCircuitOpen,
+      tripStage,
+      tripStatus,
+      unresolvedReviewCount,
+    ],
+  );
 
   const statusGovernance = useMemo(
     () =>
@@ -2065,6 +2100,57 @@ export default function TravelAssistantPage() {
 
   const closeDrawer = (): void => {
     setActiveDrawer(null);
+  };
+
+  const applyIncidentAutopilotRecommendation = async (
+    recommendation: IncidentAutopilotRecommendation,
+  ): Promise<void> => {
+    setAutopilotActionPending(recommendation.action);
+    try {
+      switch (recommendation.action) {
+        case "switch-recovery-stage":
+          if (tripStage !== "recovery") {
+            pushUndoSnapshot("Autopilot switched stage to recovery");
+            setTripStage("recovery");
+          }
+          setToast("Autopilot moved trip to recovery stage.");
+          break;
+        case "dispatch-reminders":
+          triggerReminderDispatch();
+          break;
+        case "run-smart-escalation":
+          runSmartEscalation();
+          break;
+        case "sync-now":
+          flushPendingSync();
+          break;
+        case "open-review-top":
+          if (reviewQueue.length > 0) {
+            openDrawer("review", reviewQueue[0].id);
+            setToast("Autopilot opened the top review item.");
+          } else {
+            setToast("Review queue already clear.");
+          }
+          break;
+        case "run-background-once":
+          await runOpsControlAction("run-background-once");
+          break;
+        case "refresh-ops":
+          await fetchOpsSnapshot("manual");
+          setToast("Ops snapshot refreshed.");
+          break;
+        case "trigger-alert-sweep":
+          await runOpsControlAction("trigger-alert-sweep");
+          break;
+        case "reset-circuits":
+          await runOpsControlAction("reset-circuits");
+          break;
+        default:
+          break;
+      }
+    } finally {
+      setAutopilotActionPending(null);
+    }
   };
 
   const saveDrawer = (): void => {
@@ -3841,6 +3927,54 @@ export default function TravelAssistantPage() {
             >
               Clear simulation
             </button>
+          </div>
+          <div className="mt-3 rounded-xl border border-violet-500/30 bg-violet-500/10 p-3">
+            <p className="text-sm font-semibold text-violet-100">Incident autopilot recommendations</p>
+            <p className="text-xs text-violet-100/80">
+              One-tap remediation plan based on live trip risk, queue pressure, sync state, and worker health.
+            </p>
+            {incidentAutopilotRecommendations.length > 0 ? (
+              <ul className="mt-2 space-y-2 text-xs">
+                {incidentAutopilotRecommendations.map((recommendation) => (
+                  <li
+                    key={recommendation.id}
+                    className="rounded-lg border border-violet-400/30 bg-slate-950/70 px-3 py-2 text-slate-200"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            recommendation.priority === "critical"
+                              ? "bg-red-500/20 text-red-100"
+                              : recommendation.priority === "high"
+                                ? "bg-amber-500/20 text-amber-100"
+                                : "bg-cyan-500/20 text-cyan-100"
+                          }`}
+                        >
+                          {recommendation.priority.toUpperCase()}
+                        </span>
+                        <span className="font-semibold">{recommendation.title}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void applyIncidentAutopilotRecommendation(recommendation);
+                        }}
+                        disabled={autopilotActionPending !== null}
+                        className="rounded-md bg-violet-500/80 px-2.5 py-1 text-[11px] font-semibold text-slate-100 hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {autopilotActionPending === recommendation.action ? "Applying..." : "Apply now"}
+                      </button>
+                    </div>
+                    <p className="mt-1 text-[11px] text-slate-300">{recommendation.rationale}</p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2 py-1.5 text-xs text-emerald-100">
+                Autopilot sees no immediate incidents requiring intervention.
+              </p>
+            )}
           </div>
           <div className="mt-3 grid gap-4 lg:grid-cols-3">
             <div className="rounded-xl border border-slate-700 bg-slate-950/70 p-3">
