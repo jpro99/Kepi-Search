@@ -1374,6 +1374,13 @@ export default function TravelAssistantPage() {
     unresolvedReadinessCount,
     unresolvedReviewCount,
   ]);
+  const nextStage = useMemo(() => nextTripStage(tripStage), [tripStage]);
+  const nextStageAction = useMemo(() => {
+    if (primaryActions.length === 0) {
+      return nextBestFlowAction;
+    }
+    return primaryActions[0];
+  }, [nextBestFlowAction, primaryActions]);
 
   const showOpsSection = shouldShowFocusPanel({
     panel: "ops",
@@ -2799,6 +2806,33 @@ export default function TravelAssistantPage() {
               </button>
             </div>
             <p className="text-[11px] text-slate-400">Simple mode keeps only key actions visible on phone.</p>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-cyan-500/30 bg-cyan-500/10 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-cyan-100">Trip snapshot: where you are + what is next</p>
+            <button
+              type="button"
+              onClick={advanceTripStage}
+              className="rounded-lg bg-cyan-500/90 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-cyan-400"
+            >
+              Move to next stage
+            </button>
+          </div>
+          <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
+            <div className="rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-slate-200">
+              <p className="text-xs uppercase tracking-wide text-slate-400">Where you are</p>
+              <p className="mt-1 font-semibold">{STAGE_LABEL[tripStage]}</p>
+              <p className="mt-1 text-xs text-slate-300">{nextBestFlowAction}</p>
+            </div>
+            <div className="rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-slate-200">
+              <p className="text-xs uppercase tracking-wide text-slate-400">What is next</p>
+              <p className="mt-1 font-semibold">
+                {nextStage === tripStage ? "Stay in recovery and stabilize" : STAGE_LABEL[nextStage]}
+              </p>
+              <p className="mt-1 text-xs text-slate-300">{nextStageAction}</p>
+            </div>
           </div>
         </section>
 
