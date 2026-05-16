@@ -225,6 +225,9 @@ export async function runTravelUpdateCheck({
     aggregateUpdates.push(...providerResult.updates);
   }
 
+  const hasSuccessfulProvider = providerReports.some(
+    (report) => report.error === null && !report.circuitOpen,
+  );
   const firstError = providerReports.find((report) => report.error)?.error ?? null;
   return {
     mode,
@@ -232,7 +235,7 @@ export async function runTravelUpdateCheck({
     updates: dedupeUpdates(aggregateUpdates),
     attempts: providerReports.reduce((sum, report) => sum + report.attempts, 0),
     circuitOpen: providerReports.some((report) => report.circuitOpen),
-    error: firstError,
+    error: hasSuccessfulProvider ? null : firstError,
     providerReports,
   };
 }

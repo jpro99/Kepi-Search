@@ -4,6 +4,14 @@ import type {
   TravelUpdateProvider,
   UpdatableReservation,
 } from "@/lib/travelAssistant/travelUpdateTypes";
+import {
+  clampDelayMinutes,
+  createTimeoutSignal,
+  ensureSummary,
+  normalizeLocationToken,
+  normalizeProviderCode,
+  parseProviderEvents,
+} from "@/lib/travelAssistant/providers/providerUtils";
 
 const FlightEventSchema = z.object({
   confirmationCode: z.string().min(1),
@@ -11,10 +19,6 @@ const FlightEventSchema = z.object({
   delayMinutes: z.number().int().nonnegative().optional(),
   gate: z.string().min(1).optional(),
   summary: z.string().min(1).optional(),
-});
-
-const FlightResponseSchema = z.object({
-  events: z.array(FlightEventSchema),
 });
 
 interface FlightProviderConfig {
@@ -35,12 +39,15 @@ function mapFlightEventToUpdate(
   reservation: UpdatableReservation,
   event: z.infer<typeof FlightEventSchema>,
 ): TravelUpdateEvent {
+  const normalizedDelay = clampDelayMinutes(event.delayMinutes);
+  const normalizedGate = event.gate ? normalizeLocationToken(event.gate) : undefined;
+
   if (event.status === "cancelled") {
     return {
       provider: "flight-status-provider",
       kind: "cancellation",
       severity: "critical",
-      summary: event.summary ?? `${reservation.title} was cancelled`,
+      summary: ensureSummary(event.summary, `${reservation.title} was cancelled`),
       detail: "Carrier cancellation detected from live flight status provider.",
       target: {
         reservationType: "flight",
@@ -50,36 +57,36 @@ function mapFlightEventToUpdate(
     };
   }
 
-  if (event.status === "gate_changed" && event.gate) {
+  if (event.status === "gate_changed" && normalizedGate) {
     return {
       provider: "flight-status-provider",
       kind: "gate-change",
       severity: "warning",
-      summary: event.summary ?? `${reservation.title} gate changed to ${event.gate}`,
+      summary: ensureSummary(event.summary, `${reservation.title} gate changed to ${normalizedGate}`),
       detail: "Gate update detected from live flight status provider.",
       target: {
         reservationType: "flight",
         confirmationCode: reservation.confirmationCode,
         titleHint: reservation.title,
       },
-      updatedLocation: `Gate ${event.gate}`,
+      updatedLocation: `Gate ${normalizedGate}`,
     };
   }
 
-  if (event.status === "delayed" && typeof event.delayMinutes === "number") {
-    const severity = event.delayMinutes >= 45 ? "critical" : event.delayMinutes >= 20 ? "warning" : "info";
+  if (event.status === "delayed" && typeof normalizedDelay === "number") {
+    const severity = normalizedDelay >= 45 ? "critical" : normalizedDelay >= 20 ? "warning" : "info";
     return {
       provider: "flight-status-provider",
       kind: "delay",
       severity,
-      summary: event.summary ?? `${reservation.title} delayed ${event.delayMinutes} minutes`,
+      summary: ensureSummary(event.summary, `${reservation.title} delayed ${normalizedDelay} minutes`),
       detail: "Delay update detected from live flight status provider.",
       target: {
         reservationType: "flight",
         confirmationCode: reservation.confirmationCode,
         titleHint: reservation.title,
       },
-      delayMinutes: event.delayMinutes,
+      delayMinutes: normalizedDelay,
     };
   }
 
@@ -87,7 +94,7 @@ function mapFlightEventToUpdate(
     provider: "flight-status-provider",
     kind: "on-time",
     severity: "info",
-    summary: event.summary ?? `${reservation.title} remains on time`,
+    summary: ensureSummary(event.summary, `${reservation.title} remains on time`),
     detail: "Live provider confirmed on-time status.",
     target: {
       reservationType: "flight",
@@ -108,6 +115,9 @@ export function createFlightStatusProviderFromEnv(): TravelUpdateProvider | null
     async fetchUpdates(args) {
       const candidates = args.reservations.filter((reservation) => reservation.type === "flight");
       if (candidates.length === 0) return [];
+      const byConfirmation = new Map(
+        candidates.map((reservation) => [normalizeProviderCode(reservation.confirmationCode), reservation]),
+      );
 
       const response = await fetch(config.endpoint, {
         method: "POST",
@@ -117,20 +127,27 @@ export function createFlightStatusProviderFromEnv(): TravelUpdateProvider | null
         },
         body: JSON.stringify({
           nowIso: args.nowIso,
-          confirmations: candidates.map((reservation) => reservation.confirmationCode),
+          confirmations: candidates.map((reservation) => normalizeProviderCode(reservation.confirmationCode)),
         }),
         cache: "no-store",
-        signal: AbortSignal.timeout(6_000),
+        signal: createTimeoutSignal(),
       });
 
       if (!response.ok) {
         throw new Error(`Flight provider returned ${response.status}`);
       }
-      const payload = FlightResponseSchema.parse(await response.json());
-      const byConfirmation = new Map(candidates.map((reservation) => [reservation.confirmationCode, reservation]));
-      return payload.events
+
+      const { validEvents, invalidCount, totalCount } = parseProviderEvents({
+        payload: await response.json(),
+        eventSchema: FlightEventSchema,
+      });
+      if (totalCount > 0 && validEvents.length === 0) {
+        throw new Error(`Flight provider payload invalid (${invalidCount}/${totalCount} events rejected)`);
+      }
+
+      return validEvents
         .map((event) => {
-          const reservation = byConfirmation.get(event.confirmationCode);
+          const reservation = byConfirmation.get(normalizeProviderCode(event.confirmationCode));
           if (!reservation) return null;
           return mapFlightEventToUpdate(reservation, event);
         })

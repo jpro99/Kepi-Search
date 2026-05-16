@@ -4,6 +4,14 @@ import type {
   TravelUpdateProvider,
   UpdatableReservation,
 } from "@/lib/travelAssistant/travelUpdateTypes";
+import {
+  clampDelayMinutes,
+  createTimeoutSignal,
+  ensureSummary,
+  normalizeLocationToken,
+  normalizeProviderCode,
+  parseProviderEvents,
+} from "@/lib/travelAssistant/providers/providerUtils";
 
 const RailEventSchema = z.object({
   confirmationCode: z.string().min(1),
@@ -11,10 +19,6 @@ const RailEventSchema = z.object({
   delayMinutes: z.number().int().nonnegative().optional(),
   platform: z.string().min(1).optional(),
   summary: z.string().min(1).optional(),
-});
-
-const RailResponseSchema = z.object({
-  events: z.array(RailEventSchema),
 });
 
 interface RailProviderConfig {
@@ -35,12 +39,15 @@ function mapRailEventToUpdate(
   reservation: UpdatableReservation,
   event: z.infer<typeof RailEventSchema>,
 ): TravelUpdateEvent {
+  const normalizedDelay = clampDelayMinutes(event.delayMinutes);
+  const normalizedPlatform = event.platform ? normalizeLocationToken(event.platform) : undefined;
+
   if (event.status === "cancelled") {
     return {
       provider: "rail-status-provider",
       kind: "cancellation",
       severity: "critical",
-      summary: event.summary ?? `${reservation.title} was cancelled`,
+      summary: ensureSummary(event.summary, `${reservation.title} was cancelled`),
       detail: "Rail cancellation detected from live rail provider.",
       target: {
         reservationType: "train",
@@ -50,36 +57,36 @@ function mapRailEventToUpdate(
     };
   }
 
-  if (event.status === "platform_changed" && event.platform) {
+  if (event.status === "platform_changed" && normalizedPlatform) {
     return {
       provider: "rail-status-provider",
       kind: "platform-change",
       severity: "warning",
-      summary: event.summary ?? `${reservation.title} changed to platform ${event.platform}`,
+      summary: ensureSummary(event.summary, `${reservation.title} changed to platform ${normalizedPlatform}`),
       detail: "Platform update detected from live rail provider.",
       target: {
         reservationType: "train",
         confirmationCode: reservation.confirmationCode,
         titleHint: reservation.title,
       },
-      updatedLocation: `Platform ${event.platform}`,
+      updatedLocation: `Platform ${normalizedPlatform}`,
     };
   }
 
-  if (event.status === "delayed" && typeof event.delayMinutes === "number") {
-    const severity = event.delayMinutes >= 30 ? "critical" : event.delayMinutes >= 15 ? "warning" : "info";
+  if (event.status === "delayed" && typeof normalizedDelay === "number") {
+    const severity = normalizedDelay >= 30 ? "critical" : normalizedDelay >= 15 ? "warning" : "info";
     return {
       provider: "rail-status-provider",
       kind: "delay",
       severity,
-      summary: event.summary ?? `${reservation.title} delayed ${event.delayMinutes} minutes`,
+      summary: ensureSummary(event.summary, `${reservation.title} delayed ${normalizedDelay} minutes`),
       detail: "Delay update detected from live rail provider.",
       target: {
         reservationType: "train",
         confirmationCode: reservation.confirmationCode,
         titleHint: reservation.title,
       },
-      delayMinutes: event.delayMinutes,
+      delayMinutes: normalizedDelay,
     };
   }
 
@@ -87,7 +94,7 @@ function mapRailEventToUpdate(
     provider: "rail-status-provider",
     kind: "on-time",
     severity: "info",
-    summary: event.summary ?? `${reservation.title} remains on time`,
+    summary: ensureSummary(event.summary, `${reservation.title} remains on time`),
     detail: "Live provider confirmed on-time status.",
     target: {
       reservationType: "train",
@@ -108,6 +115,9 @@ export function createRailStatusProviderFromEnv(): TravelUpdateProvider | null {
     async fetchUpdates(args) {
       const candidates = args.reservations.filter((reservation) => reservation.type === "train");
       if (candidates.length === 0) return [];
+      const byConfirmation = new Map(
+        candidates.map((reservation) => [normalizeProviderCode(reservation.confirmationCode), reservation]),
+      );
 
       const response = await fetch(config.endpoint, {
         method: "POST",
@@ -117,21 +127,27 @@ export function createRailStatusProviderFromEnv(): TravelUpdateProvider | null {
         },
         body: JSON.stringify({
           nowIso: args.nowIso,
-          confirmations: candidates.map((reservation) => reservation.confirmationCode),
+          confirmations: candidates.map((reservation) => normalizeProviderCode(reservation.confirmationCode)),
         }),
         cache: "no-store",
-        signal: AbortSignal.timeout(6_000),
+        signal: createTimeoutSignal(),
       });
 
       if (!response.ok) {
         throw new Error(`Rail provider returned ${response.status}`);
       }
 
-      const payload = RailResponseSchema.parse(await response.json());
-      const byConfirmation = new Map(candidates.map((reservation) => [reservation.confirmationCode, reservation]));
-      return payload.events
+      const { validEvents, invalidCount, totalCount } = parseProviderEvents({
+        payload: await response.json(),
+        eventSchema: RailEventSchema,
+      });
+      if (totalCount > 0 && validEvents.length === 0) {
+        throw new Error(`Rail provider payload invalid (${invalidCount}/${totalCount} events rejected)`);
+      }
+
+      return validEvents
         .map((event) => {
-          const reservation = byConfirmation.get(event.confirmationCode);
+          const reservation = byConfirmation.get(normalizeProviderCode(event.confirmationCode));
           if (!reservation) return null;
           return mapRailEventToUpdate(reservation, event);
         })
