@@ -1202,7 +1202,6 @@ export default function TravelAssistantPage() {
   }, [autoTransportUpdates, runProviderCheck, updateMode]);
 
   useEffect(() => {
-    void fetchOpsSnapshot("auto");
     const timer = window.setInterval(() => {
       void fetchOpsSnapshot("auto");
     }, 120_000);
@@ -1979,7 +1978,15 @@ export default function TravelAssistantPage() {
               <div className="rounded-lg border border-slate-700 bg-slate-950/70 p-3">
                 <button
                   type="button"
-                  onClick={() => setOpsExpanded((previous) => !previous)}
+                  onClick={() =>
+                    setOpsExpanded((previous) => {
+                      const nextValue = !previous;
+                      if (nextValue && !opsSnapshot) {
+                        void fetchOpsSnapshot("auto");
+                      }
+                      return nextValue;
+                    })
+                  }
                   className="flex w-full items-center justify-between text-left text-xs font-semibold text-slate-100"
                 >
                   <span>Ops observability panel</span>
