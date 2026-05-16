@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { runTravelUpdateCheck } from "@/lib/travelAssistant/updateAdapters";
 import { persistTravelUpdateAudit } from "@/lib/travelAssistant/updateAuditStore";
+import { persistTravelRuntimeState } from "@/lib/travelAssistant/updateRuntimeStateStore";
 
 const ReservationSchema = z.object({
   id: z.string().min(1),
@@ -35,15 +36,22 @@ export async function POST(req: Request) {
     );
   }
 
+  const effectiveNowIso = parsed.data.nowIso ?? new Date().toISOString();
+  await persistTravelRuntimeState({
+    reservations: parsed.data.reservations,
+    mode: parsed.data.mode,
+    updatedAt: effectiveNowIso,
+  });
+
   const result = await runTravelUpdateCheck({
     mode: parsed.data.mode,
     reservations: parsed.data.reservations,
-    nowIso: parsed.data.nowIso ?? new Date().toISOString(),
+    nowIso: effectiveNowIso,
   });
 
   const audit = await persistTravelUpdateAudit({
     result,
-    checkedAt: new Date().toISOString(),
+    checkedAt: effectiveNowIso,
   });
 
   return NextResponse.json({
