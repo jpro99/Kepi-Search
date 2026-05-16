@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type {
+  TravelAuditReadSnapshot,
+  TravelAuditTrailEntry,
   TravelUpdateAuditSummary,
   TravelUpdateCheckResult,
   TravelUpdateEvent,
@@ -18,22 +20,10 @@ interface StoredUpdateRecord {
   seenCount: number;
 }
 
-interface AuditTrailEntry {
-  requestId: string;
-  checkedAt: string;
-  mode: TravelUpdateCheckResult["mode"];
-  provider: string | null;
-  incomingUpdates: number;
-  newUpdates: number;
-  duplicateUpdates: number;
-  providerError: string | null;
-  circuitOpen: boolean;
-}
-
 interface UpdateAuditStoreData {
   version: 1;
   eventsByKey: Record<string, StoredUpdateRecord>;
-  auditTrail: AuditTrailEntry[];
+  auditTrail: TravelAuditTrailEntry[];
 }
 
 const DEFAULT_AUDIT_PATH = "/tmp/kepi-travel-update-audit.json";
@@ -59,10 +49,28 @@ async function loadStore(filePath: string): Promise<UpdateAuditStoreData> {
     if (parsed.version !== 1 || !parsed.eventsByKey || !Array.isArray(parsed.auditTrail)) {
       return createEmptyStore();
     }
+    const normalizedAuditTrail = parsed.auditTrail.map((entry) => {
+      const raw = entry as Partial<TravelAuditTrailEntry>;
+      return {
+        source: raw.source === "background" ? "background" : "interactive",
+        requestId: typeof raw.requestId === "string" ? raw.requestId : randomUUID(),
+        checkedAt: typeof raw.checkedAt === "string" ? raw.checkedAt : new Date(0).toISOString(),
+        mode: raw.mode ?? "auto",
+        provider: typeof raw.provider === "string" || raw.provider === null ? raw.provider : null,
+        incomingUpdates: typeof raw.incomingUpdates === "number" ? raw.incomingUpdates : 0,
+        newUpdates: typeof raw.newUpdates === "number" ? raw.newUpdates : 0,
+        duplicateUpdates: typeof raw.duplicateUpdates === "number" ? raw.duplicateUpdates : 0,
+        providerError: typeof raw.providerError === "string" || raw.providerError === null ? raw.providerError : null,
+        circuitOpen: typeof raw.circuitOpen === "boolean" ? raw.circuitOpen : false,
+        conflictAccepted: typeof raw.conflictAccepted === "number" ? raw.conflictAccepted : 0,
+        conflictSuppressed: typeof raw.conflictSuppressed === "number" ? raw.conflictSuppressed : 0,
+        providerReports: Array.isArray(raw.providerReports) ? raw.providerReports : [],
+      } satisfies TravelAuditTrailEntry;
+    });
     return {
       version: 1,
       eventsByKey: parsed.eventsByKey,
-      auditTrail: parsed.auditTrail,
+      auditTrail: normalizedAuditTrail,
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -94,10 +102,12 @@ export async function persistTravelUpdateAudit({
   result,
   checkedAt,
   storagePath,
+  source = "interactive",
 }: {
   result: TravelUpdateCheckResult;
   checkedAt?: string;
   storagePath?: string;
+  source?: "interactive" | "background";
 }): Promise<{
   freshUpdates: TravelUpdateEvent[];
   duplicateUpdates: number;
@@ -150,6 +160,7 @@ export async function persistTravelUpdateAudit({
     };
 
     store.auditTrail.unshift({
+      source,
       requestId,
       checkedAt: effectiveCheckedAt,
       mode: result.mode,
@@ -159,6 +170,9 @@ export async function persistTravelUpdateAudit({
       duplicateUpdates,
       providerError: result.error,
       circuitOpen: result.circuitOpen,
+      conflictAccepted: result.conflictResolution?.acceptedUpdates ?? result.updates.length,
+      conflictSuppressed: result.conflictResolution?.suppressedUpdates ?? 0,
+      providerReports: result.providerReports,
     });
     if (store.auditTrail.length > MAX_AUDIT_TRAIL_ENTRIES) {
       store.auditTrail.length = MAX_AUDIT_TRAIL_ENTRIES;
@@ -174,4 +188,19 @@ export async function persistTravelUpdateAudit({
     () => undefined,
   );
   return task;
+}
+
+export async function readTravelUpdateAuditSnapshot({
+  storagePath,
+  limit = 20,
+}: {
+  storagePath?: string;
+  limit?: number;
+} = {}): Promise<TravelAuditReadSnapshot> {
+  const filePath = resolveAuditPath(storagePath);
+  const store = await loadStore(filePath);
+  return {
+    totalKnownEvents: Object.keys(store.eventsByKey).length,
+    recentAuditTrail: store.auditTrail.slice(0, Math.max(1, limit)),
+  };
 }

@@ -3,7 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { persistTravelUpdateAudit } from "@/lib/travelAssistant/updateAuditStore";
+import {
+  persistTravelUpdateAudit,
+  readTravelUpdateAuditSnapshot,
+} from "@/lib/travelAssistant/updateAuditStore";
 import type { TravelUpdateCheckResult } from "@/lib/travelAssistant/travelUpdateTypes";
 
 function buildResult(overrides?: Partial<TravelUpdateCheckResult>): TravelUpdateCheckResult {
@@ -119,6 +122,57 @@ test("stores new events when incoming set mixes new and existing updates", async
     assert.equal(persisted.freshUpdates[0]?.provider, "mock-rail-ops");
     assert.equal(persisted.duplicateUpdates, 1);
     assert.equal(persisted.summary.totalKnownEvents, 2);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("readTravelUpdateAuditSnapshot returns recent runs with conflict metadata", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "travel-audit-test-"));
+  const auditPath = join(tempDir, "audit.json");
+
+  try {
+    await persistTravelUpdateAudit({
+      storagePath: auditPath,
+      checkedAt: "2026-06-21T10:00:00.000Z",
+      result: buildResult({
+        providerReports: [
+          {
+            provider: "mock-flight-ops",
+            attempts: 2,
+            updateCount: 1,
+            circuitOpen: false,
+            error: null,
+          },
+        ],
+        conflictResolution: {
+          incomingUpdates: 2,
+          acceptedUpdates: 1,
+          suppressedUpdates: 1,
+          conflicts: [
+            {
+              targetKey: "flight:Y8Q4D2",
+              domain: "timing",
+              winnerProvider: "mock-flight-ops",
+              loserProvider: "mock-rail-ops",
+              winnerKind: "delay",
+              loserKind: "delay",
+              reason: "Higher priority provider",
+            },
+          ],
+        },
+      }),
+    });
+
+    const snapshot = await readTravelUpdateAuditSnapshot({
+      storagePath: auditPath,
+      limit: 5,
+    });
+
+    assert.equal(snapshot.recentAuditTrail.length, 1);
+    assert.equal(snapshot.recentAuditTrail[0]?.conflictAccepted, 1);
+    assert.equal(snapshot.recentAuditTrail[0]?.conflictSuppressed, 1);
+    assert.equal(snapshot.recentAuditTrail[0]?.providerReports.length, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -53,6 +53,27 @@ export interface TravelUpdateAuditSummary {
   totalKnownEvents: number;
 }
 
+export interface TravelAuditTrailEntry {
+  source: "interactive" | "background";
+  requestId: string;
+  checkedAt: string;
+  mode: TravelUpdateMode;
+  provider: string | null;
+  incomingUpdates: number;
+  newUpdates: number;
+  duplicateUpdates: number;
+  providerError: string | null;
+  circuitOpen: boolean;
+  conflictAccepted: number;
+  conflictSuppressed: number;
+  providerReports: TravelProviderReport[];
+}
+
+export interface TravelAuditReadSnapshot {
+  totalKnownEvents: number;
+  recentAuditTrail: TravelAuditTrailEntry[];
+}
+
 export interface TravelUpdateConflict {
   targetKey: string;
   domain: "status" | "timing" | "location";
@@ -88,4 +109,25 @@ export interface TravelUpdateCheckResult {
   providerReports: TravelProviderReport[];
   audit?: TravelUpdateAuditSummary;
   conflictResolution?: TravelConflictResolutionSummary;
+}
+
+export type TravelOpsHealthStatus = "green" | "yellow" | "red";
+
+export interface TravelOpsSnapshot {
+  generatedAt: string;
+  health: TravelOpsHealthStatus;
+  reasons: string[];
+  runtime: {
+    mode: TravelUpdateMode;
+    updatedAt: string;
+    reservationCount: number;
+    staleMinutes: number;
+    isStale: boolean;
+  };
+  audit: TravelAuditReadSnapshot;
+  latestBackgroundRun: TravelAuditTrailEntry | null;
+  provider: {
+    recentErrorCount: number;
+    circuitOpenCount: number;
+  };
 }

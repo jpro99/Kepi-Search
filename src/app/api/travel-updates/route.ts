@@ -52,6 +52,7 @@ export async function POST(req: Request) {
   const audit = await persistTravelUpdateAudit({
     result,
     checkedAt: effectiveNowIso,
+    source: "interactive",
   });
 
   return NextResponse.json({

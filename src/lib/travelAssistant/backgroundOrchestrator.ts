@@ -50,6 +50,7 @@ export async function runTravelUpdateBackgroundPass({
     result,
     checkedAt: effectiveNowIso,
     storagePath: auditPath,
+    source: "background",
   });
 
   return {

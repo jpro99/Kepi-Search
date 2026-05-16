@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  TravelOpsSnapshot,
   TravelUpdateAuditSummary,
   TravelConflictResolutionSummary,
   TravelProviderReport,
@@ -632,7 +633,12 @@ export default function TravelAssistantPage() {
   const [providerReports, setProviderReports] = useState<TravelProviderReport[]>([]);
   const [lastAuditSummary, setLastAuditSummary] = useState<TravelUpdateAuditSummary | null>(null);
   const [lastConflictSummary, setLastConflictSummary] = useState<TravelConflictResolutionSummary | null>(null);
+  const [opsSnapshot, setOpsSnapshot] = useState<TravelOpsSnapshot | null>(null);
+  const [opsError, setOpsError] = useState<string | null>(null);
+  const [opsExpanded, setOpsExpanded] = useState(false);
+  const [opsLoading, setOpsLoading] = useState(false);
   const recentAppliedUpdateKeysRef = useRef<Map<string, number>>(new Map());
+  const opsFetchInFlightRef = useRef(false);
 
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(INITIAL_FAMILY);
   const [reservations, setReservations] = useState<Reservation[]>(INITIAL_RESERVATIONS);
@@ -1059,6 +1065,34 @@ export default function TravelAssistantPage() {
     return appliedFeed.length;
   }, []);
 
+  const fetchOpsSnapshot = useCallback(async (trigger: "auto" | "manual" = "auto"): Promise<void> => {
+    if (opsFetchInFlightRef.current && trigger === "auto") {
+      return;
+    }
+    opsFetchInFlightRef.current = true;
+    setOpsLoading(true);
+    try {
+      const response = await fetch("/api/travel-updates/ops?limit=12", {
+        method: "GET",
+      });
+      if (!response.ok) {
+        throw new Error(`Ops API returned ${response.status}`);
+      }
+      const snapshot = (await response.json()) as TravelOpsSnapshot;
+      setOpsSnapshot(snapshot);
+      setOpsError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown ops status error";
+      setOpsError(message);
+      if (trigger === "manual") {
+        setToast(`Ops status unavailable: ${message}`);
+      }
+    } finally {
+      setOpsLoading(false);
+      opsFetchInFlightRef.current = false;
+    }
+  }, []);
+
   const runProviderCheck = useCallback(async (trigger: "auto" | "manual"): Promise<void> => {
     if (isProviderCheckRunning) {
       return;
@@ -1145,9 +1179,18 @@ export default function TravelAssistantPage() {
         setToast(`Provider check failed: ${message}`);
       }
     } finally {
+      void fetchOpsSnapshot("auto");
       setIsProviderCheckRunning(false);
     }
-  }, [applyProviderUpdates, canSyncItineraryNow, isProviderCheckRunning, nowMs, providerEligibleReservations, updateMode]);
+  }, [
+    applyProviderUpdates,
+    canSyncItineraryNow,
+    fetchOpsSnapshot,
+    isProviderCheckRunning,
+    nowMs,
+    providerEligibleReservations,
+    updateMode,
+  ]);
 
   useEffect(() => {
     if (!autoTransportUpdates) return;
@@ -1157,6 +1200,14 @@ export default function TravelAssistantPage() {
     }, 90_000);
     return () => window.clearInterval(timer);
   }, [autoTransportUpdates, runProviderCheck, updateMode]);
+
+  useEffect(() => {
+    void fetchOpsSnapshot("auto");
+    const timer = window.setInterval(() => {
+      void fetchOpsSnapshot("auto");
+    }, 120_000);
+    return () => window.clearInterval(timer);
+  }, [fetchOpsSnapshot]);
 
   const queueMutation = (message: string): void => {
     if (canSyncItineraryNow) {
@@ -1924,6 +1975,97 @@ export default function TravelAssistantPage() {
                     <li className="text-slate-400">No provider updates applied yet.</li>
                   )}
                 </ul>
+              </div>
+              <div className="rounded-lg border border-slate-700 bg-slate-950/70 p-3">
+                <button
+                  type="button"
+                  onClick={() => setOpsExpanded((previous) => !previous)}
+                  className="flex w-full items-center justify-between text-left text-xs font-semibold text-slate-100"
+                >
+                  <span>Ops observability panel</span>
+                  <span className="text-slate-400">{opsExpanded ? "Hide" : "Show"}</span>
+                </button>
+                {opsExpanded ? (
+                  <div className="mt-3 space-y-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`rounded-full px-2 py-1 ring-1 ${
+                          opsSnapshot
+                            ? STATUS_BADGE[opsSnapshot.health]
+                            : "bg-slate-800 text-slate-200 ring-slate-700"
+                        }`}
+                      >
+                        {opsSnapshot ? `Health ${opsSnapshot.health.toUpperCase()}` : "Health unknown"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void fetchOpsSnapshot("manual");
+                        }}
+                        className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-800"
+                        disabled={opsLoading}
+                      >
+                        {opsLoading ? "Refreshing..." : "Refresh ops"}
+                      </button>
+                    </div>
+                    {opsError ? <p className="text-red-200">Ops read error: {opsError}</p> : null}
+                    {opsSnapshot ? (
+                      <>
+                        <p className="text-slate-300">
+                          Snapshot {formatClock(opsSnapshot.generatedAt)} • runtime updated{" "}
+                          {formatClock(opsSnapshot.runtime.updatedAt)}
+                        </p>
+                        <p className="text-slate-300">
+                          Runtime reservations {opsSnapshot.runtime.reservationCount} • stale{" "}
+                          {opsSnapshot.runtime.staleMinutes} minutes
+                        </p>
+                        {opsSnapshot.latestBackgroundRun ? (
+                          <p className="text-slate-300">
+                            Latest background run: {formatClock(opsSnapshot.latestBackgroundRun.checkedAt)} • new{" "}
+                            {opsSnapshot.latestBackgroundRun.newUpdates} / dup{" "}
+                            {opsSnapshot.latestBackgroundRun.duplicateUpdates}
+                            {opsSnapshot.latestBackgroundRun.providerError
+                              ? ` • error ${opsSnapshot.latestBackgroundRun.providerError}`
+                              : ""}
+                          </p>
+                        ) : (
+                          <p className="text-amber-200">
+                            No background run recorded yet. Trigger /api/travel-updates/background to verify worker path.
+                          </p>
+                        )}
+                        <p className="text-slate-300">
+                          Provider degradations: {opsSnapshot.provider.recentErrorCount} errors /{" "}
+                          {opsSnapshot.provider.circuitOpenCount} circuit-open runs
+                        </p>
+                        <ul className="space-y-1 text-[11px] text-slate-300">
+                          {opsSnapshot.reasons.map((reason) => (
+                            <li key={reason} className="rounded border border-slate-700 px-2 py-1">
+                              {reason}
+                            </li>
+                          ))}
+                        </ul>
+                        <ul className="max-h-24 space-y-1 overflow-auto text-[11px] text-slate-300">
+                          {opsSnapshot.audit.recentAuditTrail.slice(0, 5).map((entry) => (
+                            <li key={entry.requestId} className="rounded border border-slate-700 px-2 py-1">
+                              <p className="font-medium">
+                                {formatClock(entry.checkedAt)} • {entry.mode}
+                              </p>
+                              <p className="text-slate-400">
+                                new {entry.newUpdates} / dup {entry.duplicateUpdates} / suppressed{" "}
+                                {entry.conflictSuppressed}
+                              </p>
+                              {entry.providerError ? (
+                                <p className="text-red-200">Error: {entry.providerError}</p>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : (
+                      <p className="text-slate-400">Loading ops status...</p>
+                    )}
+                  </div>
+                ) : null}
               </div>
             </div>
           </article>
