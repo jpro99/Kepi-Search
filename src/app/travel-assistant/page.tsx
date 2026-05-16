@@ -118,6 +118,14 @@ interface TimelineIssue {
   recommendation: string;
 }
 
+interface StageFlowCard {
+  stage: TripStage;
+  objective: string;
+  easiestInput: string;
+  mustConfirm: string;
+  exitCheck: string;
+}
+
 interface UpdateFeedItem {
   id: string;
   reservationId: string;
@@ -142,6 +150,22 @@ const STAGE_LABEL: Record<TripStage, string> = {
   airport: "Airport",
   arrival: "Arrival",
   recovery: "Recovery",
+};
+
+const STAGE_OBJECTIVES: Record<TripStage, string> = {
+  readiness: "Capture every reservation quickly and resolve unknowns before they become risk.",
+  "pre-departure": "Confirm leave-by timing, ownership, and transfer paths before heading out.",
+  airport: "Keep live movement and gate/platform signals current with low-friction updates.",
+  arrival: "Sequence pickup, hotel, and first-night plans while preserving per-person clarity.",
+  recovery: "Minimize delay impact with scripted decisions and rapid itinerary re-sync.",
+};
+
+const STAGE_EASIEST_INPUT: Record<TripStage, string> = {
+  readiness: "Forward confirmations by email, then one-tap route low-confidence items to review.",
+  "pre-departure": "Use stage quick actions to run escalations instead of manual scanning.",
+  airport: "Use one-tap voice capture for changes when movement is high and typing is slow.",
+  arrival: "Apply per-person filtering before edits so only relevant cards are touched.",
+  recovery: "Use scripted call flows and re-export updated static itinerary in one pass.",
 };
 
 const STATUS_LABEL: Record<TripStatus, string> = {
@@ -625,6 +649,8 @@ export default function TravelAssistantPage() {
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(new Date().toISOString());
   const [lastReminderSentAt, setLastReminderSentAt] = useState<string | null>(null);
+  const [lastVoiceCaptureAt, setLastVoiceCaptureAt] = useState<string | null>(null);
+  const [voiceCaptureCount, setVoiceCaptureCount] = useState(0);
   const [lastProviderCheckAt, setLastProviderCheckAt] = useState<string | null>(null);
   const [lastProviderError, setLastProviderError] = useState<string | null>(null);
   const [lastProviderAttempts, setLastProviderAttempts] = useState(0);
@@ -997,6 +1023,83 @@ export default function TravelAssistantPage() {
       (tripStatus === "red" ? 10 : tripStatus === "yellow" ? 4 : 0);
     return Math.max(0, Math.min(100, rawScore));
   }, [blockingIssueCount, smartEscalationDueCount, tripStatus, unresolvedReadinessCount, unresolvedReviewCount]);
+
+  const stageIndex = STAGES.indexOf(tripStage);
+  const stageFlowCards = useMemo<StageFlowCard[]>(() => {
+    return STAGES.map((stage) => {
+      const mustConfirm =
+        stage === "readiness"
+          ? `${unresolvedReviewCount} review items and ${unresolvedReadinessCount} required checklist items unresolved.`
+          : stage === "pre-departure"
+            ? `Leave-by buffer ${leaveByMinutes} min with ${blockingIssueCount} high-severity timeline blockers.`
+            : stage === "airport"
+              ? `${dueReminderCount} due reminders and ${smartEscalationDueCount} smart escalations need attention.`
+              : stage === "arrival"
+                ? `Per-person schedule for ${selectedFamilyMember.name} remains ${personalTimelineOnly ? "focused" : "group-visible"}.`
+                : `Disruption mode ${activeScenario === "none" ? "inactive" : `active: ${activeScenario.replace("-", " ")}`}.`;
+
+      const exitCheck =
+        stage === "readiness"
+          ? "All required checklist + review blockers resolved."
+          : stage === "pre-departure"
+            ? "Leave-by time confirmed and transfer fallback documented."
+            : stage === "airport"
+              ? "Latest updates synced and all due reminders dispatched."
+              : stage === "arrival"
+                ? "Pickup + check-in + first-night sequence confirmed."
+                : "Recovery decisions executed and refreshed itinerary shared.";
+
+      return {
+        stage,
+        objective: STAGE_OBJECTIVES[stage],
+        easiestInput: STAGE_EASIEST_INPUT[stage],
+        mustConfirm,
+        exitCheck,
+      };
+    });
+  }, [
+    activeScenario,
+    blockingIssueCount,
+    dueReminderCount,
+    leaveByMinutes,
+    personalTimelineOnly,
+    selectedFamilyMember.name,
+    smartEscalationDueCount,
+    unresolvedReadinessCount,
+    unresolvedReviewCount,
+  ]);
+
+  const nextBestFlowAction = useMemo(() => {
+    if (unresolvedReviewCount > 0) {
+      return "Clear or merge review queue items first so uncertain imports never block later stages.";
+    }
+    if (tripStage === "readiness" && unresolvedReadinessCount > 0) {
+      return "Finish required readiness checks before moving to pre-departure mode.";
+    }
+    if (tripStage === "pre-departure" && blockingIssueCount > 0) {
+      return "Fix timeline blockers and reconfirm leave-by time before departure.";
+    }
+    if (tripStage === "airport" && (dueReminderCount > 0 || smartEscalationDueCount > 0)) {
+      return "Dispatch due reminders and run smart escalation now to avoid misses.";
+    }
+    if (tripStage === "arrival" && !personalTimelineOnly) {
+      return `Switch to ${selectedFamilyMember.name}'s personal view to confirm individual handoffs.`;
+    }
+    if (tripStage === "recovery" && activeScenario === "none") {
+      return "No disruption is active. Keep this stage for incident handling only.";
+    }
+    return "Flow is clear. Keep inputs lightweight and run a quick status evaluation.";
+  }, [
+    activeScenario,
+    blockingIssueCount,
+    dueReminderCount,
+    personalTimelineOnly,
+    selectedFamilyMember.name,
+    smartEscalationDueCount,
+    tripStage,
+    unresolvedReadinessCount,
+    unresolvedReviewCount,
+  ]);
 
   const statusGovernance = useMemo(
     () =>
@@ -1441,6 +1544,41 @@ export default function TravelAssistantPage() {
     },
     [],
   );
+
+  const handleVoiceQuickCapture = (): void => {
+    const capturedAt = new Date().toISOString();
+    const draft: ReservationDraft = {
+      type: tripStage === "airport" ? "ride" : "dinner",
+      title:
+        tripStage === "airport"
+          ? `Voice capture: transfer update (${selectedFamilyMember.name})`
+          : `Voice capture: plan update (${selectedFamilyMember.name})`,
+      provider: "Voice intake",
+      localTime: formatDateTimeLocal(nowMs + 2 * 60 * 60 * 1000),
+      timezone: tripStage === "arrival" ? "America/Los_Angeles" : "America/New_York",
+      location: "Needs confirmation from voice transcript",
+      confirmationCode: `VOICE-${String(voiceCaptureCount + 1).padStart(3, "0")}`,
+      assignedTo: [selectedFamilyMember.id],
+      stage: tripStage,
+      critical: tripStage === "airport" || tripStage === "recovery",
+      confidence: "low",
+      notes: "Captured from one-tap voice input. Validate key fields before live activation.",
+    };
+    const queueItem: ReviewItem = {
+      id: nextId("review"),
+      reasons: [
+        "Voice capture requires transcript confirmation.",
+        "Validate local time, timezone, and exact location before publish.",
+      ],
+      impact: "Fast voice input preserved context while moving; pending structured validation.",
+      sourceEmailSubject: `Voice capture ${capturedAt}`,
+      draft,
+    };
+    setReviewQueue((prev) => [queueItem, ...prev]);
+    setVoiceCaptureCount((count) => count + 1);
+    setLastVoiceCaptureAt(capturedAt);
+    queueMutation("One-tap voice capture added to review queue.");
+  };
 
   const handleImportAction = (target: "live" | "review"): void => {
     if (!selectedEmail) return;
@@ -1974,6 +2112,123 @@ export default function TravelAssistantPage() {
               {personalTimelineOnly ? "Show group timeline" : "Show my timeline"}
             </button>
           </div>
+        </section>
+
+        <section className="grid gap-4 sm:gap-6 xl:grid-cols-[1.3fr_1fr]">
+          <article className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-semibold">Journey flow navigator</h2>
+                <p className="text-xs text-slate-400">
+                  Start-to-finish operating map focused on easiest input, safety checks, and clean stage handoffs.
+                </p>
+              </div>
+              <span className="rounded-full bg-cyan-500/15 px-2.5 py-1 text-xs font-medium text-cyan-100 ring-1 ring-cyan-400/40">
+                Progress {Math.round(((stageIndex + 1) / STAGES.length) * 100)}%
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {STAGES.map((stage, index) => (
+                <button
+                  key={`flow-${stage}`}
+                  type="button"
+                  onClick={() => setTripStage(stage)}
+                  className={`rounded-full px-3 py-1.5 text-xs ring-1 transition ${
+                    stage === tripStage
+                      ? "bg-cyan-500 text-slate-950 ring-cyan-300"
+                      : index <= stageIndex
+                        ? "bg-emerald-500/15 text-emerald-100 ring-emerald-400/40"
+                        : "bg-slate-800 text-slate-200 ring-slate-700 hover:bg-slate-700"
+                  }`}
+                >
+                  {index + 1}. {STAGE_LABEL[stage]}
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-sm text-cyan-50">
+              <p className="text-xs font-semibold uppercase tracking-wide text-cyan-200">Next best action</p>
+              <p className="mt-1">{nextBestFlowAction}</p>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {stageFlowCards.map((card) => (
+                <div
+                  key={`flow-card-${card.stage}`}
+                  className={`rounded-lg border p-3 text-xs ${
+                    card.stage === tripStage
+                      ? "border-cyan-400/50 bg-slate-900 text-slate-100"
+                      : "border-slate-700 bg-slate-950/60 text-slate-300"
+                  }`}
+                >
+                  <p className="font-semibold">{STAGE_LABEL[card.stage]}</p>
+                  <p className="mt-1 text-slate-300">{card.objective}</p>
+                  <p className="mt-1">
+                    <span className="text-slate-400">Easiest input:</span> {card.easiestInput}
+                  </p>
+                  <p className="mt-1">
+                    <span className="text-slate-400">Must confirm:</span> {card.mustConfirm}
+                  </p>
+                  <p className="mt-1">
+                    <span className="text-slate-400">Exit gate:</span> {card.exitCheck}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </article>
+
+          <article className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
+            <h2 className="text-lg font-semibold">Quick input lane</h2>
+            <p className="text-xs text-slate-400">
+              Fastest ways to input while in motion: voice capture, email intake, and one-touch queue handling.
+            </p>
+            <div className="mt-3 space-y-2 text-xs">
+              <button
+                type="button"
+                onClick={handleVoiceQuickCapture}
+                className="w-full rounded-lg border border-violet-500/40 bg-violet-500/15 px-3 py-2 text-left text-violet-100 hover:bg-violet-500/25"
+              >
+                <p className="font-semibold">One-tap voice capture</p>
+                <p className="text-violet-100/80">Stores spoken changes in review queue with safety checks.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleImportAction("live")}
+                className="w-full rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-left text-emerald-100 hover:bg-emerald-500/25"
+              >
+                <p className="font-semibold">Accept selected email to live</p>
+                <p className="text-emerald-100/80">Best for high-confidence confirmations.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleImportAction("review")}
+                className="w-full rounded-lg border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-left text-amber-100 hover:bg-amber-500/25"
+              >
+                <p className="font-semibold">Queue selected email for review</p>
+                <p className="text-amber-100/80">Safer path when details are incomplete or uncertain.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (reviewQueue.length === 0) {
+                    setToast("Review queue is already clear.");
+                    return;
+                  }
+                  openDrawer("review", reviewQueue[0].id);
+                }}
+                className="w-full rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-left text-slate-100 hover:bg-slate-700"
+              >
+                <p className="font-semibold">Open top review item</p>
+                <p className="text-slate-300">Resolve uncertainty immediately before moving to the next stage.</p>
+              </button>
+            </div>
+            <div className="mt-3 rounded-lg border border-slate-700 bg-slate-950/70 p-3 text-xs text-slate-300">
+              <p>
+                Voice captures: {voiceCaptureCount} • Last capture: {formatClock(lastVoiceCaptureAt)}
+              </p>
+              <p className="mt-1">
+                Selected importer: {selectedEmail?.subject ?? "No email selected"} • Queue size {reviewQueue.length}
+              </p>
+            </div>
+          </article>
         </section>
 
         <section className="grid gap-4 sm:gap-6 xl:grid-cols-[1.2fr_1fr_1fr]">
