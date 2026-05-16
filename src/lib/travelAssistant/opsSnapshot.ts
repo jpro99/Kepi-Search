@@ -1,3 +1,4 @@
+import { readTravelBackgroundRunState } from "@/lib/travelAssistant/backgroundRunStateStore";
 import { readTravelUpdateAuditSnapshot } from "@/lib/travelAssistant/updateAuditStore";
 import { readTravelRuntimeState } from "@/lib/travelAssistant/updateRuntimeStateStore";
 import type { TravelOpsHealthStatus, TravelOpsSnapshot } from "@/lib/travelAssistant/travelUpdateTypes";
@@ -10,18 +11,21 @@ export async function buildTravelOpsSnapshot({
   auditLimit = 20,
   runtimeStatePath,
   auditPath,
+  backgroundStatePath,
 }: {
   nowIso?: string;
   auditLimit?: number;
   runtimeStatePath?: string;
   auditPath?: string;
+  backgroundStatePath?: string;
 } = {}): Promise<TravelOpsSnapshot> {
   const generatedAt = nowIso ?? new Date().toISOString();
   const nowMs = Date.parse(generatedAt);
 
-  const [runtime, audit] = await Promise.all([
+  const [runtime, audit, backgroundState] = await Promise.all([
     readTravelRuntimeState(runtimeStatePath),
     readTravelUpdateAuditSnapshot({ limit: auditLimit, storagePath: auditPath }),
+    readTravelBackgroundRunState(backgroundStatePath),
   ]);
 
   const runtimeUpdatedMs = Date.parse(runtime.updatedAt);
@@ -59,6 +63,21 @@ export async function buildTravelOpsSnapshot({
     if (health !== "red") health = "yellow";
     reasons.push(`Provider errors observed in ${recentErrorCount} recent run(s).`);
   }
+  if (backgroundState.activeRun) {
+    const startedAtMs = Date.parse(backgroundState.activeRun.startedAt);
+    const runningMs = Number.isNaN(startedAtMs) ? 0 : nowMs - startedAtMs;
+    if (runningMs > backgroundState.activeRun.timeoutMs + 10_000) {
+      health = "red";
+      reasons.push("Background run appears stuck beyond configured timeout.");
+    } else if (health !== "red") {
+      health = "yellow";
+      reasons.push("Background run currently in progress.");
+    }
+  }
+  if (backgroundState.lastRun?.status === "failed" || backgroundState.lastRun?.status === "timeout") {
+    if (health !== "red") health = "yellow";
+    reasons.push(`Last background run status: ${backgroundState.lastRun.status}.`);
+  }
   if (reasons.length === 0) {
     reasons.push("All checks healthy.");
   }
@@ -76,6 +95,7 @@ export async function buildTravelOpsSnapshot({
     },
     audit,
     latestBackgroundRun,
+    backgroundState,
     provider: {
       recentErrorCount,
       circuitOpenCount,

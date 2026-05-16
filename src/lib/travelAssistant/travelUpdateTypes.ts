@@ -113,6 +113,37 @@ export interface TravelUpdateCheckResult {
 
 export type TravelOpsHealthStatus = "green" | "yellow" | "red";
 
+export type TravelBackgroundRunStatus =
+  | "in-progress"
+  | "success"
+  | "failed"
+  | "timeout"
+  | "skipped-overlap";
+
+export interface TravelBackgroundActiveRun {
+  runId: string;
+  startedAt: string;
+  timeoutMs: number;
+}
+
+export interface TravelBackgroundLastRun {
+  runId: string;
+  startedAt: string;
+  finishedAt: string;
+  status: Exclude<TravelBackgroundRunStatus, "in-progress">;
+  durationMs: number;
+  error: string | null;
+  runtimeReservationCount: number;
+  newUpdates: number;
+  duplicateUpdates: number;
+  auditRequestId: string | null;
+}
+
+export interface TravelBackgroundRunStateSnapshot {
+  activeRun: TravelBackgroundActiveRun | null;
+  lastRun: TravelBackgroundLastRun | null;
+}
+
 export interface TravelOpsSnapshot {
   generatedAt: string;
   health: TravelOpsHealthStatus;
@@ -126,6 +157,7 @@ export interface TravelOpsSnapshot {
   };
   audit: TravelAuditReadSnapshot;
   latestBackgroundRun: TravelAuditTrailEntry | null;
+  backgroundState: TravelBackgroundRunStateSnapshot;
   provider: {
     recentErrorCount: number;
     circuitOpenCount: number;

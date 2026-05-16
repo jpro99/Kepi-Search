@@ -637,6 +637,9 @@ export default function TravelAssistantPage() {
   const [opsError, setOpsError] = useState<string | null>(null);
   const [opsExpanded, setOpsExpanded] = useState(false);
   const [opsLoading, setOpsLoading] = useState(false);
+  const [opsActionPending, setOpsActionPending] = useState<"run-background-once" | "reset-circuits" | null>(
+    null,
+  );
   const recentAppliedUpdateKeysRef = useRef<Map<string, number>>(new Map());
   const opsFetchInFlightRef = useRef(false);
 
@@ -1092,6 +1095,46 @@ export default function TravelAssistantPage() {
       opsFetchInFlightRef.current = false;
     }
   }, []);
+
+  const runOpsControlAction = useCallback(
+    async (action: "run-background-once" | "reset-circuits"): Promise<void> => {
+      setOpsActionPending(action);
+      try {
+        const response = await fetch("/api/travel-updates/ops/control", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body:
+            action === "run-background-once"
+              ? JSON.stringify({ action, mode: updateMode, timeoutMs: 45000 })
+              : JSON.stringify({ action }),
+        });
+
+        const payload = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+          backgroundRun?: { status?: string; result?: { audit?: { newUpdates?: number; duplicateUpdates?: number } } };
+        };
+        if (!response.ok || payload.ok === false) {
+          throw new Error(payload.error ?? `Ops control action failed with ${response.status}`);
+        }
+
+        if (action === "reset-circuits") {
+          setToast("Provider circuits reset. Next checks will re-evaluate upstream health.");
+        } else {
+          const newUpdates = payload.backgroundRun?.result?.audit?.newUpdates ?? 0;
+          const duplicateUpdates = payload.backgroundRun?.result?.audit?.duplicateUpdates ?? 0;
+          setToast(`Background run completed (${newUpdates} new / ${duplicateUpdates} duplicate updates).`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown ops control failure";
+        setToast(`Ops action failed: ${message}`);
+      } finally {
+        setOpsActionPending(null);
+        void fetchOpsSnapshot("manual");
+      }
+    },
+    [fetchOpsSnapshot, updateMode],
+  );
 
   const runProviderCheck = useCallback(async (trigger: "auto" | "manual"): Promise<void> => {
     if (isProviderCheckRunning) {
@@ -2015,6 +2058,28 @@ export default function TravelAssistantPage() {
                         {opsLoading ? "Refreshing..." : "Refresh ops"}
                       </button>
                     </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void runOpsControlAction("run-background-once");
+                        }}
+                        disabled={opsActionPending !== null}
+                        className="rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {opsActionPending === "run-background-once" ? "Running background..." : "Run background now"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void runOpsControlAction("reset-circuits");
+                        }}
+                        disabled={opsActionPending !== null}
+                        className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-100 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {opsActionPending === "reset-circuits" ? "Resetting..." : "Reset provider circuits"}
+                      </button>
+                    </div>
                     {opsError ? <p className="text-red-200">Ops read error: {opsError}</p> : null}
                     {opsSnapshot ? (
                       <>
@@ -2026,6 +2091,21 @@ export default function TravelAssistantPage() {
                           Runtime reservations {opsSnapshot.runtime.reservationCount} • stale{" "}
                           {opsSnapshot.runtime.staleMinutes} minutes
                         </p>
+                        {opsSnapshot.backgroundState.activeRun ? (
+                          <p className="text-amber-200">
+                            Active background run: {formatClock(opsSnapshot.backgroundState.activeRun.startedAt)} •
+                            timeout {Math.round(opsSnapshot.backgroundState.activeRun.timeoutMs / 1000)}s
+                          </p>
+                        ) : null}
+                        {opsSnapshot.backgroundState.lastRun ? (
+                          <p className="text-slate-300">
+                            Last managed background status: {opsSnapshot.backgroundState.lastRun.status} • duration{" "}
+                            {Math.round(opsSnapshot.backgroundState.lastRun.durationMs / 1000)}s
+                            {opsSnapshot.backgroundState.lastRun.error
+                              ? ` • ${opsSnapshot.backgroundState.lastRun.error}`
+                              : ""}
+                          </p>
+                        ) : null}
                         {opsSnapshot.latestBackgroundRun ? (
                           <p className="text-slate-300">
                             Latest background run: {formatClock(opsSnapshot.latestBackgroundRun.checkedAt)} • new{" "}

@@ -5,15 +5,20 @@ import {
   runManagedTravelUpdateBackgroundPass,
 } from "@/lib/travelAssistant/backgroundRunManager";
 import { BackgroundRunInProgressError } from "@/lib/travelAssistant/backgroundRunStateStore";
-import {
-  RuntimeStateUnavailableError,
-} from "@/lib/travelAssistant/backgroundOrchestrator";
+import { RuntimeStateUnavailableError } from "@/lib/travelAssistant/backgroundOrchestrator";
+import { resetTravelUpdateCircuitState } from "@/lib/travelAssistant/updateAdapters";
 
-const BodySchema = z.object({
-  mode: z.enum(["off", "mock", "auto"]).optional(),
-  nowIso: z.string().datetime().optional(),
-  timeoutMs: z.number().int().min(2000).max(120000).optional(),
-});
+const BodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("run-background-once"),
+    mode: z.enum(["off", "mock", "auto"]).optional(),
+    nowIso: z.string().datetime().optional(),
+    timeoutMs: z.number().int().min(2000).max(120000).optional(),
+  }),
+  z.object({
+    action: z.literal("reset-circuits"),
+  }),
+]);
 
 function isAuthorized(req: Request): boolean {
   const expectedSecret = process.env.TRAVEL_UPDATE_CRON_SECRET?.trim();
@@ -27,7 +32,7 @@ function isAuthorized(req: Request): boolean {
 
 export async function POST(req: Request) {
   if (!isAuthorized(req)) {
-    return NextResponse.json({ error: "Unauthorized background trigger" }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized ops control action" }, { status: 401 });
   }
 
   let payload: unknown = {};
@@ -45,26 +50,59 @@ export async function POST(req: Request) {
     );
   }
 
+  if (parsed.data.action === "reset-circuits") {
+    resetTravelUpdateCircuitState();
+    return NextResponse.json({
+      action: parsed.data.action,
+      ok: true,
+      cleared: "all",
+      clearedAt: new Date().toISOString(),
+    });
+  }
+
   try {
     const backgroundRun = await runManagedTravelUpdateBackgroundPass({
       mode: parsed.data.mode,
       nowIso: parsed.data.nowIso,
       timeoutMs: parsed.data.timeoutMs,
     });
-    return NextResponse.json(backgroundRun);
+    return NextResponse.json({
+      action: parsed.data.action,
+      ok: true,
+      backgroundRun,
+    });
   } catch (error) {
     if (error instanceof BackgroundRunInProgressError) {
       return NextResponse.json(
-        { error: error.message, activeRunId: error.activeRunId, activeStartedAt: error.startedAt },
+        {
+          action: parsed.data.action,
+          ok: false,
+          error: error.message,
+          activeRunId: error.activeRunId,
+          activeStartedAt: error.startedAt,
+        },
         { status: 409 },
       );
     }
     if (error instanceof RuntimeStateUnavailableError) {
-      return NextResponse.json({ error: error.message }, { status: 409 });
+      return NextResponse.json(
+        {
+          action: parsed.data.action,
+          ok: false,
+          error: error.message,
+        },
+        { status: 409 },
+      );
     }
     if (error instanceof BackgroundRunTimeoutError) {
       return NextResponse.json(
-        { error: error.message, runId: error.runId, timeoutMs: error.timeoutMs },
+        {
+          action: parsed.data.action,
+          ok: false,
+          error: error.message,
+          runId: error.runId,
+          timeoutMs: error.timeoutMs,
+        },
         { status: 504 },
       );
     }
