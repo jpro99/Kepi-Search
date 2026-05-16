@@ -53,6 +53,23 @@ export interface TravelUpdateAuditSummary {
   totalKnownEvents: number;
 }
 
+export interface TravelUpdateConflict {
+  targetKey: string;
+  domain: "status" | "timing" | "location";
+  winnerProvider: string;
+  loserProvider: string;
+  winnerKind: TravelUpdateKind;
+  loserKind: TravelUpdateKind;
+  reason: string;
+}
+
+export interface TravelConflictResolutionSummary {
+  incomingUpdates: number;
+  acceptedUpdates: number;
+  suppressedUpdates: number;
+  conflicts: TravelUpdateConflict[];
+}
+
 export interface TravelProviderReport {
   provider: string;
   attempts: number;
@@ -70,4 +87,5 @@ export interface TravelUpdateCheckResult {
   error: string | null;
   providerReports: TravelProviderReport[];
   audit?: TravelUpdateAuditSummary;
+  conflictResolution?: TravelConflictResolutionSummary;
 }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   TravelUpdateAuditSummary,
+  TravelConflictResolutionSummary,
   TravelProviderReport,
   TravelUpdateCheckResult,
   TravelUpdateEvent,
@@ -630,6 +631,7 @@ export default function TravelAssistantPage() {
   const [updateFeed, setUpdateFeed] = useState<UpdateFeedItem[]>([]);
   const [providerReports, setProviderReports] = useState<TravelProviderReport[]>([]);
   const [lastAuditSummary, setLastAuditSummary] = useState<TravelUpdateAuditSummary | null>(null);
+  const [lastConflictSummary, setLastConflictSummary] = useState<TravelConflictResolutionSummary | null>(null);
   const recentAppliedUpdateKeysRef = useRef<Map<string, number>>(new Map());
 
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(INITIAL_FAMILY);
@@ -1089,6 +1091,7 @@ export default function TravelAssistantPage() {
       setLastProviderError(result.error);
       setProviderReports(result.providerReports);
       setLastAuditSummary(result.audit ?? null);
+      setLastConflictSummary(result.conflictResolution ?? null);
 
       if (result.circuitOpen) {
         if (trigger === "manual") {
@@ -1137,6 +1140,7 @@ export default function TravelAssistantPage() {
       setLastProviderError(message);
       setProviderReports([]);
       setLastAuditSummary(null);
+      setLastConflictSummary(null);
       if (trigger === "manual") {
         setToast(`Provider check failed: ${message}`);
       }
@@ -1862,6 +1866,12 @@ export default function TravelAssistantPage() {
                   <p className="text-xs text-slate-400">
                     Audit: {lastAuditSummary.newUpdates} new / {lastAuditSummary.duplicateUpdates} duplicate • known
                     events {lastAuditSummary.totalKnownEvents}
+                  </p>
+                ) : null}
+                {lastConflictSummary ? (
+                  <p className="text-xs text-slate-400">
+                    Conflict resolution: {lastConflictSummary.acceptedUpdates} accepted /{" "}
+                    {lastConflictSummary.suppressedUpdates} suppressed
                   </p>
                 ) : null}
                 {providerReports.length > 0 ? (

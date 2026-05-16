@@ -212,3 +212,150 @@ test("aggregates checks across multiple providers", async () => {
   assert.equal(result.providerReports[0]?.provider, "provider-a");
   assert.equal(result.providerReports[1]?.provider, "provider-b");
 });
+
+test("conflict resolution picks higher-priority provider for same domain", async () => {
+  resetTravelUpdateCircuitState();
+  const lowerPriorityProvider: TravelUpdateProvider = {
+    name: "mock-transport-adapter",
+    async fetchUpdates() {
+      return [
+        {
+          provider: "mock-transport-adapter",
+          kind: "delay",
+          severity: "warning",
+          summary: "Mock delay 18 minutes",
+          detail: "Mock provider timing signal.",
+          target: { reservationType: "flight", confirmationCode: "Y8Q4D2" },
+          delayMinutes: 18,
+        },
+      ];
+    },
+  };
+  const higherPriorityProvider: TravelUpdateProvider = {
+    name: "flight-status-provider",
+    async fetchUpdates() {
+      return [
+        {
+          provider: "flight-status-provider",
+          kind: "delay",
+          severity: "warning",
+          summary: "Flight provider delay 18 minutes",
+          detail: "Authoritative provider timing signal.",
+          target: { reservationType: "flight", confirmationCode: "Y8Q4D2" },
+          delayMinutes: 18,
+        },
+      ];
+    },
+  };
+
+  const result = await runTravelUpdateCheck({
+    mode: "auto",
+    reservations: SAMPLE_RESERVATIONS,
+    nowIso: "2026-06-21T15:00:00.000Z",
+    options: {
+      providersOverride: [lowerPriorityProvider, higherPriorityProvider],
+      disableDelay: true,
+    },
+  });
+
+  assert.equal(result.updates.length, 1);
+  assert.equal(result.updates[0]?.provider, "flight-status-provider");
+  assert.equal(result.conflictResolution?.suppressedUpdates, 1);
+});
+
+test("conflict resolution keeps updates from different domains", async () => {
+  resetTravelUpdateCircuitState();
+  const providerTiming: TravelUpdateProvider = {
+    name: "provider-timing",
+    async fetchUpdates() {
+      return [
+        {
+          provider: "provider-timing",
+          kind: "delay",
+          severity: "warning",
+          summary: "Timing update",
+          detail: "Delay event",
+          target: { reservationType: "flight", confirmationCode: "Y8Q4D2" },
+          delayMinutes: 22,
+        },
+      ];
+    },
+  };
+  const providerLocation: TravelUpdateProvider = {
+    name: "provider-location",
+    async fetchUpdates() {
+      return [
+        {
+          provider: "provider-location",
+          kind: "gate-change",
+          severity: "warning",
+          summary: "Gate changed to B7",
+          detail: "Location event",
+          target: { reservationType: "flight", confirmationCode: "Y8Q4D2" },
+          updatedLocation: "Gate B7",
+        },
+      ];
+    },
+  };
+
+  const result = await runTravelUpdateCheck({
+    mode: "auto",
+    reservations: SAMPLE_RESERVATIONS,
+    nowIso: "2026-06-21T15:00:00.000Z",
+    options: {
+      providersOverride: [providerTiming, providerLocation],
+      disableDelay: true,
+    },
+  });
+
+  assert.equal(result.updates.length, 2);
+  assert.equal(result.conflictResolution?.suppressedUpdates, 0);
+});
+
+test("cancellation wins status-domain conflict", async () => {
+  resetTravelUpdateCircuitState();
+  const onTimeProvider: TravelUpdateProvider = {
+    name: "provider-on-time",
+    async fetchUpdates() {
+      return [
+        {
+          provider: "provider-on-time",
+          kind: "on-time",
+          severity: "info",
+          summary: "Flight remains on time",
+          detail: "On-time event",
+          target: { reservationType: "flight", confirmationCode: "Y8Q4D2" },
+        },
+      ];
+    },
+  };
+  const cancellationProvider: TravelUpdateProvider = {
+    name: "provider-cancellation",
+    async fetchUpdates() {
+      return [
+        {
+          provider: "provider-cancellation",
+          kind: "cancellation",
+          severity: "critical",
+          summary: "Flight cancelled",
+          detail: "Cancellation event",
+          target: { reservationType: "flight", confirmationCode: "Y8Q4D2" },
+        },
+      ];
+    },
+  };
+
+  const result = await runTravelUpdateCheck({
+    mode: "auto",
+    reservations: SAMPLE_RESERVATIONS,
+    nowIso: "2026-06-21T15:00:00.000Z",
+    options: {
+      providersOverride: [onTimeProvider, cancellationProvider],
+      disableDelay: true,
+    },
+  });
+
+  assert.equal(result.updates.length, 1);
+  assert.equal(result.updates[0]?.kind, "cancellation");
+  assert.equal(result.conflictResolution?.suppressedUpdates, 1);
+});

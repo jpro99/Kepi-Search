@@ -2,6 +2,8 @@ import { createFlightStatusProviderFromEnv } from "@/lib/travelAssistant/provide
 import { createMockTravelUpdateProvider } from "@/lib/travelAssistant/providers/mockTransportProvider";
 import { createRailStatusProviderFromEnv } from "@/lib/travelAssistant/providers/railStatusProvider";
 import type {
+  TravelConflictResolutionSummary,
+  TravelUpdateConflict,
   TravelProviderReport,
   TravelUpdateCheckResult,
   TravelUpdateEvent,
@@ -36,6 +38,13 @@ const DEFAULT_BASE_DELAY_MS = 300;
 const DEFAULT_COOLDOWN_MS = 60_000;
 const DEFAULT_FAILURE_THRESHOLD = 2;
 const circuitStateByProvider = new Map<string, { consecutiveFailures: number; openUntilMs: number }>();
+const PROVIDER_PRIORITY: Record<string, number> = {
+  "flight-status-provider": 100,
+  "rail-status-provider": 95,
+  "mock-transport-adapter": 40,
+};
+
+type ConflictDomain = "status" | "timing" | "location";
 
 function resolveProviders(
   mode: TravelUpdateMode,
@@ -86,6 +95,138 @@ function dedupeUpdates(updates: readonly TravelUpdateEvent[]): TravelUpdateEvent
     unique.push(update);
   });
   return unique;
+}
+
+function normalizeToken(value: string | undefined): string {
+  if (!value) return "";
+  return value.trim().toUpperCase();
+}
+
+function buildTargetKey(update: TravelUpdateEvent): string {
+  const confirmation = normalizeToken(update.target.confirmationCode);
+  const title = normalizeToken(update.target.titleHint);
+  if (confirmation) {
+    return `${update.target.reservationType}|cc:${confirmation}`;
+  }
+  if (title) {
+    return `${update.target.reservationType}|th:${title}`;
+  }
+  return `${update.target.reservationType}|fallback:${normalizeToken(update.summary)}|${normalizeToken(update.provider)}`;
+}
+
+function domainForUpdate(update: TravelUpdateEvent): ConflictDomain {
+  if (update.kind === "delay") return "timing";
+  if (update.kind === "gate-change" || update.kind === "platform-change" || update.kind === "pickup-change") {
+    return "location";
+  }
+  return "status";
+}
+
+function severityScore(update: TravelUpdateEvent): number {
+  if (update.severity === "critical") return 3;
+  if (update.severity === "warning") return 2;
+  return 1;
+}
+
+function providerPriority(update: TravelUpdateEvent): number {
+  return PROVIDER_PRIORITY[update.provider] ?? 60;
+}
+
+function compareDomainSpecific(
+  candidate: TravelUpdateEvent,
+  existing: TravelUpdateEvent,
+  domain: ConflictDomain,
+): { winner: TravelUpdateEvent; loser: TravelUpdateEvent; reason: string } {
+  if (domain === "status") {
+    const candidateCancellation = candidate.kind === "cancellation";
+    const existingCancellation = existing.kind === "cancellation";
+    if (candidateCancellation !== existingCancellation) {
+      return candidateCancellation
+        ? { winner: candidate, loser: existing, reason: "Cancellation status overrides non-cancellation status." }
+        : { winner: existing, loser: candidate, reason: "Cancellation status overrides non-cancellation status." };
+    }
+  }
+
+  if (domain === "timing") {
+    const candidateDelay = candidate.delayMinutes ?? 0;
+    const existingDelay = existing.delayMinutes ?? 0;
+    if (candidateDelay !== existingDelay) {
+      return candidateDelay > existingDelay
+        ? { winner: candidate, loser: existing, reason: "Larger delay delta selected for conservative scheduling." }
+        : { winner: existing, loser: candidate, reason: "Larger delay delta selected for conservative scheduling." };
+    }
+  }
+
+  const candidateSeverity = severityScore(candidate);
+  const existingSeverity = severityScore(existing);
+  if (candidateSeverity !== existingSeverity) {
+    return candidateSeverity > existingSeverity
+      ? { winner: candidate, loser: existing, reason: "Higher severity update selected." }
+      : { winner: existing, loser: candidate, reason: "Higher severity update selected." };
+  }
+
+  const candidateProviderPriority = providerPriority(candidate);
+  const existingProviderPriority = providerPriority(existing);
+  if (candidateProviderPriority !== existingProviderPriority) {
+    return candidateProviderPriority > existingProviderPriority
+      ? { winner: candidate, loser: existing, reason: "Higher-priority provider selected." }
+      : { winner: existing, loser: candidate, reason: "Higher-priority provider selected." };
+  }
+
+  const candidateStableKey = `${candidate.provider}|${candidate.kind}|${candidate.summary}`;
+  const existingStableKey = `${existing.provider}|${existing.kind}|${existing.summary}`;
+  return candidateStableKey.localeCompare(existingStableKey) >= 0
+    ? {
+        winner: candidate,
+        loser: existing,
+        reason: "Deterministic lexical tie-breaker applied.",
+      }
+    : {
+        winner: existing,
+        loser: candidate,
+        reason: "Deterministic lexical tie-breaker applied.",
+      };
+}
+
+function resolveConflictingUpdates(updates: readonly TravelUpdateEvent[]): {
+  resolvedUpdates: TravelUpdateEvent[];
+  summary: TravelConflictResolutionSummary;
+} {
+  const winnersByDomain = new Map<string, TravelUpdateEvent>();
+  const conflicts: TravelUpdateConflict[] = [];
+
+  updates.forEach((update) => {
+    const domain = domainForUpdate(update);
+    const targetKey = buildTargetKey(update);
+    const slotKey = `${targetKey}|${domain}`;
+    const existing = winnersByDomain.get(slotKey);
+    if (!existing) {
+      winnersByDomain.set(slotKey, update);
+      return;
+    }
+    const decision = compareDomainSpecific(update, existing, domain);
+    winnersByDomain.set(slotKey, decision.winner);
+    conflicts.push({
+      targetKey,
+      domain,
+      winnerProvider: decision.winner.provider,
+      loserProvider: decision.loser.provider,
+      winnerKind: decision.winner.kind,
+      loserKind: decision.loser.kind,
+      reason: decision.reason,
+    });
+  });
+
+  const resolvedUpdates = [...winnersByDomain.values()];
+  return {
+    resolvedUpdates,
+    summary: {
+      incomingUpdates: updates.length,
+      acceptedUpdates: resolvedUpdates.length,
+      suppressedUpdates: Math.max(0, updates.length - resolvedUpdates.length),
+      conflicts,
+    },
+  };
 }
 
 function jitteredDelay(baseDelayMs: number, attempt: number): number {
@@ -208,6 +349,12 @@ export async function runTravelUpdateCheck({
       circuitOpen: false,
       error: null,
       providerReports: [],
+      conflictResolution: {
+        incomingUpdates: 0,
+        acceptedUpdates: 0,
+        suppressedUpdates: 0,
+        conflicts: [],
+      },
     };
   }
 
@@ -225,6 +372,7 @@ export async function runTravelUpdateCheck({
     aggregateUpdates.push(...providerResult.updates);
   }
 
+  const conflictResolution = resolveConflictingUpdates(dedupeUpdates(aggregateUpdates));
   const hasSuccessfulProvider = providerReports.some(
     (report) => report.error === null && !report.circuitOpen,
   );
@@ -232,10 +380,11 @@ export async function runTravelUpdateCheck({
   return {
     mode,
     provider: providers.map((provider) => provider.name).join(", "),
-    updates: dedupeUpdates(aggregateUpdates),
+    updates: conflictResolution.resolvedUpdates,
     attempts: providerReports.reduce((sum, report) => sum + report.attempts, 0),
     circuitOpen: providerReports.some((report) => report.circuitOpen),
     error: hasSuccessfulProvider ? null : firstError,
     providerReports,
+    conflictResolution: conflictResolution.summary,
   };
 }
