@@ -118,6 +118,7 @@ Use this checklist when implementing the next version of:
 - [ ] Reserve green/yellow/red for trip-critical urgency only
 - [ ] Ensure no layout shift/jank during stage or severity transitions
 - [ ] Add premium motion polish (subtle, fast, purposeful)
+- [ ] Keep prompts non-annoying: dedupe repetitive nudges and provide a subtle guidance mode
 - [ ] Before every major feature pass, run a "readiness -> recovery" flow audit to remove input friction and preserve one-way trip momentum
 
 ## Phase 7: Accuracy, Safety, and Miss-Prevention

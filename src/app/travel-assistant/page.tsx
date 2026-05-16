@@ -23,6 +23,7 @@ type TripStatus = "green" | "yellow" | "red";
 type NetworkMode = "wifi" | "cellular" | "offline";
 type ReservationType = "flight" | "hotel" | "train" | "ride" | "dinner";
 type Confidence = "high" | "medium" | "low";
+type GuidanceTone = "subtle" | "standard";
 type VisibilityMode = "all-members" | "organizer-only";
 type DisruptionScenario = "none" | "missed-flight" | "train-delay" | "ride-no-show";
 
@@ -657,7 +658,9 @@ export default function TravelAssistantPage() {
   const [providerCircuitOpen, setProviderCircuitOpen] = useState(false);
   const [autoTransportUpdates, setAutoTransportUpdates] = useState(true);
   const [isProviderCheckRunning, setIsProviderCheckRunning] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToastRaw] = useState<string | null>(null);
+  const [guidanceTone, setGuidanceTone] = useState<GuidanceTone>("subtle");
+  const [suppressedNudgeCount, setSuppressedNudgeCount] = useState(0);
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [queuedProviderUpdates, setQueuedProviderUpdates] = useState<TravelUpdateEvent[]>([]);
   const [updateFeed, setUpdateFeed] = useState<UpdateFeedItem[]>([]);
@@ -675,6 +678,15 @@ export default function TravelAssistantPage() {
   );
   const recentAppliedUpdateKeysRef = useRef<Map<string, number>>(new Map());
   const opsFetchInFlightRef = useRef(false);
+  const toastPolicyRef = useRef<{
+    tone: GuidanceTone;
+    lastMessage: string | null;
+    lastShownAtMs: number;
+  }>({
+    tone: "subtle",
+    lastMessage: null,
+    lastShownAtMs: 0,
+  });
 
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(INITIAL_FAMILY);
   const [reservations, setReservations] = useState<Reservation[]>(INITIAL_RESERVATIONS);
@@ -720,10 +732,40 @@ export default function TravelAssistantPage() {
     networkMode === "wifi" || (networkMode === "cellular" && allowCellularLocationUpdates);
 
   useEffect(() => {
+    toastPolicyRef.current.tone = guidanceTone;
+  }, [guidanceTone]);
+
+  const setToast = useCallback((message: string | null, options?: { force?: boolean }): void => {
+    if (message === null) {
+      setToastRaw(null);
+      return;
+    }
+    const normalized = message.trim();
+    if (!normalized) return;
+
+    const now = Date.now();
+    const policy = toastPolicyRef.current;
+    const dedupeWindowMs = policy.tone === "subtle" ? 18_000 : 8_000;
+    const cooldownMs = policy.tone === "subtle" ? 3_200 : 1_500;
+    const isDuplicate = normalized === policy.lastMessage && now - policy.lastShownAtMs < dedupeWindowMs;
+    const isCoolingDown = now - policy.lastShownAtMs < cooldownMs;
+    const isCritical = /\b(error|failed|cannot|unauthorized|blocked|timeout)\b/i.test(normalized);
+    if (!options?.force && !isCritical && (isDuplicate || isCoolingDown)) {
+      setSuppressedNudgeCount((count) => count + 1);
+      return;
+    }
+
+    policy.lastMessage = normalized;
+    policy.lastShownAtMs = now;
+    setToastRaw(normalized);
+  }, []);
+
+  useEffect(() => {
     if (!toast) return;
-    const timeout = window.setTimeout(() => setToast(null), 2600);
+    const timeoutMs = guidanceTone === "subtle" ? 2000 : 2800;
+    const timeout = window.setTimeout(() => setToastRaw(null), timeoutMs);
     return () => window.clearTimeout(timeout);
-  }, [toast]);
+  }, [guidanceTone, toast]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
@@ -1998,6 +2040,9 @@ export default function TravelAssistantPage() {
                 <span className="rounded-full bg-slate-800 px-3 py-1 text-sm text-slate-300 ring-1 ring-slate-700">
                   Blocking issues: {blockingIssueCount}
                 </span>
+                <span className="rounded-full bg-slate-800 px-3 py-1 text-sm text-slate-300 ring-1 ring-slate-700">
+                  Nudges: {guidanceTone} • filtered {suppressedNudgeCount}
+                </span>
               </div>
             </div>
             <div className="rounded-2xl border border-slate-700 bg-slate-900/60 p-4">
@@ -2049,6 +2094,20 @@ export default function TravelAssistantPage() {
                       </option>
                     ))}
                   </select>
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-slate-300">Guidance tone</span>
+                  <select
+                    value={guidanceTone}
+                    onChange={(event) => setGuidanceTone(event.target.value as GuidanceTone)}
+                    className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2"
+                  >
+                    <option value="subtle">Subtle (reduced interruption)</option>
+                    <option value="standard">Standard</option>
+                  </select>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Subtle mode deduplicates repeated nudges and slows non-critical prompts.
+                  </p>
                 </label>
                 <label className="block">
                   <span className="mb-1 block text-slate-300">Minutes to departure-critical event</span>
@@ -3417,7 +3476,13 @@ export default function TravelAssistantPage() {
       ) : null}
 
       {toast ? (
-        <div className="fixed bottom-4 right-4 z-50 rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-900 shadow-xl">
+        <div
+          className={`fixed bottom-4 right-4 z-50 max-w-sm rounded-lg px-3 py-2 text-sm shadow-xl ${
+            guidanceTone === "subtle"
+              ? "border border-slate-600 bg-slate-900/90 text-slate-100"
+              : "bg-slate-100 font-medium text-slate-900"
+          }`}
+        >
           {toast}
         </div>
       ) : null}
