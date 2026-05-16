@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  runTravelUpdateCheck,
-  type TravelUpdateEvent,
-  type TravelUpdateKind,
-  type TravelUpdateMode,
-  type TravelUpdateSeverity,
-} from "@/lib/travelAssistant/updateAdapters";
+import type {
+  TravelProviderReport,
+  TravelUpdateCheckResult,
+  TravelUpdateEvent,
+  TravelUpdateKind,
+  TravelUpdateMode,
+  TravelUpdateSeverity,
+} from "@/lib/travelAssistant/travelUpdateTypes";
 
 type TripStage = "readiness" | "pre-departure" | "airport" | "arrival" | "recovery";
 type TripStatus = "green" | "yellow" | "red";
@@ -598,7 +599,11 @@ function normalizeCoordinates(members: FamilyMember[]): Array<{ member: FamilyMe
 
 export default function TravelAssistantPage() {
   const updateMode: TravelUpdateMode =
-    (process.env.NEXT_PUBLIC_TRAVEL_UPDATES_MODE ?? "mock").toLowerCase() === "off" ? "off" : "mock";
+    (process.env.NEXT_PUBLIC_TRAVEL_UPDATES_MODE ?? "auto").toLowerCase() === "off"
+      ? "off"
+      : (process.env.NEXT_PUBLIC_TRAVEL_UPDATES_MODE ?? "auto").toLowerCase() === "mock"
+        ? "mock"
+        : "auto";
   const [tripStage, setTripStage] = useState<TripStage>("readiness");
   const [tripStatus, setTripStatus] = useState<TripStatus>("yellow");
   const [networkMode, setNetworkMode] = useState<NetworkMode>("wifi");
@@ -622,6 +627,7 @@ export default function TravelAssistantPage() {
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [queuedProviderUpdates, setQueuedProviderUpdates] = useState<TravelUpdateEvent[]>([]);
   const [updateFeed, setUpdateFeed] = useState<UpdateFeedItem[]>([]);
+  const [providerReports, setProviderReports] = useState<TravelProviderReport[]>([]);
   const recentAppliedUpdateKeysRef = useRef<Map<string, number>>(new Map());
 
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(INITIAL_FAMILY);
@@ -1062,15 +1068,24 @@ export default function TravelAssistantPage() {
 
     setIsProviderCheckRunning(true);
     try {
-      const result = await runTravelUpdateCheck({
-        mode: updateMode,
-        reservations: providerEligibleReservations,
-        nowIso: new Date(nowMs).toISOString(),
+      const response = await fetch("/api/travel-updates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: updateMode,
+          reservations: providerEligibleReservations,
+          nowIso: new Date(nowMs).toISOString(),
+        }),
       });
+      if (!response.ok) {
+        throw new Error(`Transport updates API returned ${response.status}`);
+      }
+      const result = (await response.json()) as TravelUpdateCheckResult;
       setLastProviderCheckAt(new Date().toISOString());
       setLastProviderAttempts(result.attempts);
       setProviderCircuitOpen(result.circuitOpen);
       setLastProviderError(result.error);
+      setProviderReports(result.providerReports);
 
       if (result.circuitOpen) {
         if (trigger === "manual") {
@@ -1111,6 +1126,7 @@ export default function TravelAssistantPage() {
       setLastProviderAttempts(0);
       setProviderCircuitOpen(false);
       setLastProviderError(message);
+      setProviderReports([]);
       if (trigger === "manual") {
         setToast(`Provider check failed: ${message}`);
       }
@@ -1831,6 +1847,16 @@ export default function TravelAssistantPage() {
                 <p className="text-xs text-slate-400">Queued provider updates: {queuedProviderUpdates.length}</p>
                 {lastProviderError ? (
                   <p className="text-xs text-red-200">Provider error: {lastProviderError}</p>
+                ) : null}
+                {providerReports.length > 0 ? (
+                  <ul className="mt-2 space-y-1 text-[11px] text-slate-300">
+                    {providerReports.map((report) => (
+                      <li key={report.provider} className="rounded border border-slate-700 px-2 py-1">
+                        <span className="font-medium">{report.provider}</span>: {report.updateCount} updates •{" "}
+                        {report.attempts} attempts {report.circuitOpen ? "• circuit open" : ""}
+                      </li>
+                    ))}
+                  </ul>
                 ) : null}
               </div>
               <label className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">

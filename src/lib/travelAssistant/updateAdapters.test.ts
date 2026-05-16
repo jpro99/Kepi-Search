@@ -160,3 +160,55 @@ test("opens circuit after repeated hard failures", async () => {
   assert.equal(second.updates.length, 0);
   assert.match(second.error ?? "", /Circuit open/);
 });
+
+test("aggregates checks across multiple providers", async () => {
+  resetTravelUpdateCircuitState();
+  const providerA: TravelUpdateProvider = {
+    name: "provider-a",
+    async fetchUpdates() {
+      return [
+        {
+          provider: "provider-a",
+          kind: "delay",
+          severity: "warning",
+          summary: "A delayed 9 minutes",
+          detail: "Provider A update",
+          target: { reservationType: "flight", confirmationCode: "Y8Q4D2" },
+          delayMinutes: 9,
+        },
+      ];
+    },
+  };
+  const providerB: TravelUpdateProvider = {
+    name: "provider-b",
+    async fetchUpdates() {
+      return [
+        {
+          provider: "provider-b",
+          kind: "gate-change",
+          severity: "warning",
+          summary: "Gate changed to C3",
+          detail: "Provider B update",
+          target: { reservationType: "flight", confirmationCode: "Y8Q4D2" },
+          updatedLocation: "Gate C3",
+        },
+      ];
+    },
+  };
+
+  const result = await runTravelUpdateCheck({
+    mode: "auto",
+    reservations: SAMPLE_RESERVATIONS,
+    nowIso: "2026-06-21T15:00:00.000Z",
+    options: {
+      providersOverride: [providerA, providerB],
+      disableDelay: true,
+    },
+  });
+
+  assert.equal(result.provider, "provider-a, provider-b");
+  assert.equal(result.updates.length, 2);
+  assert.equal(result.providerReports.length, 2);
+  assert.equal(result.providerReports[0]?.provider, "provider-a");
+  assert.equal(result.providerReports[1]?.provider, "provider-b");
+});
