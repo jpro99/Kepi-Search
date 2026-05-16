@@ -173,8 +173,10 @@ export function evaluateBackgroundWorkerHealth({
     if (timeoutMs > 0 && runningMs > timeoutMs + 10_000) {
       health = "unhealthy";
       reasons.push("Background run appears stuck beyond configured timeout.");
-    } else if (health !== "unhealthy") {
-      health = "degraded";
+    } else {
+      if (health === "healthy") {
+        health = "degraded";
+      }
       reasons.push("Background run currently in progress.");
     }
   }
