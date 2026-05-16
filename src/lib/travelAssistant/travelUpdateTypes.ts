@@ -182,6 +182,22 @@ export interface TravelOpsWorkerStatus {
   consecutiveFailures: number;
   minutesSinceLastSuccess: number | null;
   missedHeartbeat: boolean;
+  expectedNextRunBy: string | null;
+  minutesUntilExpectedRun: number | null;
+  scheduleIntervalMinutes: number;
+  scheduleJitterMinutes: number;
+  missedSchedule: boolean;
+}
+
+export type TravelOpsAlertSeverity = "warning" | "critical";
+
+export interface TravelOpsAlertEvent {
+  key: string;
+  severity: TravelOpsAlertSeverity;
+  title: string;
+  message: string;
+  createdAt: string;
+  trigger: string;
 }
 
 export type TravelOpsAction = "run-background-once" | "reset-circuits";

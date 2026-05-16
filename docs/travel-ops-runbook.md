@@ -18,6 +18,18 @@ Worker health is about orchestration reliability, not upstream APIs.
 - **degraded**: recent failures, run in progress, or heartbeat nearing deadman threshold.
 - **unhealthy**: consecutive failures, deadman breach, or active run appears stuck.
 
+### Scheduler/deadman expectations
+
+- Configure expected cadence with:
+  - `TRAVEL_UPDATE_SCHEDULE_INTERVAL_MINUTES`
+  - `TRAVEL_UPDATE_SCHEDULE_JITTER_MINUTES`
+- Ops now exposes:
+  - `expectedNextRunBy`
+  - `minutesUntilExpectedRun`
+  - `missedSchedule`
+
+If `missedSchedule` is true repeatedly, treat as a scheduling incident even when providers are healthy.
+
 ## 2) Control actions
 
 Endpoint: `POST /api/travel-updates/ops/control`
@@ -86,6 +98,17 @@ Actions:
 3. Trigger immediate provider check or managed background run.
 4. Confirm circuits close and errors clear.
 
+### D) Missed scheduler window
+
+Symptoms:
+- Worker shows `missedSchedule=true`.
+- `expectedNextRunBy` is in the past and drift keeps growing.
+
+Actions:
+1. Verify external scheduler/cron is still invoking `/api/travel-updates/background`.
+2. Trigger one manual `run-background-once` action to re-establish heartbeat.
+3. Confirm `expectedNextRunBy` shifts forward and missed flag clears.
+
 ## 4) Operational checks before allowing GREEN trip state
 
 GREEN should only be granted when:
@@ -104,5 +127,22 @@ The app surfaces these as explicit blockers with remediation steps.
 - Runtime state: configured via `TRAVEL_UPDATE_RUNTIME_STATE_PATH`
 - Background run state/heartbeat: `TRAVEL_UPDATE_BACKGROUND_STATE_PATH`
 - Ops action audit: `TRAVEL_UPDATE_OPS_AUDIT_PATH`
+- Alert cooldown state: `TRAVEL_UPDATE_ALERT_STATE_PATH`
 
 Use these logs when investigating inconsistent trip status transitions or missed update windows.
+
+## 6) Alerting channels (stub-first)
+
+Optional notifier endpoints:
+
+- `TRAVEL_ALERT_WEBHOOK_URL`
+- `TRAVEL_ALERT_EMAIL_ENDPOINT`
+- `TRAVEL_ALERT_SMS_ENDPOINT`
+- `TRAVEL_ALERT_CONSOLE_ENABLED`
+
+Alert sweep triggers on:
+
+- worker unhealthy,
+- missed schedule / stale heartbeat,
+- repeated background failures,
+- critical governance blockers.

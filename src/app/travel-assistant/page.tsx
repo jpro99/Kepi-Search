@@ -5,6 +5,7 @@ import {
   enforceStatusFloor,
   evaluateTravelStatusGovernance,
 } from "@/lib/travelAssistant/safetyPolicy";
+import { evaluateReservationIntegrity } from "@/lib/travelAssistant/reservationIntegrity";
 import type {
   TravelOpsSnapshot,
   TravelUpdateAuditSummary,
@@ -1419,9 +1420,37 @@ export default function TravelAssistantPage() {
     setToast("Disruption simulation cleared.");
   };
 
+  const quarantineDraftToReview = useCallback(
+    (draft: ReservationDraft, context: { sourceEmailSubject: string; impact: string; prependReason?: string }): void => {
+      const integrity = evaluateReservationIntegrity(draft);
+      const reasons = integrity.issues.map((issue) => issue.message);
+      const combinedReasons = context.prependReason ? [context.prependReason, ...reasons] : reasons;
+      const queueItem: ReviewItem = {
+        id: nextId("review"),
+        reasons: combinedReasons.length > 0 ? combinedReasons : ["Manual review required before activation."],
+        impact: context.impact,
+        sourceEmailSubject: context.sourceEmailSubject,
+        draft,
+      };
+      setReviewQueue((prev) => [queueItem, ...prev]);
+      setToast("Unsafe reservation data quarantined to review queue.");
+    },
+    [],
+  );
+
   const handleImportAction = (target: "live" | "review"): void => {
     if (!selectedEmail) return;
     if (target === "live") {
+      const integrity = evaluateReservationIntegrity(selectedEmail.parsed);
+      if (!integrity.safeForLive) {
+        quarantineDraftToReview(selectedEmail.parsed, {
+          sourceEmailSubject: selectedEmail.subject,
+          impact: "Imported item was blocked from live itinerary due to invalid critical fields.",
+          prependReason: "Quarantined: import failed integrity checks.",
+        });
+        queueMutation("Unsafe import quarantined for manual correction.");
+        return;
+      }
       const reservation: Reservation = {
         id: nextId("res"),
         ...selectedEmail.parsed,
@@ -1433,8 +1462,7 @@ export default function TravelAssistantPage() {
     }
     const queueItem: ReviewItem = {
       id: nextId("review"),
-      reasons:
-        selectedEmail.issues.length > 0 ? selectedEmail.issues : ["Manual review requested before activation"],
+      reasons: selectedEmail.issues.length > 0 ? selectedEmail.issues : ["Manual review requested before activation"],
       impact: "Needs confirmation before becoming active itinerary item.",
       sourceEmailSubject: selectedEmail.subject,
       draft: selectedEmail.parsed,
@@ -1478,6 +1506,18 @@ export default function TravelAssistantPage() {
   const saveDrawer = (): void => {
     if (!activeDrawer) return;
     if (activeDrawer.kind === "reservation") {
+      const integrity = evaluateReservationIntegrity(drawerDraft);
+      if (!integrity.safeForLive) {
+        setReservations((prev) => prev.filter((item) => item.id !== activeDrawer.id));
+        quarantineDraftToReview(drawerDraft, {
+          sourceEmailSubject: `Reservation edit: ${drawerDraft.title || "Untitled"}`,
+          impact: "Edited reservation was quarantined because integrity checks failed.",
+          prependReason: "Quarantined: edited live reservation became unsafe.",
+        });
+        queueMutation("Unsafe live reservation moved to review queue.");
+        closeDrawer();
+        return;
+      }
       setReservations((prev) =>
         prev.map((item) =>
           item.id === activeDrawer.id
@@ -1501,6 +1541,27 @@ export default function TravelAssistantPage() {
   const handleAcceptReview = (reviewId: string): void => {
     const target = reviewQueue.find((item) => item.id === reviewId);
     if (!target) return;
+    const integrity = evaluateReservationIntegrity(target.draft);
+    if (!integrity.safeForLive) {
+      setReviewQueue((prev) =>
+        prev.map((item) =>
+          item.id === reviewId
+            ? {
+                ...item,
+                reasons: [
+                  ...new Set([
+                    ...item.reasons,
+                    ...integrity.issues.map((issue) => issue.message),
+                    "Still blocked: resolve integrity issues before accepting to live trip.",
+                  ]),
+                ],
+              }
+            : item,
+        ),
+      );
+      setToast("Cannot accept review item: integrity checks still failing.");
+      return;
+    }
     const newReservation: Reservation = {
       ...target.draft,
       id: nextId("res"),
@@ -1540,6 +1601,27 @@ export default function TravelAssistantPage() {
     }
     const reviewItem = reviewQueue.find((item) => item.id === reviewId);
     if (!reviewItem) return;
+    const integrity = evaluateReservationIntegrity(reviewItem.draft);
+    if (!integrity.safeForLive) {
+      setReviewQueue((prev) =>
+        prev.map((item) =>
+          item.id === reviewId
+            ? {
+                ...item,
+                reasons: [
+                  ...new Set([
+                    ...item.reasons,
+                    ...integrity.issues.map((issue) => issue.message),
+                    "Merge blocked until integrity issues are resolved.",
+                  ]),
+                ],
+              }
+            : item,
+        ),
+      );
+      setToast("Cannot merge: review draft still fails integrity checks.");
+      return;
+    }
     setReservations((prev) =>
       prev.map((item) => {
         if (item.id !== targetReservationId) return item;
@@ -2188,6 +2270,11 @@ export default function TravelAssistantPage() {
                           {opsSnapshot.worker.minutesSinceLastSuccess !== null
                             ? ` • last success ${opsSnapshot.worker.minutesSinceLastSuccess}m ago`
                             : " • no successful heartbeat yet"}
+                        </p>
+                        <p className="text-slate-300">
+                          Expected next run by: {formatClock(opsSnapshot.worker.expectedNextRunBy)} • cadence{" "}
+                          {opsSnapshot.worker.scheduleIntervalMinutes}m ± {opsSnapshot.worker.scheduleJitterMinutes}m
+                          {opsSnapshot.worker.missedSchedule ? " • schedule missed" : ""}
                         </p>
                         <ul className="space-y-1 text-[11px] text-slate-300">
                           {opsSnapshot.worker.reasons.map((reason) => (

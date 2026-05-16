@@ -37,6 +37,8 @@ interface TravelOpsHealthPolicyInput {
   staleMinutesRed?: number;
   workerDeadmanYellowMinutes?: number;
   workerDeadmanRedMinutes?: number;
+  scheduleIntervalMinutes?: number;
+  scheduleJitterMinutes?: number;
 }
 
 const STATUS_ORDER: Record<TravelExecutionStatus, number> = {
@@ -144,6 +146,8 @@ export function evaluateBackgroundWorkerHealth({
   nowMs,
   workerDeadmanYellowMinutes = 20,
   workerDeadmanRedMinutes = 60,
+  scheduleIntervalMinutes = 5,
+  scheduleJitterMinutes = 2,
 }: {
   backgroundRunActive: boolean;
   backgroundRunStartedAt: string | null;
@@ -155,16 +159,28 @@ export function evaluateBackgroundWorkerHealth({
   nowMs: number;
   workerDeadmanYellowMinutes?: number;
   workerDeadmanRedMinutes?: number;
+  scheduleIntervalMinutes?: number;
+  scheduleJitterMinutes?: number;
 }): TravelOpsWorkerStatus {
   const reasons: string[] = [];
   let health: TravelBackgroundWorkerHealth = "healthy";
   const yellowMinutes = Math.max(1, workerDeadmanYellowMinutes);
   const redMinutes = Math.max(yellowMinutes + 1, workerDeadmanRedMinutes);
+  const scheduleMinutes = Math.max(1, scheduleIntervalMinutes);
+  const jitterMinutes = Math.max(0, scheduleJitterMinutes);
   const lastSuccessMs = backgroundLastSuccessfulRunAt ? Date.parse(backgroundLastSuccessfulRunAt) : Number.NaN;
   const minutesSinceLastSuccess = Number.isNaN(lastSuccessMs)
     ? null
     : Math.max(0, Math.round((nowMs - lastSuccessMs) / 60000));
   const missedHeartbeat = minutesSinceLastSuccess !== null && minutesSinceLastSuccess >= yellowMinutes;
+  const expectedNextRunMs = Number.isNaN(lastSuccessMs)
+    ? Number.NaN
+    : lastSuccessMs + (scheduleMinutes + jitterMinutes) * 60_000;
+  const expectedNextRunBy = Number.isNaN(expectedNextRunMs) ? null : new Date(expectedNextRunMs).toISOString();
+  const minutesUntilExpectedRun = Number.isNaN(expectedNextRunMs)
+    ? null
+    : Math.round((expectedNextRunMs - nowMs) / 60000);
+  const missedSchedule = minutesUntilExpectedRun !== null && minutesUntilExpectedRun < 0;
 
   if (backgroundRunActive) {
     const startedAtMs = backgroundRunStartedAt ? Date.parse(backgroundRunStartedAt) : Number.NaN;
@@ -202,6 +218,20 @@ export function evaluateBackgroundWorkerHealth({
     reasons.push(`Background worker heartbeat approaching stale threshold (${minutesSinceLastSuccess} minutes).`);
   }
 
+  if (missedSchedule) {
+    if ((minutesUntilExpectedRun ?? 0) <= -Math.max(3, scheduleMinutes * 2)) {
+      health = "unhealthy";
+      reasons.push(
+        `Background run schedule missed by ${Math.abs(minutesUntilExpectedRun ?? 0)} minutes (expected every ${scheduleMinutes}m).`,
+      );
+    } else if (health === "healthy") {
+      health = "degraded";
+      reasons.push(
+        `Background run behind expected schedule by ${Math.abs(minutesUntilExpectedRun ?? 0)} minutes.`,
+      );
+    }
+  }
+
   if (backgroundRunLastStatus === "timeout" || backgroundRunLastStatus === "failed") {
     if (health === "healthy") {
       health = "degraded";
@@ -221,6 +251,11 @@ export function evaluateBackgroundWorkerHealth({
     consecutiveFailures: backgroundConsecutiveFailures,
     minutesSinceLastSuccess,
     missedHeartbeat,
+    expectedNextRunBy,
+    minutesUntilExpectedRun,
+    scheduleIntervalMinutes: scheduleMinutes,
+    scheduleJitterMinutes: jitterMinutes,
+    missedSchedule,
   };
 }
 
@@ -244,6 +279,8 @@ export function evaluateTravelOpsHealthPolicy(input: TravelOpsHealthPolicyInput)
     nowMs: input.nowMs,
     workerDeadmanYellowMinutes: input.workerDeadmanYellowMinutes,
     workerDeadmanRedMinutes: input.workerDeadmanRedMinutes,
+    scheduleIntervalMinutes: input.scheduleIntervalMinutes,
+    scheduleJitterMinutes: input.scheduleJitterMinutes,
   });
 
   if (input.runtimeReservationCount === 0) {

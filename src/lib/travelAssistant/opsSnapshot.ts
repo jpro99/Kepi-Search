@@ -12,6 +12,8 @@ const DEFAULT_STALE_MINUTES_YELLOW = 10;
 const DEFAULT_STALE_MINUTES_RED = 30;
 const DEFAULT_WORKER_DEADMAN_YELLOW_MINUTES = 20;
 const DEFAULT_WORKER_DEADMAN_RED_MINUTES = 60;
+const DEFAULT_BACKGROUND_SCHEDULE_INTERVAL_MINUTES = 5;
+const DEFAULT_BACKGROUND_SCHEDULE_JITTER_MINUTES = 2;
 
 function parsePositiveIntFromEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -79,6 +81,14 @@ export async function buildTravelOpsSnapshot({
     workerDeadmanRedMinutes: parsePositiveIntFromEnv(
       "TRAVEL_UPDATE_WORKER_DEADMAN_RED_MINUTES",
       DEFAULT_WORKER_DEADMAN_RED_MINUTES,
+    ),
+    scheduleIntervalMinutes: parsePositiveIntFromEnv(
+      "TRAVEL_UPDATE_SCHEDULE_INTERVAL_MINUTES",
+      DEFAULT_BACKGROUND_SCHEDULE_INTERVAL_MINUTES,
+    ),
+    scheduleJitterMinutes: parsePositiveIntFromEnv(
+      "TRAVEL_UPDATE_SCHEDULE_JITTER_MINUTES",
+      DEFAULT_BACKGROUND_SCHEDULE_JITTER_MINUTES,
     ),
   });
   const workerReason = policy.worker.reasons[0] ?? "Background worker unhealthy.";

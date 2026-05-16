@@ -10,6 +10,7 @@ import {
   appendTravelOpsActionAuditEntry,
   findTravelOpsActionReplay,
 } from "@/lib/travelAssistant/opsActionAuditStore";
+import { runTravelOpsAlertSweep } from "@/lib/travelAssistant/opsAlertingOrchestrator";
 import { resetTravelUpdateCircuitState } from "@/lib/travelAssistant/updateAdapters";
 import type { TravelOpsActionResult } from "@/lib/travelAssistant/travelUpdateTypes";
 
@@ -42,6 +43,14 @@ function resolveActor(req: Request): string {
   return req.headers.get("x-operator-id")?.trim() || "operator";
 }
 
+async function runAlertSweepSafe(trigger: string) {
+  try {
+    return await runTravelOpsAlertSweep({ trigger });
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: Request) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized ops control action" }, { status: 401 });
@@ -72,11 +81,13 @@ export async function POST(req: Request) {
       idempotencyKey,
     });
     if (replay) {
+      const alertSweep = await runAlertSweepSafe(`ops-control-replay-${parsed.data.action}`);
       return NextResponse.json(
         {
           ...(replay.responsePayload as Record<string, unknown>),
           replayed: true,
           actionAuditId: replay.id,
+          alertSweep,
         },
         { status: replay.statusCode },
       );
@@ -109,7 +120,11 @@ export async function POST(req: Request) {
       replayed: false,
       requestedAt,
     });
-    return NextResponse.json({ ...responsePayload, actionAuditId: audit.id, replayed: false }, { status: statusCode });
+    const alertSweep = await runAlertSweepSafe("ops-control-reset-circuits");
+    return NextResponse.json(
+      { ...responsePayload, actionAuditId: audit.id, replayed: false, alertSweep },
+      { status: statusCode },
+    );
   }
 
   try {
@@ -182,5 +197,11 @@ export async function POST(req: Request) {
     replayed: false,
     requestedAt,
   });
-  return NextResponse.json({ ...responsePayload, actionAuditId: audit.id, replayed: false }, { status: statusCode });
+  const alertSweep = await runAlertSweepSafe(
+    parsed.data.dryRun ? "ops-control-run-background-dry" : "ops-control-run-background-live",
+  );
+  return NextResponse.json(
+    { ...responsePayload, actionAuditId: audit.id, replayed: false, alertSweep },
+    { status: statusCode },
+  );
 }

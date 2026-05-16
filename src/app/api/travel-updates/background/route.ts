@@ -4,6 +4,7 @@ import {
   BackgroundRunTimeoutError,
   runManagedTravelUpdateBackgroundPass,
 } from "@/lib/travelAssistant/backgroundRunManager";
+import { runTravelOpsAlertSweep } from "@/lib/travelAssistant/opsAlertingOrchestrator";
 import { BackgroundRunInProgressError } from "@/lib/travelAssistant/backgroundRunStateStore";
 import {
   RuntimeStateUnavailableError,
@@ -23,6 +24,14 @@ function isAuthorized(req: Request): boolean {
   const headerSecret = req.headers.get("x-travel-cron-secret")?.trim();
   const bearerToken = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   return headerSecret === expectedSecret || bearerToken === expectedSecret;
+}
+
+async function runAlertSweepSafe(trigger: string) {
+  try {
+    return await runTravelOpsAlertSweep({ trigger });
+  } catch {
+    return null;
+  }
 }
 
 export async function POST(req: Request) {
@@ -51,20 +60,27 @@ export async function POST(req: Request) {
       nowIso: parsed.data.nowIso,
       timeoutMs: parsed.data.timeoutMs,
     });
-    return NextResponse.json(backgroundRun);
+    const alertSweep = await runAlertSweepSafe("background-route-success");
+    return NextResponse.json({
+      ...backgroundRun,
+      alertSweep,
+    });
   } catch (error) {
     if (error instanceof BackgroundRunInProgressError) {
+      const alertSweep = await runAlertSweepSafe("background-route-overlap");
       return NextResponse.json(
-        { error: error.message, activeRunId: error.activeRunId, activeStartedAt: error.startedAt },
+        { error: error.message, activeRunId: error.activeRunId, activeStartedAt: error.startedAt, alertSweep },
         { status: 409 },
       );
     }
     if (error instanceof RuntimeStateUnavailableError) {
-      return NextResponse.json({ error: error.message }, { status: 409 });
+      const alertSweep = await runAlertSweepSafe("background-route-runtime-missing");
+      return NextResponse.json({ error: error.message, alertSweep }, { status: 409 });
     }
     if (error instanceof BackgroundRunTimeoutError) {
+      const alertSweep = await runAlertSweepSafe("background-route-timeout");
       return NextResponse.json(
-        { error: error.message, runId: error.runId, timeoutMs: error.timeoutMs },
+        { error: error.message, runId: error.runId, timeoutMs: error.timeoutMs, alertSweep },
         { status: 504 },
       );
     }
