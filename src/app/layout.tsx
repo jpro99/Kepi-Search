@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import { verifyEnvFromExampleAtBoot } from "../../scripts/verify-env";
 import "./globals.css";
+
+verifyEnvFromExampleAtBoot();
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
