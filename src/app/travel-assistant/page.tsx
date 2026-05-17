@@ -41,6 +41,7 @@ import type {
   TravelUpdateSeverity,
 } from "@/lib/travelAssistant/travelUpdateTypes";
 import { ConnectivityPanel } from "@/components/travelAssistant/ConnectivityPanel";
+import { InstallPrompt } from "@/components/InstallPrompt";
 import { QuickAddLane } from "@/components/travelAssistant/QuickAddLane";
 import { ReservationList } from "@/components/travelAssistant/ReservationList";
 import { ReviewQueue } from "@/components/travelAssistant/ReviewQueue";
@@ -3886,6 +3887,7 @@ export default function TravelAssistantPage() {
           {toast}
         </div>
       ) : null}
+      <InstallPrompt />
     </main>
   );
 }
