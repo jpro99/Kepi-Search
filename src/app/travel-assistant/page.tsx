@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cache, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   enforceStatusFloor,
   evaluateTravelStatusGovernance,
@@ -41,15 +41,25 @@ import type {
   TravelUpdateSeverity,
 } from "@/lib/travelAssistant/travelUpdateTypes";
 import { ConnectivityPanel } from "@/components/travelAssistant/ConnectivityPanel";
-import { DisruptionRecovery } from "@/components/travelAssistant/DisruptionRecovery";
-import { FamilyPanel } from "@/components/travelAssistant/FamilyPanel";
-import { OpsPanel } from "@/components/travelAssistant/OpsPanel";
 import { QuickAddLane } from "@/components/travelAssistant/QuickAddLane";
 import { ReservationList } from "@/components/travelAssistant/ReservationList";
 import { ReviewQueue } from "@/components/travelAssistant/ReviewQueue";
 import { TripOrientationCard } from "@/components/travelAssistant/TripOrientationCard";
 import { JourneyFlowPanel } from "./components/JourneyFlowPanel";
 import { TravelAssistantTopControls } from "./components/TravelAssistantTopControls";
+
+const OpsPanel = lazy(async () => {
+  const loadedModule = await import("@/components/travelAssistant/OpsPanel");
+  return { default: loadedModule.OpsPanel };
+});
+const FamilyPanel = lazy(async () => {
+  const loadedModule = await import("@/components/travelAssistant/FamilyPanel");
+  return { default: loadedModule.FamilyPanel };
+});
+const DisruptionRecovery = lazy(async () => {
+  const loadedModule = await import("@/components/travelAssistant/DisruptionRecovery");
+  return { default: loadedModule.DisruptionRecovery };
+});
 
 type TripStage = TripFlowStage;
 type TripStatus = "green" | "yellow" | "red";
@@ -215,6 +225,25 @@ interface UpdateFeedItem {
   detail: string;
   provider: string;
   appliedAt: string;
+}
+
+const fetchInitialOpsSnapshotCached = cache(async (): Promise<TravelOpsSnapshot> => {
+  const response = await fetch("/api/travel-updates/ops?limit=12", {
+    method: "GET",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Ops API returned ${response.status}`);
+  }
+  return (await response.json()) as TravelOpsSnapshot;
+});
+
+function LazyPanelSkeleton({ label }: { label: string }) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-300">
+      {label}
+    </section>
+  );
 }
 
 const STAGES: TripStage[] = ["readiness", "pre-departure", "airport", "arrival", "recovery"];
@@ -1703,6 +1732,26 @@ export default function TravelAssistantPage() {
     }
   }, [setToast]);
 
+  useEffect(() => {
+    let active = true;
+    const loadInitialOpsSnapshot = async (): Promise<void> => {
+      try {
+        const snapshot = await fetchInitialOpsSnapshotCached();
+        if (!active) return;
+        setOpsSnapshot(snapshot);
+        setOpsError(null);
+      } catch (error) {
+        if (!active) return;
+        const message = error instanceof Error ? error.message : "Unknown ops status error";
+        setOpsError(message);
+      }
+    };
+    void loadInitialOpsSnapshot();
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const runOpsControlAction = useCallback(
     async (
       action: "run-background-once" | "reset-circuits" | "trigger-alert-sweep",
@@ -3173,41 +3222,43 @@ export default function TravelAssistantPage() {
             updateFeed={updateFeed}
             formatClock={formatClock}
             opsPanel={
-              <OpsPanel
-                showOpsSection={showOpsSection}
-                opsExpanded={opsExpanded}
-                onToggleExpanded={() =>
-                  setOpsExpanded((previous) => {
-                    const nextValue = !previous;
-                    if (nextValue && !opsSnapshot) {
-                      void fetchOpsSnapshot("auto");
-                    }
-                    return nextValue;
-                  })
-                }
-                opsSnapshot={opsSnapshot}
-                opsLoading={opsLoading}
-                opsError={opsError}
-                statusBadgeByTripStatus={STATUS_BADGE}
-                opsActionPending={opsActionPending}
-                onRefreshOps={() => {
-                  void fetchOpsSnapshot("manual");
-                }}
-                onRunBackgroundOnce={() => {
-                  void runOpsControlAction("run-background-once");
-                }}
-                onRunBackgroundDry={() => {
-                  void runOpsControlAction("run-background-once", { dryRun: true });
-                }}
-                onResetCircuits={() => {
-                  void runOpsControlAction("reset-circuits");
-                }}
-                onTriggerAlertSweep={() => {
-                  void runOpsControlAction("trigger-alert-sweep");
-                }}
-                formatClock={formatClock}
-                statusGovernanceBlockers={statusGovernance.blockers}
-              />
+              <Suspense fallback={<LazyPanelSkeleton label="Loading ops panel..." />}>
+                <OpsPanel
+                  showOpsSection={showOpsSection}
+                  opsExpanded={opsExpanded}
+                  onToggleExpanded={() =>
+                    setOpsExpanded((previous) => {
+                      const nextValue = !previous;
+                      if (nextValue && !opsSnapshot) {
+                        void fetchOpsSnapshot("auto");
+                      }
+                      return nextValue;
+                    })
+                  }
+                  opsSnapshot={opsSnapshot}
+                  opsLoading={opsLoading}
+                  opsError={opsError}
+                  statusBadgeByTripStatus={STATUS_BADGE}
+                  opsActionPending={opsActionPending}
+                  onRefreshOps={() => {
+                    void fetchOpsSnapshot("manual");
+                  }}
+                  onRunBackgroundOnce={() => {
+                    void runOpsControlAction("run-background-once");
+                  }}
+                  onRunBackgroundDry={() => {
+                    void runOpsControlAction("run-background-once", { dryRun: true });
+                  }}
+                  onResetCircuits={() => {
+                    void runOpsControlAction("reset-circuits");
+                  }}
+                  onTriggerAlertSweep={() => {
+                    void runOpsControlAction("trigger-alert-sweep");
+                  }}
+                  formatClock={formatClock}
+                  statusGovernanceBlockers={statusGovernance.blockers}
+                />
+              </Suspense>
             }
           />
           </section>
@@ -3541,21 +3592,23 @@ export default function TravelAssistantPage() {
             </p>
           </article>
 
-          <FamilyPanel
-            showFamilyMap={showFamilyMap}
-            onShowFamilyMapChange={setShowFamilyMap}
-            selectedFamilyMemberId={selectedFamilyMember.id}
-            onSelectedFamilyMemberIdChange={setSelectedFamilyMemberId}
-            selectedFamilyMember={selectedFamilyMember}
-            familyMembers={familyMembers}
-            canViewerSeeMember={canViewerSeeMember}
-            nowMs={nowMs}
-            canSendLocationNow={canSendLocationNow}
-            onToggleMemberSharing={toggleMemberSharing}
-            onToggleMemberVisibility={toggleMemberVisibility}
-            visibleFamilyMarkers={visibleFamilyMarkers}
-            formatClock={formatClock}
-          />
+          <Suspense fallback={<LazyPanelSkeleton label="Loading family panel..." />}>
+            <FamilyPanel
+              showFamilyMap={showFamilyMap}
+              onShowFamilyMapChange={setShowFamilyMap}
+              selectedFamilyMemberId={selectedFamilyMember.id}
+              onSelectedFamilyMemberIdChange={setSelectedFamilyMemberId}
+              selectedFamilyMember={selectedFamilyMember}
+              familyMembers={familyMembers}
+              canViewerSeeMember={canViewerSeeMember}
+              nowMs={nowMs}
+              canSendLocationNow={canSendLocationNow}
+              onToggleMemberSharing={toggleMemberSharing}
+              onToggleMemberVisibility={toggleMemberVisibility}
+              visibleFamilyMarkers={visibleFamilyMarkers}
+              formatClock={formatClock}
+            />
+          </Suspense>
           </section>
         ) : (
           <section className="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 text-xs text-slate-400">
@@ -3563,18 +3616,20 @@ export default function TravelAssistantPage() {
           </section>
         )}
 
-        <DisruptionRecovery
-          showRecoverySection={showRecoverySection && shouldRenderMobilePanel("recovery")}
-          onSimulateDisruption={simulateDisruption}
-          onClearSimulation={clearScenarioSimulation}
-          incidentAutopilotRecommendations={incidentAutopilotRecommendations}
-          autopilotActionPending={autopilotActionPending}
-          onApplyIncidentAutopilotRecommendation={applyIncidentAutopilotRecommendation}
-          lastAppliedAutopilotRecommendationTitle={lastAppliedAutopilotRecommendationTitle}
-          recoveryScript={recoveryScript}
-          onCopyScript={copyScript}
-          activeScenarioPlaybook={activeScenarioPlaybook}
-        />
+        <Suspense fallback={<LazyPanelSkeleton label="Loading disruption recovery..." />}>
+          <DisruptionRecovery
+            showRecoverySection={showRecoverySection && shouldRenderMobilePanel("recovery")}
+            onSimulateDisruption={simulateDisruption}
+            onClearSimulation={clearScenarioSimulation}
+            incidentAutopilotRecommendations={incidentAutopilotRecommendations}
+            autopilotActionPending={autopilotActionPending}
+            onApplyIncidentAutopilotRecommendation={applyIncidentAutopilotRecommendation}
+            lastAppliedAutopilotRecommendationTitle={lastAppliedAutopilotRecommendationTitle}
+            recoveryScript={recoveryScript}
+            onCopyScript={copyScript}
+            activeScenarioPlaybook={activeScenarioPlaybook}
+          />
+        </Suspense>
       </div>
 
       {activeDrawer ? (

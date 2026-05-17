@@ -54,15 +54,15 @@ export function ReservationList({
   onCopyConfirmationCode,
 }: ReservationListProps) {
   return (
-    <article className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
+    <article className="rounded-2xl border border-slate-200 bg-white/90 p-4 dark:border-slate-700 dark:bg-slate-900/70">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="text-lg font-semibold">Reservation cards</h2>
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-slate-600 dark:text-slate-400">
             Structured reservations with detail drawers, assignment controls, and operational quick actions.
           </p>
         </div>
-        <label className="flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs">
+        <label className="flex items-center gap-2 rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs dark:border-slate-700 dark:bg-slate-900">
           <input
             type="checkbox"
             checked={personalTimelineOnly}
@@ -73,10 +73,10 @@ export function ReservationList({
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {visibleReservations.map((reservation) => (
-          <div key={reservation.id} className="rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+          <div key={reservation.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/70">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <p className="text-xs uppercase tracking-wide text-slate-400">
+                <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
                   {reservationTypeLabelByType[reservation.type]} • {reservation.provider}
                 </p>
                 <p className="text-sm font-semibold">{reservation.title}</p>
@@ -118,17 +118,17 @@ export function ReservationList({
                 {reservation.confidence}
               </span>
             </div>
-            <p className="mt-2 text-xs text-slate-300">
+            <p className="mt-2 text-xs text-slate-700 dark:text-slate-300">
               {reservation.localTime} ({reservation.timezone})
             </p>
-            <p className="text-xs text-slate-400">{reservation.location}</p>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="text-xs text-slate-600 dark:text-slate-400">{reservation.location}</p>
+            <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
               Assigned:{" "}
               {reservation.assignedTo
                 .map((memberId) => familyMembers.find((member) => member.id === memberId)?.name ?? memberId)
                 .join(", ")}
             </p>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
               Sync status:{" "}
               {(() => {
                 const reservationPending = pendingOutboxByReservationId.get(reservation.id) ?? 0;
@@ -145,7 +145,7 @@ export function ReservationList({
               <button
                 type="button"
                 onClick={() => onOpenReservationDrawer(reservation.id)}
-                className="rounded-md bg-slate-800 px-2 py-1 ring-1 ring-slate-700 hover:bg-slate-700"
+                className="rounded-md bg-slate-200 px-2 py-1 ring-1 ring-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:ring-slate-700 dark:hover:bg-slate-700"
               >
                 Details
               </button>
@@ -156,7 +156,7 @@ export function ReservationList({
                     `Call ${reservation.provider} and confirm ${reservation.title}. Confirmation code: ${reservation.confirmationCode}.`,
                   )
                 }
-                className="rounded-md bg-slate-800 px-2 py-1 ring-1 ring-slate-700 hover:bg-slate-700"
+                className="rounded-md bg-slate-200 px-2 py-1 ring-1 ring-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:ring-slate-700 dark:hover:bg-slate-700"
               >
                 Copy call script
               </button>
@@ -165,7 +165,7 @@ export function ReservationList({
                 onClick={() => {
                   void onCopyConfirmationCode(reservation.confirmationCode);
                 }}
-                className="rounded-md bg-slate-800 px-2 py-1 ring-1 ring-slate-700 hover:bg-slate-700"
+                className="rounded-md bg-slate-200 px-2 py-1 ring-1 ring-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:ring-slate-700 dark:hover:bg-slate-700"
               >
                 Copy code
               </button>

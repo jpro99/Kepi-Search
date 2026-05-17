@@ -6,6 +6,7 @@
     "postinstall": "patch-package && node scripts/patch-maplibre-dist.cjs && node scripts/copy-maplibre-worker.cjs",
     "dev": "next dev",
     "build": "next build",
+    "analyze": "ANALYZE=true npm run build",
     "start": "next start",
     "lint": "eslint",
     "seed:generate": "node scripts/generate-city-seeds.mjs",
@@ -33,6 +34,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.11.3",
+    "@next/bundle-analyzer": "^16.2.6",
     "@playwright/test": "^1.60.0",
     "@tailwindcss/postcss": "^4",
     "@types/geojson": "^7946.0.16",

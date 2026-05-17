@@ -107,16 +107,16 @@ export function ReviewQueue({
   };
 
   return (
-    <div className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
+    <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 dark:border-slate-700 dark:bg-slate-900/70">
       <h2 className="text-lg font-semibold">Intake review queue</h2>
-      <p className="text-xs text-slate-400">Handle uncertain imports before they affect the active itinerary.</p>
-      <div className="mt-3 rounded-xl border border-slate-700 bg-slate-950/60 p-3">
+      <p className="text-xs text-slate-600 dark:text-slate-400">Handle uncertain imports before they affect the active itinerary.</p>
+      <div className="mt-3 rounded-xl border border-slate-200 bg-slate-100/70 p-3 dark:border-slate-700 dark:bg-slate-950/60">
         <p className="text-sm font-semibold">Import from Gmail</p>
-        <p className="mt-1 text-xs text-slate-400">
+        <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
           Pull recent confirmation emails and convert them into structured review candidates.
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <label htmlFor="gmail-import-max-results" className="text-xs text-slate-300">
+          <label htmlFor="gmail-import-max-results" className="text-xs text-slate-700 dark:text-slate-300">
             Max emails
           </label>
           <input
@@ -128,7 +128,7 @@ export function ReviewQueue({
             onChange={(event) =>
               setImportMaxResults(Math.max(1, Math.min(50, Number(event.target.value) || 1)))
             }
-            className="w-24 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs"
+            className="w-24 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"
           />
           <button
             type="button"
@@ -145,9 +145,9 @@ export function ReviewQueue({
       </div>
       <div className="mt-3 space-y-3">
         {reviewQueue.map((item) => (
-          <div key={item.id} className="rounded-xl border border-slate-700 bg-slate-950/60 p-3">
+          <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/60">
             <p className="text-sm font-semibold">{item.draft.title}</p>
-            <p className="text-xs text-slate-400">Source: {item.sourceEmailSubject}</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400">Source: {item.sourceEmailSubject}</p>
             <p className="mt-1 text-xs text-red-200">Impact: {item.impact}</p>
             <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-200">
               {item.reasons.map((reason) => (
@@ -165,21 +165,21 @@ export function ReviewQueue({
               <button
                 type="button"
                 onClick={() => onOpenReviewDrawer(item.id)}
-                className="rounded-md bg-slate-800 px-2 py-1 ring-1 ring-slate-700 hover:bg-slate-700"
+                className="rounded-md bg-slate-200 px-2 py-1 ring-1 ring-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:ring-slate-700 dark:hover:bg-slate-700"
               >
                 Edit + accept
               </button>
               <button
                 type="button"
                 onClick={() => onRejectReview(item.id)}
-                className="rounded-md bg-slate-800 px-2 py-1 ring-1 ring-slate-700 hover:bg-slate-700"
+                className="rounded-md bg-slate-200 px-2 py-1 ring-1 ring-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:ring-slate-700 dark:hover:bg-slate-700"
               >
                 Reject
               </button>
               <button
                 type="button"
                 onClick={() => onReparseReview(item.id)}
-                className="rounded-md bg-slate-800 px-2 py-1 ring-1 ring-slate-700 hover:bg-slate-700"
+                className="rounded-md bg-slate-200 px-2 py-1 ring-1 ring-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:ring-slate-700 dark:hover:bg-slate-700"
               >
                 Re-parse
               </button>
@@ -192,7 +192,7 @@ export function ReviewQueue({
                 id={`merge-target-${item.id}`}
                 value={mergeTargetByReview[item.id] ?? ""}
                 onChange={(event) => onMergeTargetChange(item.id, event.target.value)}
-                className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1"
+                className="flex-1 rounded-md border border-slate-300 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-900"
               >
                 <option value="">Select merge target</option>
                 {reservations.map((reservation) => (
