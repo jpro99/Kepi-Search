@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useEffect, useState } from "react";
 import { UserButton } from "@clerk/nextjs";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -53,6 +55,31 @@ export function TravelAssistantTopControls({
   onMinutesToDepartureChange,
   onEvaluateStatus,
 }: TravelAssistantTopControlsProps) {
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const checkAdminAccess = async (): Promise<void> => {
+      try {
+        const response = await fetch("/api/admin/health?probe=1", {
+          method: "GET",
+          cache: "no-store",
+        });
+        if (!cancelled) {
+          setIsAdmin(response.ok);
+        }
+      } catch {
+        if (!cancelled) {
+          setIsAdmin(false);
+        }
+      }
+    };
+    void checkAdminAccess();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <section className="overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-indigo-100/40 shadow-xl dark:border-slate-700/70 dark:from-slate-900 dark:via-slate-900 dark:to-indigo-950/40 dark:shadow-2xl dark:shadow-indigo-950/30">
       <div className="grid gap-5 p-5 sm:gap-6 sm:p-6 lg:grid-cols-[1.8fr_1fr]">
@@ -61,6 +88,14 @@ export function TravelAssistantTopControls({
             <p className="text-xs uppercase tracking-[0.24em] text-cyan-700 dark:text-cyan-300">Adaptive Travel Assistant</p>
             <div className="flex items-center gap-2">
               <ThemeToggle />
+              {isAdmin ? (
+                <Link
+                  href="/admin"
+                  className="rounded-full border border-indigo-300 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/40 dark:bg-indigo-500/20 dark:text-indigo-100 dark:hover:bg-indigo-500/30"
+                >
+                  Admin
+                </Link>
+              ) : null}
               <div className="rounded-full border border-slate-200 bg-white/80 p-1 dark:border-slate-700 dark:bg-slate-900/70">
                 <UserButton />
               </div>

@@ -122,6 +122,41 @@ function applyMemoryRateLimit(policyName: RateLimitPolicyName, identifier: strin
   };
 }
 
+function encodeUsagePart(value: string): string {
+  return encodeURIComponent(value);
+}
+
+async function recordApiUsage(options: {
+  route: string;
+  identifier: string;
+  rateLimitHit: boolean;
+  requestId: string;
+}): Promise<void> {
+  if (!upstashRedis) {
+    return;
+  }
+  try {
+    const encodedRoute = encodeUsagePart(options.route);
+    const encodedUser = encodeUsagePart(options.identifier);
+    const commands: Promise<unknown>[] = [
+      upstashRedis.incr(`kepi:api-usage:endpoint:${encodedRoute}`),
+      upstashRedis.incr(`kepi:api-usage:user:${encodedUser}`),
+    ];
+    if (options.rateLimitHit) {
+      commands.push(upstashRedis.incr(`kepi:api-usage:rate-limit-hit:${encodedRoute}`));
+    }
+    await Promise.all(commands);
+  } catch (error) {
+    logger.withContext({
+      requestId: options.requestId,
+      route: options.route,
+      identifier: options.identifier,
+    }).warn("Failed to record API usage metrics in Upstash.", {
+      error,
+    });
+  }
+}
+
 export async function enforceRateLimit(options: {
   policyName: RateLimitPolicyName;
   identifier: string;
@@ -137,7 +172,14 @@ export async function enforceRateLimit(options: {
 
   const limiter = upstashLimiterByPolicy[options.policyName];
   if (!limiter) {
-    return applyMemoryRateLimit(options.policyName, options.identifier);
+    const fallbackResult = applyMemoryRateLimit(options.policyName, options.identifier);
+    await recordApiUsage({
+      route: options.route,
+      identifier: options.identifier,
+      rateLimitHit: !fallbackResult.allowed,
+      requestId: options.requestId,
+    });
+    return fallbackResult;
   }
 
   try {
@@ -152,6 +194,12 @@ export async function enforceRateLimit(options: {
         identifier: options.identifier,
       }).warn("Rate limit exceeded.");
     }
+    await recordApiUsage({
+      route: options.route,
+      identifier: options.identifier,
+      rateLimitHit: !result.success,
+      requestId: options.requestId,
+    });
     return {
       allowed: result.success,
       headers,
@@ -163,6 +211,13 @@ export async function enforceRateLimit(options: {
       policyName: options.policyName,
       identifier: options.identifier,
     }).error("Rate limiting provider failed; using memory fallback.", error instanceof Error ? error : undefined);
-    return applyMemoryRateLimit(options.policyName, options.identifier);
+    const fallbackResult = applyMemoryRateLimit(options.policyName, options.identifier);
+    await recordApiUsage({
+      route: options.route,
+      identifier: options.identifier,
+      rateLimitHit: !fallbackResult.allowed,
+      requestId: options.requestId,
+    });
+    return fallbackResult;
   }
 }
