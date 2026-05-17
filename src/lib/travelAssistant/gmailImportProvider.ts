@@ -147,10 +147,17 @@ function extractReservationType(subject: string, body: string): ParsedReservatio
 function extractConfirmationCode(subject: string, body: string): string {
   const text = `${subject}\n${body}`;
   const explicit =
-    text.match(/(?:confirmation|booking|reservation|ticket|record locator|pnr)[^A-Z0-9]{0,8}([A-Z0-9-]{4,18})/i)?.[1] ??
-    text.match(/\b([A-Z0-9]{5,12})\b/)?.[1] ??
-    "UNKNOWN";
-  return explicit.toUpperCase();
+    text.match(
+      /(?:confirmation|booking|reservation|ticket|record locator|pnr)(?:\s+(?:code|number|no\.?|id|is)|\s*[:#-])\s*([A-Z0-9-]{4,18})/i,
+    )?.[1] ??
+    null;
+  if (explicit) {
+    return explicit.toUpperCase();
+  }
+
+  const candidates = text.toUpperCase().match(/\b[A-Z0-9-]{4,18}\b/g) ?? [];
+  const fallback = candidates.find((token) => /[A-Z]/.test(token) && /\d/.test(token));
+  return fallback ?? "UNKNOWN";
 }
 
 function extractLocation(type: ParsedReservationType, body: string): string {
