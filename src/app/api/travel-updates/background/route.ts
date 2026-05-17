@@ -1,14 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import {
-  BackgroundRunTimeoutError,
-  runManagedTravelUpdateBackgroundPass,
-} from "@/lib/travelAssistant/backgroundRunManager";
-import { runTravelOpsAlertSweep } from "@/lib/travelAssistant/opsAlertingOrchestrator";
-import { BackgroundRunInProgressError } from "@/lib/travelAssistant/backgroundRunStateStore";
-import {
-  RuntimeStateUnavailableError,
-} from "@/lib/travelAssistant/backgroundOrchestrator";
+import { inngest } from "@/inngest/client";
 
 const BodySchema = z.object({
   mode: z.enum(["off", "mock", "auto"]).optional(),
@@ -24,14 +16,6 @@ function isAuthorized(req: Request): boolean {
   const headerSecret = req.headers.get("x-travel-cron-secret")?.trim();
   const bearerToken = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   return headerSecret === expectedSecret || bearerToken === expectedSecret;
-}
-
-async function runAlertSweepSafe(trigger: string) {
-  try {
-    return await runTravelOpsAlertSweep({ trigger });
-  } catch {
-    return null;
-  }
 }
 
 async function resolveAuthenticatedUserId(): Promise<string | null> {
@@ -78,35 +62,28 @@ export async function POST(req: Request) {
   }
 
   try {
-    const backgroundRun = await runManagedTravelUpdateBackgroundPass({
-      mode: parsed.data.mode,
-      nowIso: parsed.data.nowIso,
-      timeoutMs: parsed.data.timeoutMs,
+    const dispatchResult = await inngest.send({
+      name: "travel/update.requested",
+      data: {
+        userId,
+        mode: parsed.data.mode,
+        nowIso: parsed.data.nowIso,
+        timeoutMs: parsed.data.timeoutMs,
+        trigger: "background-route",
+      },
     });
-    const alertSweep = await runAlertSweepSafe("background-route-success");
-    return NextResponse.json({
-      ...backgroundRun,
-      alertSweep,
-    });
+    return NextResponse.json(
+      {
+        queued: true,
+        event: dispatchResult,
+      },
+      { status: 202 },
+    );
   } catch (error) {
-    if (error instanceof BackgroundRunInProgressError) {
-      const alertSweep = await runAlertSweepSafe("background-route-overlap");
-      return NextResponse.json(
-        { error: error.message, activeRunId: error.activeRunId, activeStartedAt: error.startedAt, alertSweep },
-        { status: 409 },
-      );
-    }
-    if (error instanceof RuntimeStateUnavailableError) {
-      const alertSweep = await runAlertSweepSafe("background-route-runtime-missing");
-      return NextResponse.json({ error: error.message, alertSweep }, { status: 409 });
-    }
-    if (error instanceof BackgroundRunTimeoutError) {
-      const alertSweep = await runAlertSweepSafe("background-route-timeout");
-      return NextResponse.json(
-        { error: error.message, runId: error.runId, timeoutMs: error.timeoutMs, alertSweep },
-        { status: 504 },
-      );
-    }
-    throw error;
+    const message = error instanceof Error ? error.message : "Failed to dispatch background update event.";
+    return NextResponse.json(
+      { error: message, queued: false },
+      { status: 503 },
+    );
   }
 }

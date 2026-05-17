@@ -1,4 +1,5 @@
 import { kv } from "@vercel/kv";
+import { getKvUserContextUserId } from "@/lib/travelAssistant/kvUserContext";
 
 const KEPI_NAMESPACE_PREFIX = "kepi";
 const ANONYMOUS_NAMESPACE = "anonymous";
@@ -16,6 +17,10 @@ function cloneValue<T>(value: T): T {
 async function resolveUserNamespace(userId?: string): Promise<string> {
   if (typeof userId === "string" && userId.trim().length > 0) {
     return userId.trim();
+  }
+  const contextUserId = getKvUserContextUserId();
+  if (contextUserId && contextUserId.trim().length > 0) {
+    return contextUserId.trim();
   }
   try {
     const clerkServerModule = await import("@clerk/nextjs/server");
