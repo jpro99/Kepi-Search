@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 type TripStage = "readiness" | "pre-departure" | "airport" | "arrival" | "recovery";
 type ReservationType = "flight" | "hotel" | "train" | "ride" | "dinner";
 type Confidence = "high" | "medium" | "low";
@@ -32,6 +34,25 @@ interface ReservationOption {
   title: string;
 }
 
+interface GmailImportedReservation {
+  messageId: string;
+  sender: string;
+  subject: string;
+  receivedAt: string;
+  body: string;
+  reservation: {
+    type: "flight" | "hotel" | "train" | "ride";
+    title: string;
+    provider: string;
+    localTime: string;
+    timezone: string;
+    location: string;
+    confirmationCode: string;
+    confidence: Confidence;
+    issues: string[];
+  };
+}
+
 interface ReviewQueueProps {
   reviewQueue: ReviewItem[];
   reservations: ReservationOption[];
@@ -42,6 +63,7 @@ interface ReviewQueueProps {
   onRejectReview: (reviewId: string) => void;
   onReparseReview: (reviewId: string) => void;
   onMergeReview: (reviewId: string) => void;
+  onImportParsedReservations: (reservations: GmailImportedReservation[]) => void;
 }
 
 export function ReviewQueue({
@@ -54,11 +76,73 @@ export function ReviewQueue({
   onRejectReview,
   onReparseReview,
   onMergeReview,
+  onImportParsedReservations,
 }: ReviewQueueProps) {
+  const [importInFlight, setImportInFlight] = useState(false);
+  const [importMaxResults, setImportMaxResults] = useState(10);
+  const [importError, setImportError] = useState<string | null>(null);
+
+  const handleGmailImport = async (): Promise<void> => {
+    if (importInFlight) return;
+    setImportInFlight(true);
+    setImportError(null);
+    try {
+      const response = await fetch("/api/travel-updates/gmail-import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxResults: importMaxResults }),
+      });
+      if (!response.ok) {
+        throw new Error(`Gmail import endpoint returned ${response.status}`);
+      }
+      const payload = (await response.json()) as {
+        reservations?: GmailImportedReservation[];
+      };
+      onImportParsedReservations(payload.reservations ?? []);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "Unknown Gmail import error");
+    } finally {
+      setImportInFlight(false);
+    }
+  };
+
   return (
     <div className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
       <h2 className="text-lg font-semibold">Intake review queue</h2>
       <p className="text-xs text-slate-400">Handle uncertain imports before they affect the active itinerary.</p>
+      <div className="mt-3 rounded-xl border border-slate-700 bg-slate-950/60 p-3">
+        <p className="text-sm font-semibold">Import from Gmail</p>
+        <p className="mt-1 text-xs text-slate-400">
+          Pull recent confirmation emails and convert them into structured review candidates.
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <label htmlFor="gmail-import-max-results" className="text-xs text-slate-300">
+            Max emails
+          </label>
+          <input
+            id="gmail-import-max-results"
+            type="number"
+            min={1}
+            max={50}
+            value={importMaxResults}
+            onChange={(event) =>
+              setImportMaxResults(Math.max(1, Math.min(50, Number(event.target.value) || 1)))
+            }
+            className="w-24 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs"
+          />
+          <button
+            type="button"
+            onClick={() => {
+              void handleGmailImport();
+            }}
+            disabled={importInFlight}
+            className="rounded-md bg-cyan-500/90 px-2 py-1 text-xs font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {importInFlight ? "Importing..." : "Import Gmail"}
+          </button>
+        </div>
+        {importError ? <p className="mt-2 text-xs text-red-200">Import failed: {importError}</p> : null}
+      </div>
       <div className="mt-3 space-y-3">
         {reviewQueue.map((item) => (
           <div key={item.id} className="rounded-xl border border-slate-700 bg-slate-950/60 p-3">

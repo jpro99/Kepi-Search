@@ -125,6 +125,25 @@ interface EmailSample {
   issues: string[];
 }
 
+interface GmailImportedReservation {
+  messageId: string;
+  sender: string;
+  subject: string;
+  receivedAt: string;
+  body: string;
+  reservation: {
+    type: "flight" | "hotel" | "train" | "ride";
+    title: string;
+    provider: string;
+    localTime: string;
+    timezone: string;
+    location: string;
+    confirmationCode: string;
+    confidence: Confidence;
+    issues: string[];
+  };
+}
+
 interface DrawerState {
   kind: "reservation" | "review";
   id: string;
@@ -507,6 +526,12 @@ const EMAIL_SAMPLES: EmailSample[] = [
   },
 ];
 
+function defaultStageForReservationType(type: "flight" | "hotel" | "train" | "ride"): TripStage {
+  if (type === "flight" || type === "train") return "airport";
+  if (type === "hotel" || type === "ride") return "arrival";
+  return "readiness";
+}
+
 function nextId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -791,6 +816,7 @@ export default function TravelAssistantPage() {
   const [reservations, setReservations] = useState<Reservation[]>(INITIAL_RESERVATIONS);
   const [reviewQueue, setReviewQueue] = useState<ReviewItem[]>(INITIAL_REVIEW_QUEUE);
   const [readinessItems, setReadinessItems] = useState<ReadinessItem[]>(INITIAL_CHECKLIST);
+  const [emailSamples, setEmailSamples] = useState<EmailSample[]>(EMAIL_SAMPLES);
 
   const [selectedEmailId, setSelectedEmailId] = useState(EMAIL_SAMPLES[0]?.id ?? "");
   const [activeDrawer, setActiveDrawer] = useState<DrawerState | null>(null);
@@ -815,8 +841,8 @@ export default function TravelAssistantPage() {
   );
 
   const selectedEmail = useMemo(
-    () => EMAIL_SAMPLES.find((sample) => sample.id === selectedEmailId) ?? EMAIL_SAMPLES[0],
-    [selectedEmailId],
+    () => emailSamples.find((sample) => sample.id === selectedEmailId) ?? emailSamples[0],
+    [emailSamples, selectedEmailId],
   );
 
   const cloneForUndo = useCallback(
@@ -2307,6 +2333,73 @@ export default function TravelAssistantPage() {
     setToast("Quick add published to live timeline.");
   };
 
+  const handleImportParsedReservations = useCallback(
+    (importedReservations: GmailImportedReservation[]): void => {
+      if (importedReservations.length === 0) {
+        setToast("No Gmail reservations found or Gmail access is unavailable.");
+        return;
+      }
+
+      const defaultAssignees = familyMembers.map((member) => member.id);
+      const importedSamples: EmailSample[] = importedReservations.map((item) => ({
+        id: `gmail-${item.messageId}`,
+        sender: item.sender,
+        receivedAt: item.receivedAt,
+        subject: item.subject,
+        body: item.body,
+        confidence: item.reservation.confidence,
+        issues: item.reservation.issues,
+        parsed: {
+          type: item.reservation.type,
+          title: item.reservation.title,
+          provider: item.reservation.provider,
+          localTime: item.reservation.localTime,
+          timezone: item.reservation.timezone,
+          location: item.reservation.location,
+          confirmationCode: item.reservation.confirmationCode,
+          assignedTo: defaultAssignees,
+          stage: defaultStageForReservationType(item.reservation.type),
+          critical: item.reservation.type === "flight" || item.reservation.type === "train" || item.reservation.type === "ride",
+          confidence: item.reservation.confidence,
+          notes: `Imported from Gmail message ${item.messageId}`,
+        },
+      }));
+      setEmailSamples(importedSamples);
+      setSelectedEmailId(importedSamples[0]?.id ?? "");
+
+      const queueItems: ReviewItem[] = importedReservations.map((item) => ({
+        id: nextId("review"),
+        reasons:
+          item.reservation.issues.length > 0
+            ? item.reservation.issues
+            : ["Imported from Gmail API. Confirm before publishing to live itinerary."],
+        impact: "Imported email needs review and confirmation before live activation.",
+        sourceEmailSubject: item.subject,
+        draft: {
+          type: item.reservation.type,
+          title: item.reservation.title,
+          provider: item.reservation.provider,
+          localTime: item.reservation.localTime,
+          timezone: item.reservation.timezone,
+          location: item.reservation.location,
+          confirmationCode: item.reservation.confirmationCode,
+          assignedTo: defaultAssignees,
+          stage: defaultStageForReservationType(item.reservation.type),
+          critical: item.reservation.type === "flight" || item.reservation.type === "train" || item.reservation.type === "ride",
+          confidence: item.reservation.confidence,
+          notes: `Imported via Gmail API from message ${item.messageId}.`,
+        },
+      }));
+      setReviewQueue((prev) => [...queueItems, ...prev]);
+      queueMutation("Imported reservations from Gmail API into review queue.", {
+        key: "gmail-import",
+        fingerprint: `gmail:${importedReservations.map((item) => item.messageId).join(",")}`,
+      });
+      setToast(`Imported ${importedReservations.length} Gmail reservation${importedReservations.length === 1 ? "" : "s"}.`);
+    },
+    [familyMembers, queueMutation, setToast],
+  );
+
   const handleImportAction = (target: "live" | "review"): void => {
     if (!selectedEmail) return;
     pushUndoSnapshot(target === "live" ? "Import added to live trip" : "Import routed to review queue");
@@ -3305,7 +3398,7 @@ export default function TravelAssistantPage() {
                   onChange={(event) => setSelectedEmailId(event.target.value)}
                   className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2"
                 >
-                  {EMAIL_SAMPLES.map((sample) => (
+                  {emailSamples.map((sample) => (
                     <option key={sample.id} value={sample.id}>
                       {sample.subject}
                     </option>
@@ -3374,6 +3467,7 @@ export default function TravelAssistantPage() {
               onRejectReview={handleRejectReview}
               onReparseReview={handleReparseReview}
               onMergeReview={handleMergeReview}
+              onImportParsedReservations={handleImportParsedReservations}
             />
           </article>
           </section>
