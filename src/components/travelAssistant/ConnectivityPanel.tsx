@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type {
   TravelConflictResolutionSummary,
   TravelProviderReport,
@@ -47,6 +48,17 @@ interface ConnectivityPanelProps {
   opsPanel: ReactNode;
 }
 
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replaceAll("-", "+").replaceAll("_", "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let index = 0; index < rawData.length; index += 1) {
+    outputArray[index] = rawData.charCodeAt(index);
+  }
+  return outputArray;
+}
+
 export function ConnectivityPanel({
   networkMode,
   onNetworkModeChange,
@@ -77,6 +89,92 @@ export function ConnectivityPanel({
   formatClock,
   opsPanel,
 }: ConnectivityPanelProps) {
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [notificationsBusy, setNotificationsBusy] = useState(false);
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
+  const notificationsSupported =
+    typeof window !== "undefined" && "Notification" in window && "serviceWorker" in navigator && "PushManager" in window;
+
+  useEffect(() => {
+    const refreshNotificationStatus = async (): Promise<void> => {
+      if (!notificationsSupported) {
+        setNotificationsEnabled(false);
+        return;
+      }
+
+      try {
+        const registration = await navigator.serviceWorker.register("/sw.js");
+        const subscription = await registration.pushManager.getSubscription();
+        setNotificationsEnabled(Boolean(subscription) && Notification.permission === "granted");
+      } catch {
+        setNotificationsEnabled(false);
+      }
+    };
+
+    void refreshNotificationStatus();
+  }, [notificationsSupported]);
+
+  const handleNotificationToggle = async (): Promise<void> => {
+    if (!notificationsSupported || notificationsBusy) {
+      return;
+    }
+    setNotificationsBusy(true);
+    setNotificationsError(null);
+    try {
+      const registration = await navigator.serviceWorker.register("/sw.js");
+      const existingSubscription = await registration.pushManager.getSubscription();
+
+      if (notificationsEnabled) {
+        if (existingSubscription) {
+          await existingSubscription.unsubscribe();
+        }
+        const response = await fetch("/api/push/unsubscribe", { method: "POST" });
+        if (!response.ok) {
+          throw new Error(`Push unsubscribe failed (${response.status})`);
+        }
+        setNotificationsEnabled(false);
+        return;
+      }
+
+      const permission =
+        Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+      if (permission !== "granted") {
+        throw new Error("Browser notification permission not granted.");
+      }
+
+      const keyResponse = await fetch("/api/push/subscribe", { method: "GET" });
+      if (!keyResponse.ok) {
+        throw new Error(`Unable to fetch VAPID public key (${keyResponse.status}).`);
+      }
+      const keyPayload = (await keyResponse.json()) as { publicKey?: string };
+      if (!keyPayload.publicKey) {
+        throw new Error("Push public key missing from server response.");
+      }
+
+      const subscription =
+        existingSubscription ??
+        (await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(keyPayload.publicKey),
+        }));
+
+      const subscribeResponse = await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(subscription.toJSON()),
+      });
+      if (!subscribeResponse.ok) {
+        throw new Error(`Push subscribe failed (${subscribeResponse.status}).`);
+      }
+      setNotificationsEnabled(true);
+    } catch (error) {
+      setNotificationsError(error instanceof Error ? error.message : "Unknown notification error.");
+      setNotificationsEnabled(false);
+    } finally {
+      setNotificationsBusy(false);
+    }
+  };
+
   return (
     <article className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
       <h2 className="text-lg font-semibold">Sync & connectivity policy</h2>
@@ -112,6 +210,30 @@ export function ConnectivityPanel({
             onChange={(event) => onAllowCellularLocationUpdatesChange(event.target.checked)}
           />
         </label>
+        <div className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <span>Enable notifications</span>
+            <button
+              type="button"
+              onClick={() => {
+                void handleNotificationToggle();
+              }}
+              disabled={!notificationsSupported || notificationsBusy}
+              className={`rounded-md px-2 py-1 text-xs font-semibold ${
+                notificationsEnabled
+                  ? "bg-emerald-500/90 text-slate-950 hover:bg-emerald-400"
+                  : "bg-slate-800 text-slate-100 hover:bg-slate-700"
+              } disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              {notificationsBusy ? "Updating..." : notificationsEnabled ? "Disable" : "Enable"}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-slate-400">
+            Notification status:{" "}
+            {notificationsSupported ? (notificationsEnabled ? "enabled" : "disabled") : "disabled (unsupported)"}
+          </p>
+          {notificationsError ? <p className="mt-1 text-xs text-red-200">{notificationsError}</p> : null}
+        </div>
         <div className="rounded-lg border border-slate-700 bg-slate-950/70 p-3">
           <p className="text-xs text-slate-300">{locationStatusMessage}</p>
           <p className="mt-1 text-xs text-slate-400">Last sync: {formatClock(lastSyncAt)}</p>
