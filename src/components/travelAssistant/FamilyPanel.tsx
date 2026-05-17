@@ -32,6 +32,10 @@ interface FamilyPanelProps {
   onToggleMemberVisibility: (memberId: string) => void;
   visibleFamilyMarkers: Array<{ member: FamilyMember; x: number; y: number }>;
   formatClock: (value: string | null) => string;
+  onSyncGoogleCalendar: () => void;
+  calendarSyncInFlight: boolean;
+  calendarSyncMessage: string | null;
+  calendarSyncTone: "neutral" | "success" | "error";
 }
 
 export function FamilyPanel({
@@ -48,6 +52,10 @@ export function FamilyPanel({
   onToggleMemberVisibility,
   visibleFamilyMarkers,
   formatClock,
+  onSyncGoogleCalendar,
+  calendarSyncInFlight,
+  calendarSyncMessage,
+  calendarSyncTone,
 }: FamilyPanelProps) {
   return (
     <article className="rounded-2xl border border-slate-200 bg-white/90 p-4 dark:border-slate-700 dark:bg-slate-900/70">
@@ -82,6 +90,38 @@ export function FamilyPanel({
           ))}
         </select>
       </label>
+
+      <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-950/60">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="font-semibold text-slate-900 dark:text-slate-100">Google Calendar sync</p>
+            <p className="text-xs text-slate-600 dark:text-slate-400">
+              Mirror reservations to Google Calendar for family visibility and reminders.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onSyncGoogleCalendar}
+            disabled={calendarSyncInFlight}
+            className="rounded-md bg-indigo-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {calendarSyncInFlight ? "Syncing..." : "Sync to Google Calendar"}
+          </button>
+        </div>
+        {calendarSyncMessage ? (
+          <p
+            className={`mt-2 text-xs ${
+              calendarSyncTone === "success"
+                ? "text-emerald-700 dark:text-emerald-300"
+                : calendarSyncTone === "error"
+                  ? "text-rose-700 dark:text-rose-300"
+                  : "text-slate-600 dark:text-slate-400"
+            }`}
+          >
+            {calendarSyncMessage}
+          </p>
+        ) : null}
+      </div>
 
       <div className="mt-3 grid gap-2">
         {familyMembers.map((member) => {

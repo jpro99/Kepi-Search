@@ -638,6 +638,30 @@ function buildCsv(rows: ExportRow[]): string {
   return [header.join(","), ...body].join("\n");
 }
 
+function toCalendarSyncReservationPayload(reservation: Reservation): {
+  id: string;
+  type: ReservationType;
+  title: string;
+  confirmationCode: string;
+  localTime: string;
+  location: string;
+  timezone: string;
+  provider: string;
+  notes: string;
+} {
+  return {
+    id: reservation.id,
+    type: reservation.type,
+    title: reservation.title,
+    confirmationCode: reservation.confirmationCode,
+    localTime: reservation.localTime,
+    location: reservation.location,
+    timezone: reservation.timezone,
+    provider: reservation.provider,
+    notes: reservation.notes,
+  };
+}
+
 function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -817,6 +841,9 @@ export default function TravelAssistantPage() {
   const [lastConflictSummary, setLastConflictSummary] = useState<TravelConflictResolutionSummary | null>(null);
   const [opsSnapshot, setOpsSnapshot] = useState<TravelOpsSnapshot | null>(null);
   const [opsError, setOpsError] = useState<string | null>(null);
+  const [calendarSyncInFlight, setCalendarSyncInFlight] = useState(false);
+  const [calendarSyncMessage, setCalendarSyncMessage] = useState<string | null>(null);
+  const [calendarSyncTone, setCalendarSyncTone] = useState<"neutral" | "success" | "error">("neutral");
   const [opsExpanded, setOpsExpanded] = useState(false);
   const [opsLoading, setOpsLoading] = useState(false);
   const [opsActionPending, setOpsActionPending] = useState<
@@ -2493,6 +2520,54 @@ export default function TravelAssistantPage() {
     });
   };
 
+  const syncReservationsToGoogleCalendar = useCallback(
+    async (reservationSnapshot: Reservation[], source: "manual" | "review-accept"): Promise<void> => {
+      setCalendarSyncInFlight(true);
+      setCalendarSyncTone("neutral");
+      setCalendarSyncMessage("Syncing reservations to Google Calendar...");
+      try {
+        const response = await fetch("/api/travel-updates/calendar-sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reservations: reservationSnapshot.map(toCalendarSyncReservationPayload),
+          }),
+        });
+        const payload = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+          created?: number;
+          updated?: number;
+          skipped?: number;
+          failed?: number;
+        };
+        if (!response.ok || payload.ok === false) {
+          throw new Error(payload.error ?? `Calendar sync failed with status ${response.status}`);
+        }
+        const summary = `Calendar sync complete: ${payload.created ?? 0} created, ${payload.updated ?? 0} updated, ${payload.skipped ?? 0} skipped${
+          payload.failed && payload.failed > 0 ? `, ${payload.failed} failed` : ""
+        }.`;
+        setCalendarSyncTone("success");
+        setCalendarSyncMessage(summary);
+        if (source === "manual") {
+          setToast(summary);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown calendar sync error.";
+        setCalendarSyncTone("error");
+        setCalendarSyncMessage(`Calendar sync failed: ${message}`);
+        setToast(`Calendar sync failed: ${message}`);
+      } finally {
+        setCalendarSyncInFlight(false);
+      }
+    },
+    [setToast],
+  );
+
+  const handleManualCalendarSync = useCallback((): void => {
+    void syncReservationsToGoogleCalendar(reservations, "manual");
+  }, [reservations, syncReservationsToGoogleCalendar]);
+
   const openDrawer = useCallback(
     (kind: "reservation" | "review", id: string): void => {
       if (kind === "reservation") {
@@ -2714,12 +2789,14 @@ export default function TravelAssistantPage() {
       id: nextId("res"),
       source: "review-accepted",
     };
+    const nextReservations = [newReservation, ...reservations];
     setReservations((prev) => [newReservation, ...prev]);
     setReviewQueue((prev) => prev.filter((item) => item.id !== reviewId));
     queueMutation("Review item accepted into live trip.", {
       key: "review-accept",
       reservationId: newReservation.id,
     });
+    void syncReservationsToGoogleCalendar(nextReservations, "review-accept");
   };
 
   const handleRejectReview = (reviewId: string): void => {
@@ -3610,6 +3687,10 @@ export default function TravelAssistantPage() {
               onToggleMemberVisibility={toggleMemberVisibility}
               visibleFamilyMarkers={visibleFamilyMarkers}
               formatClock={formatClock}
+              onSyncGoogleCalendar={handleManualCalendarSync}
+              calendarSyncInFlight={calendarSyncInFlight}
+              calendarSyncMessage={calendarSyncMessage}
+              calendarSyncTone={calendarSyncTone}
             />
           </Suspense>
           </section>
