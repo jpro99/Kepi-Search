@@ -155,7 +155,7 @@ export function ConnectivityPanel({
         existingSubscription ??
         (await registration.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(keyPayload.publicKey),
+          applicationServerKey: urlBase64ToUint8Array(keyPayload.publicKey) as unknown as BufferSource,
         }));
 
       const subscribeResponse = await fetch("/api/push/subscribe", {
