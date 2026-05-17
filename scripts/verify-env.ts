@@ -24,6 +24,7 @@ const SERVICE_GROUPS: ServiceGroup[] = [
   { name: "Web Push", patterns: [/^VAPID_/u] },
   { name: "Map / Routing", patterns: [/^NEXT_PUBLIC_MAPTILER_/u, /^OPENROUTESERVICE_/u] },
   { name: "Aviation / Rail", patterns: [/^AVIATIONSTACK_/u, /^AMTRAK_/u] },
+  { name: "Anthropic", patterns: [/^ANTHROPIC_/u] },
   { name: "Vercel KV", patterns: [/^KV_/u] },
   { name: "Upstash", patterns: [/^UPSTASH_/u] },
   { name: "Travel Update Runtime", patterns: [/^TRAVEL_UPDATE_/u] },

@@ -2,7 +2,11 @@ import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { logger } from "@/lib/logger";
 
-type RateLimitPolicyName = "travel-updates-general" | "travel-updates-gmail-import" | "push-subscribe";
+type RateLimitPolicyName =
+  | "travel-updates-general"
+  | "travel-updates-gmail-import"
+  | "push-subscribe"
+  | "ai-suggestions";
 
 type RateLimitPolicy = {
   limit: number;
@@ -30,6 +34,11 @@ const RATE_LIMIT_POLICIES: Record<RateLimitPolicyName, RateLimitPolicy> = {
     limit: 5,
     windowSeconds: 60,
     prefix: "kepi:rl:push-subscribe",
+  },
+  "ai-suggestions": {
+    limit: 10,
+    windowSeconds: 60 * 60,
+    prefix: "kepi:rl:ai-suggestions",
   },
 };
 
@@ -70,6 +79,14 @@ const upstashLimiterByPolicy: Partial<Record<RateLimitPolicyName, Ratelimit>> = 
           `${RATE_LIMIT_POLICIES["push-subscribe"].windowSeconds} s`,
         ),
         prefix: RATE_LIMIT_POLICIES["push-subscribe"].prefix,
+      }),
+      "ai-suggestions": new Ratelimit({
+        redis: upstashRedis as Redis,
+        limiter: Ratelimit.slidingWindow(
+          RATE_LIMIT_POLICIES["ai-suggestions"].limit,
+          `${RATE_LIMIT_POLICIES["ai-suggestions"].windowSeconds} s`,
+        ),
+        prefix: RATE_LIMIT_POLICIES["ai-suggestions"].prefix,
       }),
     }
   : {};

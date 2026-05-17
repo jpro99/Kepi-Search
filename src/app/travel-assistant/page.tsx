@@ -41,6 +41,7 @@ import type {
   TravelUpdateSeverity,
 } from "@/lib/travelAssistant/travelUpdateTypes";
 import { ConnectivityPanel } from "@/components/travelAssistant/ConnectivityPanel";
+import { AISuggestionPanel } from "@/components/travelAssistant/AISuggestionPanel";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { QuickAddLane } from "@/components/travelAssistant/QuickAddLane";
 import { ReservationList } from "@/components/travelAssistant/ReservationList";
@@ -3159,6 +3160,14 @@ export default function TravelAssistantPage() {
           onToggleMobileSimpleView={() => setMobileSimpleView((value) => !value)}
           onMobileViewPanelChange={setMobileViewPanel}
         />
+        {shouldRenderMobilePanel("essentials") ? (
+          <AISuggestionPanel
+            tripStage={tripStage}
+            activeScenario={activeScenario}
+            reservations={reservations}
+            updateFeed={updateFeed}
+          />
+        ) : null}
 
         {shouldRenderMobilePanel("essentials") ? (
           <JourneyFlowPanel
