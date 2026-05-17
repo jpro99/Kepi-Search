@@ -48,6 +48,7 @@ type ReservationType = "flight" | "hotel" | "train" | "ride" | "dinner";
 type Confidence = "high" | "medium" | "low";
 type GuidanceTone = "subtle" | "standard";
 type MobileViewPanel = "essentials" | "timeline" | "recovery" | "family" | "all";
+type DemoPresetId = "smooth-trip" | "moderate-delay" | "severe-disruption";
 type VisibilityMode = "all-members" | "organizer-only";
 type DisruptionScenario = "none" | "missed-flight" | "train-delay" | "ride-no-show";
 
@@ -170,6 +171,12 @@ interface UndoAuditEntry {
   undoneAt: string;
 }
 
+interface DemoPresetConfig {
+  id: DemoPresetId;
+  label: string;
+  summary: string;
+}
+
 interface UpdateFeedItem {
   id: string;
   reservationId: string;
@@ -243,6 +250,23 @@ const TYPE_REMINDER_THRESHOLDS: Record<ReservationType, number[]> = {
 };
 const UPDATE_REPLAY_WINDOW_MS = 30 * 60_000;
 const SESSION_STORAGE_KEY = "travel-assistant-session-v1";
+const DEMO_PRESETS: DemoPresetConfig[] = [
+  {
+    id: "smooth-trip",
+    label: "Smooth trip",
+    summary: "Green status, clean queue, readiness complete.",
+  },
+  {
+    id: "moderate-delay",
+    label: "Moderate delay",
+    summary: "Yellow airport mode with manageable delay.",
+  },
+  {
+    id: "severe-disruption",
+    label: "Severe disruption",
+    summary: "Red recovery mode with urgent actions.",
+  },
+];
 
 const EMPTY_DRAFT: ReservationDraft = {
   type: "flight",
@@ -674,6 +698,13 @@ function normalizeCoordinates(members: FamilyMember[]): Array<{ member: FamilyMe
   });
 }
 
+function appendUniqueNote(existing: string, note: string): string {
+  if (existing.includes(note)) {
+    return existing;
+  }
+  return `${existing}\n${note}`.trim();
+}
+
 export default function TravelAssistantPage() {
   const updateMode: TravelUpdateMode =
     (process.env.NEXT_PUBLIC_TRAVEL_UPDATES_MODE ?? "auto").toLowerCase() === "off"
@@ -692,6 +723,8 @@ export default function TravelAssistantPage() {
   const [mobileSimpleView, setMobileSimpleView] = useState(true);
   const [mobileViewPanel, setMobileViewPanel] = useState<MobileViewPanel>("essentials");
   const [isCompactViewport, setIsCompactViewport] = useState(false);
+  const [lastDemoPresetAppliedAt, setLastDemoPresetAppliedAt] = useState<string | null>(null);
+  const [lastDemoPresetId, setLastDemoPresetId] = useState<DemoPresetId | null>(null);
   const [activeScenario, setActiveScenario] = useState<DisruptionScenario>("none");
   const [minutesToDeparture, setMinutesToDeparture] = useState(165);
   const [offlineOutbox, setOfflineOutbox] = useState<OfflineOutboxSnapshot>(() =>
@@ -1898,6 +1931,151 @@ export default function TravelAssistantPage() {
     setToast(`Moved to ${STAGE_LABEL[nextStage]} stage.`);
   };
 
+  const applyDemoPreset = (preset: DemoPresetId): void => {
+    pushUndoSnapshot(`Applied demo preset: ${preset}`);
+    const appliedAt = new Date().toISOString();
+    setLastDemoPresetAppliedAt(appliedAt);
+    setLastDemoPresetId(preset);
+
+    if (preset === "smooth-trip") {
+      setTripStage("pre-departure");
+      setTripStatus("green");
+      setActiveScenario("none");
+      setMinutesToDeparture(180);
+      setNetworkMode("wifi");
+      setWifiOnlySync(false);
+      setAllowCellularLocationUpdates(true);
+      setReadinessItems((previous) =>
+        previous.map((item) => (item.required ? { ...item, complete: true } : item)),
+      );
+      setReviewQueue([]);
+      setReservations((previous) =>
+        previous.map((reservation) =>
+          reservation.critical
+            ? {
+                ...reservation,
+                confidence: "high",
+                notes: appendUniqueNote(reservation.notes, "[Demo] Smooth trip confirmation complete."),
+              }
+            : reservation,
+        ),
+      );
+      setToast("Demo preset applied: smooth trip.");
+      return;
+    }
+
+    if (preset === "moderate-delay") {
+      setTripStage("airport");
+      setTripStatus("yellow");
+      setActiveScenario("train-delay");
+      setMinutesToDeparture(95);
+      setNetworkMode("cellular");
+      setWifiOnlySync(true);
+      setAllowCellularLocationUpdates(true);
+      setReservations((previous) => {
+        const targetIndex = previous.findIndex(
+          (reservation) =>
+            reservation.type === "flight" || reservation.type === "train" || reservation.type === "ride",
+        );
+        return previous.map((reservation, index) => {
+          if (index !== targetIndex) {
+            return reservation;
+          }
+          const baseMs = parseDateInput(reservation.localTime);
+          return {
+            ...reservation,
+            localTime: Number.isNaN(baseMs) ? reservation.localTime : formatDateTimeLocal(baseMs + 40 * 60_000),
+            confidence: "medium",
+            notes: appendUniqueNote(
+              reservation.notes,
+              "[Demo] Moderate delay simulated. Confirm transfer and meeting times.",
+            ),
+          };
+        });
+      });
+      setReviewQueue((previous) => {
+        if (previous.length > 0) {
+          return previous;
+        }
+        return [
+          {
+            id: nextId("review"),
+            reasons: ["Delay caused uncertainty in transfer handoff timing."],
+            impact: "Transfer and dinner windows might shift by 20-40 minutes.",
+            sourceEmailSubject: "Demo preset: moderate delay",
+            draft: {
+              type: "ride",
+              title: "Airport transfer timing check",
+              provider: "Rideshare",
+              localTime: formatDateTimeLocal(Date.now() + 2 * 60 * 60_000),
+              timezone: "America/Los_Angeles",
+              location: "Airport pickup zone",
+              confirmationCode: "DMO-4021",
+              assignedTo: [selectedFamilyMember.id],
+              stage: "arrival",
+              critical: true,
+              confidence: "medium",
+              notes: "Verify updated pickup estimate after arrival delay.",
+            },
+          },
+        ];
+      });
+      setToast("Demo preset applied: moderate delay scenario.");
+      return;
+    }
+
+    setTripStage("recovery");
+    setTripStatus("red");
+    setActiveScenario("missed-flight");
+    setMinutesToDeparture(30);
+    setNetworkMode("offline");
+    setWifiOnlySync(true);
+    setAllowCellularLocationUpdates(false);
+    setReadinessItems((previous) =>
+      previous.map((item, index) => (item.required && index < 2 ? { ...item, complete: false } : item)),
+    );
+    setReviewQueue((previous) => {
+      if (previous.length >= 2) {
+        return previous;
+      }
+      return [
+        {
+          id: nextId("review"),
+          reasons: ["Missed-flight recovery requires confirmation of rebooked segment details."],
+          impact: "Incorrect rebook timing can propagate to hotel and transfer misses.",
+          sourceEmailSubject: "Demo preset: severe disruption rebook",
+          draft: {
+            type: "flight",
+            title: "Rebooked flight pending confirmation",
+            provider: "Airline desk",
+            localTime: formatDateTimeLocal(Date.now() + 4 * 60 * 60_000),
+            timezone: "America/Los_Angeles",
+            location: "Updated gate pending",
+            confirmationCode: "DMO-RBK1",
+            assignedTo: [selectedFamilyMember.id],
+            stage: "recovery",
+            critical: true,
+            confidence: "low",
+            notes: "Validate final departure and arrival before publishing live.",
+          },
+        },
+        ...previous,
+      ];
+    });
+    setReservations((previous) =>
+      previous.map((reservation) =>
+        reservation.critical
+          ? {
+              ...reservation,
+              confidence: "high",
+              notes: appendUniqueNote(reservation.notes, "[Demo] Severe disruption protocol active."),
+            }
+          : reservation,
+      ),
+    );
+    setToast("Demo preset applied: severe disruption scenario.");
+  };
+
   const triggerReminderDispatch = (): void => {
     const dueCheckpoints = reminderLadder.filter((item) => item.state === "due" || item.state === "missed");
     if (dueCheckpoints.length === 0) {
@@ -2832,6 +3010,33 @@ export default function TravelAssistantPage() {
                 {nextStage === tripStage ? "Stay in recovery and stabilize" : STAGE_LABEL[nextStage]}
               </p>
               <p className="mt-1 text-xs text-slate-300">{nextStageAction}</p>
+            </div>
+          </div>
+          <div className="mt-3 rounded-lg border border-slate-700 bg-slate-950/60 p-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-slate-200">Demo mode presets</p>
+              <p className="text-[11px] text-slate-400">
+                {lastDemoPresetAppliedAt
+                  ? `Last preset: ${lastDemoPresetId ?? "n/a"} at ${formatClock(lastDemoPresetAppliedAt)}`
+                  : "No preset applied yet."}
+              </p>
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-3">
+              {DEMO_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => applyDemoPreset(preset.id)}
+                  className={`rounded-lg border px-2.5 py-2 text-left text-xs ring-1 transition ${
+                    lastDemoPresetId === preset.id
+                      ? "border-cyan-400/60 bg-cyan-500/15 text-cyan-100 ring-cyan-400/50"
+                      : "border-slate-700 bg-slate-900 text-slate-200 ring-slate-700 hover:bg-slate-800"
+                  }`}
+                >
+                  <p className="font-semibold">{preset.label}</p>
+                  <p className="mt-1 text-[11px] text-slate-300">{preset.summary}</p>
+                </button>
+              ))}
             </div>
           </div>
         </section>
