@@ -48,6 +48,8 @@ import type { TripSetupDraft } from "@/components/onboarding/TripSetupForm";
 import { QuickAddLane } from "@/components/travelAssistant/QuickAddLane";
 import { ReservationList } from "@/components/travelAssistant/ReservationList";
 import { ReviewQueue } from "@/components/travelAssistant/ReviewQueue";
+import { TripSearch, type TripSearchSelection } from "@/components/travelAssistant/TripSearch";
+import { TripSwitcher } from "@/components/travelAssistant/TripSwitcher";
 import { TripOrientationCard } from "@/components/travelAssistant/TripOrientationCard";
 import { JourneyFlowPanel } from "./components/JourneyFlowPanel";
 import { TravelAssistantTopControls } from "./components/TravelAssistantTopControls";
@@ -229,6 +231,23 @@ interface UpdateFeedItem {
   detail: string;
   provider: string;
   appliedAt: string;
+}
+
+interface ManagedTrip {
+  id: string;
+  name: string;
+  destination: string;
+  startDate: string;
+  endDate: string;
+  stage: TripStage;
+  reservations: Reservation[];
+  createdAt: string;
+  tripStatus: TripStatus;
+  minutesToDeparture: number;
+  activeScenario: DisruptionScenario;
+  reviewQueue: ReviewItem[];
+  readinessItems: ReadinessItem[];
+  updateFeed: UpdateFeedItem[];
 }
 
 const fetchInitialOpsSnapshotCached = cache(async (): Promise<TravelOpsSnapshot> => {
@@ -797,6 +816,97 @@ function appendUniqueNote(existing: string, note: string): string {
   return `${existing}\n${note}`.trim();
 }
 
+const TRIP_API_ROUTE = "/api/trips";
+
+function normalizeManagedTrip(trip: unknown): ManagedTrip | null {
+  if (!trip || typeof trip !== "object") {
+    return null;
+  }
+  const candidate = trip as Partial<ManagedTrip>;
+  if (
+    typeof candidate.id !== "string" ||
+    typeof candidate.name !== "string" ||
+    typeof candidate.destination !== "string" ||
+    typeof candidate.startDate !== "string" ||
+    typeof candidate.endDate !== "string" ||
+    typeof candidate.stage !== "string" ||
+    typeof candidate.createdAt !== "string" ||
+    !Array.isArray(candidate.reservations)
+  ) {
+    return null;
+  }
+
+  return {
+    id: candidate.id,
+    name: candidate.name,
+    destination: candidate.destination,
+    startDate: candidate.startDate,
+    endDate: candidate.endDate,
+    stage: candidate.stage as TripStage,
+    reservations: candidate.reservations as Reservation[],
+    createdAt: candidate.createdAt,
+    tripStatus:
+      candidate.tripStatus === "green" || candidate.tripStatus === "yellow" || candidate.tripStatus === "red"
+        ? candidate.tripStatus
+        : "yellow",
+    minutesToDeparture:
+      typeof candidate.minutesToDeparture === "number" ? Math.round(candidate.minutesToDeparture) : 180,
+    activeScenario:
+      candidate.activeScenario === "none" ||
+      candidate.activeScenario === "missed-flight" ||
+      candidate.activeScenario === "train-delay" ||
+      candidate.activeScenario === "ride-no-show"
+        ? candidate.activeScenario
+        : "none",
+    reviewQueue: Array.isArray(candidate.reviewQueue) ? (candidate.reviewQueue as ReviewItem[]) : [],
+    readinessItems: Array.isArray(candidate.readinessItems) ? (candidate.readinessItems as ReadinessItem[]) : [],
+    updateFeed: Array.isArray(candidate.updateFeed) ? (candidate.updateFeed as UpdateFeedItem[]) : [],
+  };
+}
+
+function defaultTripFromCurrentState(input: {
+  reservations: Reservation[];
+  tripStage: TripStage;
+  tripStatus: TripStatus;
+  minutesToDeparture: number;
+  activeScenario: DisruptionScenario;
+  reviewQueue: ReviewItem[];
+  readinessItems: ReadinessItem[];
+  updateFeed: UpdateFeedItem[];
+}): {
+  name: string;
+  destination: string;
+  startDate: string;
+  endDate: string;
+  stage: TripStage;
+  reservations: Reservation[];
+  tripStatus: TripStatus;
+  minutesToDeparture: number;
+  activeScenario: DisruptionScenario;
+  reviewQueue: ReviewItem[];
+  readinessItems: ReadinessItem[];
+  updateFeed: UpdateFeedItem[];
+} {
+  const fallbackDate = new Date().toISOString().slice(0, 10);
+  const firstReservationDate = input.reservations[0]?.localTime?.slice(0, 10) || fallbackDate;
+  const startDate = firstReservationDate;
+  const endDate = input.reservations[1]?.localTime?.slice(0, 10) || firstReservationDate;
+  return {
+    name: "My First Trip",
+    destination: input.reservations[0]?.location || "Set destination",
+    startDate,
+    endDate,
+    stage: input.tripStage,
+    reservations: input.reservations,
+    tripStatus: input.tripStatus,
+    minutesToDeparture: input.minutesToDeparture,
+    activeScenario: input.activeScenario,
+    reviewQueue: input.reviewQueue,
+    readinessItems: input.readinessItems,
+    updateFeed: input.updateFeed,
+  };
+}
+
 export default function TravelAssistantPage() {
   const updateMode: TravelUpdateMode =
     (process.env.NEXT_PUBLIC_TRAVEL_UPDATES_MODE ?? "auto").toLowerCase() === "off"
@@ -804,6 +914,10 @@ export default function TravelAssistantPage() {
       : (process.env.NEXT_PUBLIC_TRAVEL_UPDATES_MODE ?? "auto").toLowerCase() === "mock"
         ? "mock"
         : "auto";
+  const [trips, setTrips] = useState<ManagedTrip[]>([]);
+  const [activeTripId, setActiveTripId] = useState<string | null>(null);
+  const [tripsLoading, setTripsLoading] = useState(true);
+  const [highlightedReservationId, setHighlightedReservationId] = useState<string | null>(null);
   const [tripStage, setTripStage] = useState<TripStage>("readiness");
   const [tripStatus, setTripStatus] = useState<TripStatus>("yellow");
   const [networkMode, setNetworkMode] = useState<NetworkMode>("wifi");
@@ -859,6 +973,8 @@ export default function TravelAssistantPage() {
   const recentAppliedUpdateKeysRef = useRef<Map<string, number>>(new Map());
   const opsFetchInFlightRef = useRef(false);
   const sessionHydratedRef = useRef(false);
+  const tripsHydratedRef = useRef(false);
+  const applyingTripStateRef = useRef(false);
   const drawerContainerRef = useRef<HTMLDivElement | null>(null);
   const drawerCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastFocusedElementBeforeDrawerRef = useRef<HTMLElement | null>(null);
@@ -1020,6 +1136,264 @@ export default function TravelAssistantPage() {
     policy.lastShownAtMs = now;
     setToastRaw(normalized);
   }, []);
+
+  const activeTripRuntimeSnapshot = useMemo(
+    () => ({
+      stage: tripStage,
+      reservations,
+      tripStatus,
+      minutesToDeparture,
+      activeScenario,
+      reviewQueue,
+      readinessItems,
+      updateFeed,
+    }),
+    [
+      activeScenario,
+      minutesToDeparture,
+      readinessItems,
+      reservations,
+      reviewQueue,
+      tripStage,
+      tripStatus,
+      updateFeed,
+    ],
+  );
+
+  const applyManagedTripToState = useCallback((trip: ManagedTrip): void => {
+    applyingTripStateRef.current = true;
+    setTripStage(trip.stage);
+    setTripStatus(trip.tripStatus);
+    setMinutesToDeparture(trip.minutesToDeparture);
+    setActiveScenario(trip.activeScenario);
+    setReservations(trip.reservations);
+    setReviewQueue(trip.reviewQueue);
+    setReadinessItems(trip.readinessItems);
+    setUpdateFeed(trip.updateFeed);
+    setHighlightedReservationId(null);
+    queueMicrotask(() => {
+      applyingTripStateRef.current = false;
+    });
+  }, []);
+
+  const refreshTripsFromServer = useCallback(async (): Promise<number> => {
+    const response = await fetch(TRIP_API_ROUTE, {
+      method: "GET",
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error(`Trip API returned ${response.status}`);
+    }
+    const payload = (await response.json()) as {
+      trips?: unknown[];
+      activeTripId?: string | null;
+      activeTrip?: unknown;
+    };
+
+    const parsedTrips = Array.isArray(payload.trips)
+      ? payload.trips.map((trip) => normalizeManagedTrip(trip)).filter((trip): trip is ManagedTrip => trip !== null)
+      : [];
+    const payloadActiveTrip = normalizeManagedTrip(payload.activeTrip);
+    const resolvedActiveTripId = payloadActiveTrip?.id ?? payload.activeTripId ?? parsedTrips[0]?.id ?? null;
+    const resolvedActiveTrip =
+      payloadActiveTrip ?? parsedTrips.find((trip) => trip.id === resolvedActiveTripId) ?? parsedTrips[0] ?? null;
+
+    setTrips(parsedTrips);
+    setActiveTripId(resolvedActiveTripId);
+    if (resolvedActiveTrip) {
+      applyManagedTripToState(resolvedActiveTrip);
+    }
+    tripsHydratedRef.current = true;
+    setTripsLoading(false);
+    return parsedTrips.length;
+  }, [applyManagedTripToState]);
+
+  const ensureDefaultTripIfMissing = useCallback(async (): Promise<void> => {
+    const response = await fetch(TRIP_API_ROUTE, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        trip: defaultTripFromCurrentState({
+          reservations,
+          tripStage,
+          tripStatus,
+          minutesToDeparture,
+          activeScenario,
+          reviewQueue,
+          readinessItems,
+          updateFeed,
+        }),
+        setActive: true,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`Trip API returned ${response.status}`);
+    }
+  }, [
+    activeScenario,
+    minutesToDeparture,
+    readinessItems,
+    reservations,
+    reviewQueue,
+    tripStage,
+    tripStatus,
+    updateFeed,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadTrips = async (): Promise<void> => {
+      setTripsLoading(true);
+      try {
+        const tripCount = await refreshTripsFromServer();
+        if (cancelled) return;
+        if (tripCount === 0) {
+          await ensureDefaultTripIfMissing();
+          if (cancelled) return;
+          await refreshTripsFromServer();
+        }
+      } catch (error) {
+        setTripsLoading(false);
+        const message = error instanceof Error ? error.message : "Unknown trip load error";
+        setToast(`Unable to load trips: ${message}`);
+      }
+    };
+    void loadTrips();
+    return () => {
+      cancelled = true;
+    };
+  }, [ensureDefaultTripIfMissing, refreshTripsFromServer, setToast]);
+
+  useEffect(() => {
+    if (!tripsHydratedRef.current) return;
+    if (!activeTripId) return;
+    if (applyingTripStateRef.current) return;
+    const timeout = window.setTimeout(() => {
+      void fetch(TRIP_API_ROUTE, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update",
+          id: activeTripId,
+          patch: activeTripRuntimeSnapshot,
+        }),
+      }).then(async (response) => {
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json()) as { trips?: unknown[] };
+        if (Array.isArray(payload.trips)) {
+          const parsedTrips = payload.trips
+            .map((trip) => normalizeManagedTrip(trip))
+            .filter((trip): trip is ManagedTrip => trip !== null);
+          setTrips(parsedTrips);
+        }
+      });
+    }, 500);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [activeTripId, activeTripRuntimeSnapshot]);
+
+  const handleSwitchTrip = useCallback(
+    async (tripId: string): Promise<void> => {
+      if (!tripId || tripId === activeTripId) {
+        return;
+      }
+      try {
+        const response = await fetch(TRIP_API_ROUTE, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "set-active",
+            id: tripId,
+          }),
+        });
+        if (!response.ok) {
+          setToast("Could not switch trips right now.");
+          return;
+        }
+        const payload = (await response.json()) as {
+          activeTrip?: unknown;
+          trips?: unknown[];
+          activeTripId?: string;
+        };
+        const nextActiveTrip = normalizeManagedTrip(payload.activeTrip);
+        if (!nextActiveTrip) {
+          setToast("Selected trip could not be loaded.");
+          return;
+        }
+        setActiveTripId(payload.activeTripId ?? nextActiveTrip.id);
+        if (Array.isArray(payload.trips)) {
+          const parsedTrips = payload.trips
+            .map((trip) => normalizeManagedTrip(trip))
+            .filter((trip): trip is ManagedTrip => trip !== null);
+          setTrips(parsedTrips);
+        }
+        applyManagedTripToState(nextActiveTrip);
+        setToast(`Switched to ${nextActiveTrip.name}.`);
+      } catch {
+        setToast("Could not switch trips right now.");
+      }
+    },
+    [activeTripId, applyManagedTripToState, setToast],
+  );
+
+  const handleCreateTrip = useCallback(async (): Promise<void> => {
+    const nextTripNumber = trips.length + 1;
+    const now = new Date();
+    const startDate = now.toISOString().slice(0, 10);
+    const endDate = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    try {
+      const response = await fetch(TRIP_API_ROUTE, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          setActive: true,
+          trip: {
+            name: `Trip ${nextTripNumber}`,
+            destination: "Set destination",
+            startDate,
+            endDate,
+            stage: "readiness",
+            reservations: [],
+            tripStatus: "yellow",
+            minutesToDeparture: 180,
+            activeScenario: "none",
+            reviewQueue: [],
+            readinessItems: INITIAL_CHECKLIST,
+            updateFeed: [],
+          },
+        }),
+      });
+      if (!response.ok) {
+        setToast("Could not create a new trip.");
+        return;
+      }
+      const payload = (await response.json()) as {
+        trip?: unknown;
+        trips?: unknown[];
+        activeTrip?: unknown;
+        activeTripId?: string | null;
+      };
+      const createdTrip = normalizeManagedTrip(payload.trip ?? payload.activeTrip);
+      if (!createdTrip) {
+        setToast("Trip created but response was invalid.");
+        return;
+      }
+      if (Array.isArray(payload.trips)) {
+        const parsedTrips = payload.trips
+          .map((trip) => normalizeManagedTrip(trip))
+          .filter((trip): trip is ManagedTrip => trip !== null);
+        setTrips(parsedTrips);
+      }
+      setActiveTripId(payload.activeTripId ?? createdTrip.id);
+      applyManagedTripToState(createdTrip);
+      setToast(`Created ${createdTrip.name}.`);
+    } catch {
+      setToast("Could not create a new trip.");
+    }
+  }, [applyManagedTripToState, setToast, trips.length]);
 
   const handleCreateOnboardingTrip = useCallback(
     (tripDraft: TripSetupDraft): void => {
@@ -2654,6 +3028,22 @@ export default function TravelAssistantPage() {
     [reservations, reviewQueue],
   );
 
+  const handleTripSearchSelection = useCallback(
+    async (selection: TripSearchSelection): Promise<void> => {
+      await handleSwitchTrip(selection.tripId);
+      if (selection.reservationId) {
+        setHighlightedReservationId(selection.reservationId);
+        openDrawer("reservation", selection.reservationId);
+        window.setTimeout(() => {
+          setHighlightedReservationId((current) =>
+            current === selection.reservationId ? null : current,
+          );
+        }, 7000);
+      }
+    },
+    [handleSwitchTrip, openDrawer],
+  );
+
   const closeDrawer = useCallback((): void => {
     setActiveDrawer(null);
   }, []);
@@ -3150,7 +3540,40 @@ export default function TravelAssistantPage() {
     <main className="relative min-h-screen overflow-x-hidden bg-slate-950 text-slate-100">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_10%,rgba(56,189,248,0.14),transparent_45%),radial-gradient(circle_at_85%_25%,rgba(129,140,248,0.18),transparent_42%),radial-gradient(circle_at_50%_100%,rgba(34,197,94,0.08),transparent_45%)]" />
       <div className="relative z-10 mx-auto max-w-[1400px] space-y-5 px-3 py-5 sm:space-y-6 sm:px-4 sm:py-6 md:px-6">
-        <header>
+        <header className="space-y-3">
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+            <TripSwitcher
+              trips={trips.map((trip) => ({
+                id: trip.id,
+                name: trip.name,
+                destination: trip.destination,
+                startDate: trip.startDate,
+                endDate: trip.endDate,
+              }))}
+              activeTripId={activeTripId}
+              onSwitchTrip={handleSwitchTrip}
+              onCreateTrip={handleCreateTrip}
+              disabled={tripsLoading}
+            />
+            <TripSearch
+              trips={trips.map((trip) => ({
+                id: trip.id,
+                name: trip.name,
+                destination: trip.destination,
+                startDate: trip.startDate,
+                endDate: trip.endDate,
+                reservations: trip.reservations.map((reservation) => ({
+                  id: reservation.id,
+                  type: reservation.type,
+                  title: reservation.title,
+                  confirmationCode: reservation.confirmationCode,
+                  localTime: reservation.localTime,
+                })),
+              }))}
+              onSelectResult={handleTripSearchSelection}
+              disabled={tripsLoading}
+            />
+          </div>
           <TravelAssistantTopControls
             tripStatus={tripStatus}
             statusBadgeByTripStatus={STATUS_BADGE}
@@ -3567,6 +3990,7 @@ export default function TravelAssistantPage() {
             hasGlobalOutboxPending={hasGlobalOutboxPending}
             flightLiveStatusByReservationId={flightLiveStatusByReservationId}
             railLiveStatusByReservationId={railLiveStatusByReservationId}
+            highlightedReservationId={highlightedReservationId}
             onOpenReservationDrawer={(reservationId) => openDrawer("reservation", reservationId)}
             onCopyCallScript={copyScript}
             onCopyConfirmationCode={async (code) => {

@@ -33,6 +33,7 @@ interface ReservationListProps {
   hasGlobalOutboxPending: boolean;
   flightLiveStatusByReservationId: Map<string, "on-time" | "delayed" | "cancelled">;
   railLiveStatusByReservationId: Map<string, "on-time" | "delayed" | "cancelled">;
+  highlightedReservationId: string | null;
   onOpenReservationDrawer: (reservationId: string) => void;
   onCopyCallScript: (script: string) => void;
   onCopyConfirmationCode: (code: string) => Promise<void>;
@@ -49,6 +50,7 @@ export function ReservationList({
   hasGlobalOutboxPending,
   flightLiveStatusByReservationId,
   railLiveStatusByReservationId,
+  highlightedReservationId,
   onOpenReservationDrawer,
   onCopyCallScript,
   onCopyConfirmationCode,
@@ -73,7 +75,14 @@ export function ReservationList({
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {visibleReservations.map((reservation) => (
-          <div key={reservation.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/70">
+          <div
+            key={reservation.id}
+            className={`rounded-xl border p-3 ${
+              highlightedReservationId === reservation.id
+                ? "border-cyan-400 bg-cyan-500/10 ring-2 ring-cyan-400/60 dark:border-cyan-300 dark:bg-cyan-500/20"
+                : "border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-950/70"
+            }`}
+          >
             <div className="flex items-start justify-between gap-2">
               <div>
                 <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">

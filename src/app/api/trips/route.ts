@@ -1,0 +1,266 @@
+import { randomUUID } from "node:crypto";
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
+import { logger } from "@/lib/logger";
+import { enforceRateLimit } from "@/lib/rateLimit";
+import {
+  createTrip,
+  deleteTrip,
+  getActiveTrip,
+  getTrip,
+  listTrips,
+  setActiveTrip,
+  updateTrip,
+} from "@/lib/travelAssistant/tripStore";
+
+const TripStageSchema = z.enum(["readiness", "pre-departure", "airport", "arrival", "recovery"]);
+const TripStatusSchema = z.enum(["green", "yellow", "red"]);
+const TripScenarioSchema = z.enum(["none", "missed-flight", "train-delay", "ride-no-show"]);
+
+const TripPayloadSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  destination: z.string().trim().min(1).max(160),
+  startDate: z.string().trim().min(1).max(40),
+  endDate: z.string().trim().min(1).max(40),
+  stage: TripStageSchema.default("readiness"),
+  reservations: z.array(z.any()).default([]),
+  tripStatus: TripStatusSchema.default("yellow"),
+  minutesToDeparture: z.number().int().min(0).max(10080).default(180),
+  activeScenario: TripScenarioSchema.default("none"),
+  reviewQueue: z.array(z.any()).default([]),
+  readinessItems: z.array(z.any()).default([]),
+  updateFeed: z.array(z.any()).default([]),
+});
+
+const TripPatchSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  destination: z.string().trim().min(1).max(160).optional(),
+  startDate: z.string().trim().min(1).max(40).optional(),
+  endDate: z.string().trim().min(1).max(40).optional(),
+  stage: TripStageSchema.optional(),
+  reservations: z.array(z.any()).optional(),
+  tripStatus: TripStatusSchema.optional(),
+  minutesToDeparture: z.number().int().min(0).max(10080).optional(),
+  activeScenario: TripScenarioSchema.optional(),
+  reviewQueue: z.array(z.any()).optional(),
+  readinessItems: z.array(z.any()).optional(),
+  updateFeed: z.array(z.any()).optional(),
+});
+
+const PostBodySchema = z.object({
+  trip: TripPayloadSchema,
+  setActive: z.boolean().default(true),
+});
+
+const PutBodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("set-active"),
+    id: z.string().trim().min(1),
+  }),
+  z.object({
+    action: z.literal("update"),
+    id: z.string().trim().min(1),
+    patch: TripPatchSchema,
+  }),
+]);
+
+const DeleteBodySchema = z.object({
+  id: z.string().trim().min(1),
+});
+
+async function authorize(req: Request): Promise<
+  | {
+      ok: true;
+      userId: string;
+      requestId: string;
+      headers: Headers;
+      routeLogger: ReturnType<typeof logger.withContext>;
+    }
+  | { ok: false; response: NextResponse }
+> {
+  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const userId = await resolveAuthenticatedUserId();
+  const routeLogger = logger.withContext({
+    requestId,
+    userId,
+    route: "/api/trips",
+  });
+  if (!userId) {
+    routeLogger.warn("Unauthorized trips API request.");
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
+    };
+  }
+  const rateLimit = await enforceRateLimit({
+    policyName: "travel-updates-general",
+    identifier: userId,
+    route: "/api/trips",
+    requestId,
+  });
+  if (!rateLimit.allowed) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: "Too many trip requests. Please retry shortly." },
+        { status: 429, headers: rateLimit.headers },
+      ),
+    };
+  }
+  return {
+    ok: true,
+    userId,
+    requestId,
+    headers: rateLimit.headers,
+    routeLogger,
+  };
+}
+
+export async function GET(req: Request) {
+  const auth = await authorize(req);
+  if (!auth.ok) return auth.response;
+
+  const url = new URL(req.url);
+  const tripId = url.searchParams.get("id")?.trim() ?? "";
+  if (tripId) {
+    const trip = await getTrip(tripId, auth.userId);
+    return NextResponse.json(
+      {
+        trip,
+      },
+      { headers: auth.headers },
+    );
+  }
+
+  const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
+  return NextResponse.json(
+    {
+      trips,
+      activeTripId: activeTrip?.id ?? null,
+      activeTrip,
+    },
+    { headers: auth.headers },
+  );
+}
+
+export async function POST(req: Request) {
+  const auth = await authorize(req);
+  if (!auth.ok) return auth.response;
+
+  let body: unknown = {};
+  try {
+    body = await req.json();
+  } catch {
+    body = {};
+  }
+  const parsed = PostBodySchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Validation failed", details: parsed.error.flatten() },
+      { status: 422, headers: auth.headers },
+    );
+  }
+
+  const created = await createTrip(parsed.data.trip, auth.userId);
+  if (parsed.data.setActive) {
+    await setActiveTrip(created.id, auth.userId);
+  }
+  const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
+  auth.routeLogger.info("Trip created.", {
+    tripId: created.id,
+  });
+  return NextResponse.json(
+    {
+      trip: created,
+      trips,
+      activeTripId: activeTrip?.id ?? null,
+      activeTrip,
+    },
+    { headers: auth.headers },
+  );
+}
+
+export async function PUT(req: Request) {
+  const auth = await authorize(req);
+  if (!auth.ok) return auth.response;
+
+  let body: unknown = {};
+  try {
+    body = await req.json();
+  } catch {
+    body = {};
+  }
+  const parsed = PutBodySchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Validation failed", details: parsed.error.flatten() },
+      { status: 422, headers: auth.headers },
+    );
+  }
+
+  if (parsed.data.action === "set-active") {
+    const activeTrip = await setActiveTrip(parsed.data.id, auth.userId);
+    if (!activeTrip) {
+      return NextResponse.json({ error: "Trip not found" }, { status: 404, headers: auth.headers });
+    }
+    const trips = await listTrips(auth.userId);
+    return NextResponse.json(
+      {
+        activeTrip,
+        activeTripId: activeTrip.id,
+        trips,
+      },
+      { headers: auth.headers },
+    );
+  }
+
+  const updated = await updateTrip(parsed.data.id, parsed.data.patch, auth.userId);
+  if (!updated) {
+    return NextResponse.json({ error: "Trip not found" }, { status: 404, headers: auth.headers });
+  }
+  const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
+  return NextResponse.json(
+    {
+      trip: updated,
+      trips,
+      activeTripId: activeTrip?.id ?? null,
+      activeTrip,
+    },
+    { headers: auth.headers },
+  );
+}
+
+export async function DELETE(req: Request) {
+  const auth = await authorize(req);
+  if (!auth.ok) return auth.response;
+
+  let body: unknown = {};
+  try {
+    body = await req.json();
+  } catch {
+    body = {};
+  }
+  const parsed = DeleteBodySchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Validation failed", details: parsed.error.flatten() },
+      { status: 422, headers: auth.headers },
+    );
+  }
+
+  const removed = await deleteTrip(parsed.data.id, auth.userId);
+  if (!removed) {
+    return NextResponse.json({ error: "Trip not found" }, { status: 404, headers: auth.headers });
+  }
+  const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
+  return NextResponse.json(
+    {
+      ok: true,
+      trips,
+      activeTripId: activeTrip?.id ?? null,
+      activeTrip,
+    },
+    { headers: auth.headers },
+  );
+}
