@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import type { IncidentAutopilotAction, IncidentAutopilotRecommendation } from "@/lib/travelAssistant/incidentAutopilot";
 
 type DisruptionScenario = "missed-flight" | "train-delay" | "ride-no-show";
@@ -35,56 +36,58 @@ export function DisruptionRecovery({
   onCopyScript,
   activeScenarioPlaybook,
 }: DisruptionRecoveryProps) {
+  const t = useTranslations("DisruptionRecovery");
+
   if (!showRecoverySection) {
     return (
       <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-400">
-        Recovery playbook is hidden by current focus or mobile view selection.
+        {t("hiddenMessage")}
       </section>
     );
   }
 
   return (
     <section data-testid="disruption-recovery-panel" className="rounded-2xl border border-slate-200 bg-white/90 p-4 dark:border-slate-700 dark:bg-slate-900/70">
-      <h2 className="text-lg font-semibold">Missed-flight / disruption recovery panel</h2>
-      <p className="text-xs text-slate-600 dark:text-slate-400">Who to call, what to say, and decision path guidance by urgency level.</p>
+      <h2 className="text-lg font-semibold">{t("title")}</h2>
+      <p className="text-xs text-slate-600 dark:text-slate-400">{t("subtitle")}</p>
       <div className="mt-3 flex flex-wrap gap-2">
         <button
           type="button"
           onClick={() => onSimulateDisruption("missed-flight")}
           className="rounded-lg bg-red-500/90 px-3 py-1.5 text-xs font-semibold text-slate-100 hover:bg-red-400"
         >
-          Simulate missed flight
+          {t("simulateMissedFlight")}
         </button>
         <button
           type="button"
           onClick={() => onSimulateDisruption("train-delay")}
           className="rounded-lg bg-amber-500/90 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-amber-400"
         >
-          Simulate train delay
+          {t("simulateTrainDelay")}
         </button>
         <button
           type="button"
           onClick={() => onSimulateDisruption("ride-no-show")}
           className="rounded-lg bg-red-500/70 px-3 py-1.5 text-xs font-semibold text-slate-100 hover:bg-red-400"
         >
-          Simulate ride no-show
+          {t("simulateRideNoShow")}
         </button>
         <button
           type="button"
           onClick={onClearSimulation}
           className="rounded-lg bg-slate-200 px-3 py-1.5 text-xs font-semibold ring-1 ring-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:ring-slate-700 dark:hover:bg-slate-700"
         >
-          Clear simulation
+          {t("clearSimulation")}
         </button>
       </div>
       <div className="mt-3 rounded-xl border border-violet-500/30 bg-violet-100/60 p-3 dark:bg-violet-500/10">
-        <p className="text-sm font-semibold text-violet-900 dark:text-violet-100">Incident autopilot recommendations</p>
+        <p className="text-sm font-semibold text-violet-900 dark:text-violet-100">{t("autopilotTitle")}</p>
         <p className="text-xs text-violet-800 dark:text-violet-100/80">
-          One-tap remediation plan based on live trip risk, queue pressure, sync state, and worker health.
+          {t("autopilotSubtitle")}
         </p>
         {lastAppliedAutopilotRecommendationTitle ? (
           <p data-testid="autopilot-last-applied" className="mt-2 text-xs text-emerald-200">
-            Applied: {lastAppliedAutopilotRecommendationTitle}
+            {t("applied", { title: lastAppliedAutopilotRecommendationTitle })}
           </p>
         ) : null}
         {incidentAutopilotRecommendations.length > 0 ? (
@@ -106,7 +109,11 @@ export function DisruptionRecovery({
                             : "bg-cyan-500/20 text-cyan-800 dark:text-cyan-100"
                       }`}
                     >
-                      {recommendation.priority.toUpperCase()}
+                      {recommendation.priority === "critical"
+                        ? t("priorityCritical")
+                        : recommendation.priority === "high"
+                          ? t("priorityHigh")
+                          : t("priorityMedium")}
                     </span>
                     <span className="font-semibold">{recommendation.title}</span>
                   </div>
@@ -119,7 +126,7 @@ export function DisruptionRecovery({
                     disabled={autopilotActionPending !== null}
                     className="rounded-md bg-violet-500/80 px-2.5 py-1 text-[11px] font-semibold text-slate-100 hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {autopilotActionPending === recommendation.action ? "Applying..." : "Apply now"}
+                    {autopilotActionPending === recommendation.action ? t("applying") : t("applyNow")}
                   </button>
                 </div>
                 <p className="mt-1 text-[11px] text-slate-600 dark:text-slate-300">{recommendation.rationale}</p>
@@ -128,29 +135,29 @@ export function DisruptionRecovery({
           </ul>
         ) : (
           <p className="mt-2 rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2 py-1.5 text-xs text-emerald-800 dark:text-emerald-100">
-            Autopilot sees no immediate incidents requiring intervention.
+            {t("autopilotClear")}
           </p>
         )}
       </div>
       <div className="mt-3 grid gap-4 lg:grid-cols-3">
         <div className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950/70">
-          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Who to call now</p>
+          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t("whoToCall")}</p>
           <ul className="mt-2 space-y-2 text-sm text-slate-700 dark:text-slate-300">
-            <li>1) Airline priority desk</li>
-            <li>2) Hotel front desk (late arrival hold)</li>
-            <li>3) Transfer provider</li>
-            <li>4) Family coordinator</li>
+            <li>{t("callStepOne")}</li>
+            <li>{t("callStepTwo")}</li>
+            <li>{t("callStepThree")}</li>
+            <li>{t("callStepFour")}</li>
           </ul>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950/70">
-          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">What to say (script)</p>
+          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t("whatToSay")}</p>
           <p className="mt-2 text-xs text-slate-700 dark:text-slate-300">{recoveryScript}</p>
           <button
             type="button"
             onClick={() => onCopyScript(recoveryScript)}
             className="mt-3 rounded-md bg-slate-200 px-2.5 py-1.5 text-xs ring-1 ring-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:ring-slate-700 dark:hover:bg-slate-700"
           >
-            Copy script
+            {t("copyScript")}
           </button>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950/70">

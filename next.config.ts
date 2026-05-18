@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
 import createBundleAnalyzer from "@next/bundle-analyzer";
+import createNextIntlPlugin from "next-intl/plugin";
 // next-pwa does not currently ship typed exports for TS configs.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const withPWA = require("next-pwa")({
@@ -14,6 +15,7 @@ const withPWA = require("next-pwa")({
 const withBundleAnalyzer = createBundleAnalyzer({
   enabled: process.env.ANALYZE === "true",
 });
+const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 
 const contentSecurityPolicy = [
   "default-src 'self'",
@@ -69,7 +71,7 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default withSentryConfig(withBundleAnalyzer(withPWA(nextConfig)), {
+export default withSentryConfig(withBundleAnalyzer(withPWA(withNextIntl(nextConfig))), {
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
   silent: !process.env.CI,

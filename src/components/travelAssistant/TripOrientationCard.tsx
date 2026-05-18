@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 type TripStage = "readiness" | "pre-departure" | "airport" | "arrival" | "recovery";
 type DemoPresetId = "smooth-trip" | "moderate-delay" | "severe-disruption";
 type MobileViewPanel = "essentials" | "timeline" | "recovery" | "family" | "all";
@@ -47,6 +49,8 @@ export function TripOrientationCard({
   onToggleMobileSimpleView,
   onMobileViewPanelChange,
 }: TripOrientationCardProps) {
+  const t = useTranslations("TripOrientationCard");
+
   return (
     <>
       <section
@@ -54,39 +58,39 @@ export function TripOrientationCard({
         className="rounded-2xl border border-cyan-500/30 bg-cyan-100/60 p-3 dark:bg-cyan-500/10"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-semibold text-cyan-900 dark:text-cyan-100">Trip snapshot: where you are + what is next</p>
+          <p className="text-sm font-semibold text-cyan-900 dark:text-cyan-100">{t("snapshotTitle")}</p>
           <button
             data-testid="advance-stage-button"
             type="button"
             onClick={onAdvanceTripStage}
             className="rounded-lg bg-cyan-500/90 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-cyan-400"
           >
-            Move to next stage
+            {t("moveNextStage")}
           </button>
         </div>
         <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
           <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-800 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-200">
-            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Where you are</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">{t("whereYouAre")}</p>
             <p data-testid="trip-current-stage" role="status" className="mt-1 font-semibold">
               {stageLabelByTripStage[tripStage]}
             </p>
             <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{nextBestFlowAction}</p>
           </div>
           <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-800 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-200">
-            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">What is next</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">{t("whatIsNext")}</p>
             <p className="mt-1 font-semibold">
-              {nextStage === tripStage ? "Stay in recovery and stabilize" : stageLabelByTripStage[nextStage]}
+              {nextStage === tripStage ? t("stayRecovery") : stageLabelByTripStage[nextStage]}
             </p>
             <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">{nextStageAction}</p>
           </div>
         </div>
         <div className="mt-3 rounded-lg border border-slate-200 bg-slate-100/70 p-2 dark:border-slate-700 dark:bg-slate-950/60">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-semibold text-slate-900 dark:text-slate-200">Demo mode presets</p>
+            <p className="text-xs font-semibold text-slate-900 dark:text-slate-200">{t("demoPresets")}</p>
             <p className="text-[11px] text-slate-600 dark:text-slate-400">
               {lastDemoPresetAppliedAt
-                ? `Last preset: ${lastDemoPresetId ?? "n/a"} at ${formatClock(lastDemoPresetAppliedAt)}`
-                : "No preset applied yet."}
+                ? t("lastPreset", { presetId: lastDemoPresetId ?? "n/a", time: formatClock(lastDemoPresetAppliedAt) })
+                : t("lastPresetNone")}
             </p>
           </div>
           <div className="mt-2 grid gap-2 sm:grid-cols-3">
@@ -112,23 +116,23 @@ export function TripOrientationCard({
       {isCompactViewport ? (
         <section className="rounded-xl border border-slate-200 bg-white/80 p-2 md:hidden dark:border-slate-700 dark:bg-slate-900/80">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[11px] font-semibold text-slate-900 dark:text-slate-200">Mobile view</p>
+            <p className="text-[11px] font-semibold text-slate-900 dark:text-slate-200">{t("mobileView")}</p>
             <button
               type="button"
               onClick={onToggleMobileSimpleView}
               aria-expanded={mobileSimpleView}
               className="rounded-full bg-slate-200 px-2.5 py-1 text-[11px] font-semibold ring-1 ring-slate-300 dark:bg-slate-800 dark:ring-slate-700"
             >
-              {mobileSimpleView ? "Show full app" : "Use simple view"}
+              {mobileSimpleView ? t("showFullApp") : t("useSimpleView")}
             </button>
           </div>
           {mobileSimpleView ? (
             <div className="mt-2 grid grid-cols-2 gap-2">
               {([
-                ["essentials", "Essentials"],
-                ["timeline", "Timeline"],
-                ["recovery", "Recovery"],
-                ["family", "Family"],
+                ["essentials", t("essentials")],
+                ["timeline", t("timeline")],
+                ["recovery", t("recovery")],
+                ["family", t("family")],
               ] as const).map(([panel, label]) => (
                 <button
                   key={panel}
@@ -146,7 +150,7 @@ export function TripOrientationCard({
             </div>
           ) : null}
           <p className="mt-2 text-[11px] text-slate-600 dark:text-slate-400">
-            {mobileSimpleView ? `Showing ${mobileViewPanel} only to reduce clutter.` : "Full layout enabled on mobile."}
+            {mobileSimpleView ? t("showingPanelOnly", { panel: mobileViewPanel }) : t("fullLayoutEnabled")}
           </p>
         </section>
       ) : null}

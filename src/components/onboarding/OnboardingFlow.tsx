@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   EMPTY_TRIP_SETUP_DRAFT,
   TripSetupForm,
@@ -35,6 +36,8 @@ function createDefaultResponse(): OnboardingResponse {
 }
 
 export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
+  const t = useTranslations("OnboardingFlow");
+  const tTripSetup = useTranslations("TripSetupForm");
   const [isLoading, setIsLoading] = useState(true);
   const [isVisible, setIsVisible] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -46,6 +49,23 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
 
   const [notificationsBusy, setNotificationsBusy] = useState(false);
   const [gmailBusy, setGmailBusy] = useState(false);
+
+  const localizeTripErrors = useCallback(
+    (errors: TripSetupValidationErrors): TripSetupValidationErrors => {
+      const localized: TripSetupValidationErrors = {};
+      if (errors.tripName) {
+        localized.tripName = tTripSetup("errorTripNameRequired");
+      }
+      if (errors.destination) {
+        localized.destination = tTripSetup("errorDestinationRequired");
+      }
+      if (errors.departureDate) {
+        localized.departureDate = tTripSetup("errorDepartureDateRequired");
+      }
+      return localized;
+    },
+    [tTripSetup],
+  );
 
   const loadOnboardingState = useCallback(async (): Promise<void> => {
     setIsLoading(true);
@@ -152,7 +172,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
   const handleNext = useCallback(async (): Promise<void> => {
     if (currentStep === 2) {
       const errors = validateTripSetupDraft(tripDraft);
-      setTripErrors(errors);
+      setTripErrors(localizeTripErrors(errors));
       if (Object.keys(errors).length > 0) {
         return;
       }
@@ -163,7 +183,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
       return;
     }
     await goToStep(currentStep + 1);
-  }, [completeOnboarding, currentStep, goToStep, onCreateFirstTrip, tripDraft]);
+  }, [completeOnboarding, currentStep, goToStep, localizeTripErrors, onCreateFirstTrip, tripDraft]);
 
   const handleSkip = useCallback(async (): Promise<void> => {
     await completeOnboarding();
@@ -174,24 +194,24 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
     setNotificationsBusy(true);
     try {
       if (typeof window === "undefined" || !("Notification" in window)) {
-        setNotificationsMessage("Notifications are not supported in this browser.");
+        setNotificationsMessage(t("notificationsUnsupported"));
         return;
       }
       const permission =
         Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
       if (permission === "granted") {
-        setNotificationsMessage("Notifications enabled. You will receive delay and gate alerts.");
+        setNotificationsMessage(t("notificationsEnabled"));
         return;
       }
       if (permission === "denied") {
-        setNotificationsMessage("Notification permission denied. You can enable it later in browser settings.");
+        setNotificationsMessage(t("notificationsDenied"));
         return;
       }
-      setNotificationsMessage("Notification permission dismissed. You can retry any time.");
+      setNotificationsMessage(t("notificationsDismissed"));
     } finally {
       setNotificationsBusy(false);
     }
-  }, [notificationsBusy]);
+  }, [notificationsBusy, t]);
 
   const handleConnectGmail = useCallback(async (): Promise<void> => {
     if (gmailBusy) return;
@@ -203,25 +223,25 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
         body: JSON.stringify({ maxResults: 1 }),
       });
       if (!response.ok) {
-        const fallbackMessage = `Gmail connection is not fully configured yet (${response.status}).`;
+        const fallbackMessage = t("gmailFallbackMessage", { status: response.status });
         setGmailMessage(fallbackMessage);
         return;
       }
-      setGmailMessage("Gmail connected. Reservation import is available.");
+      setGmailMessage(t("gmailConnected"));
     } catch {
-      setGmailMessage("Could not reach Gmail import service right now. You can connect later.");
+      setGmailMessage(t("gmailUnavailable"));
     } finally {
       setGmailBusy(false);
     }
-  }, [gmailBusy]);
+  }, [gmailBusy, t]);
 
   const stepTitle = useMemo(() => {
-    if (currentStep === 1) return "Welcome to Kepi";
-    if (currentStep === 2) return "Add your first trip";
-    if (currentStep === 3) return "Enable notifications";
-    if (currentStep === 4) return "Connect Gmail";
-    return "You're all set";
-  }, [currentStep]);
+    if (currentStep === 1) return t("stepWelcome");
+    if (currentStep === 2) return t("stepFirstTrip");
+    if (currentStep === 3) return t("stepNotifications");
+    if (currentStep === 4) return t("stepGmail");
+    return t("stepDone");
+  }, [currentStep, t]);
 
   if (isLoading || !isVisible) {
     return null;
@@ -239,7 +259,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-cyan-600 dark:text-cyan-300">
-                Step {currentStep} of {TOTAL_STEPS}
+                {t("stepCounter", { currentStep, totalSteps: TOTAL_STEPS })}
               </p>
               <h2 id="onboarding-title" className="mt-1 text-lg font-semibold">
                 {stepTitle}
@@ -252,7 +272,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
               }}
               className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-900"
             >
-              Close
+              {t("close")}
             </button>
           </div>
           <div className="mt-3 h-1.5 rounded-full bg-slate-200 dark:bg-slate-800">
@@ -267,13 +287,12 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
           {currentStep === 1 ? (
             <div className="space-y-3 text-sm">
               <p className="text-slate-700 dark:text-slate-300">
-                Kepi helps you execute trips from readiness to recovery with anti-miss safeguards, adaptive stage views,
-                and low-friction travel updates.
+                {t("welcomeDescription")}
               </p>
               <ul className="list-disc space-y-1 pl-5 text-slate-700 dark:text-slate-300">
-                <li>Stage-aware controls for readiness, airport, arrival, and disruptions.</li>
-                <li>Live transport updates and guided recovery playbooks.</li>
-                <li>Fast input with email import, voice capture, and one-tap actions.</li>
+                <li>{t("welcomeBulletOne")}</li>
+                <li>{t("welcomeBulletTwo")}</li>
+                <li>{t("welcomeBulletThree")}</li>
               </ul>
             </div>
           ) : null}
@@ -285,7 +304,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
               onChange={(nextDraft) => {
                 setTripDraft(nextDraft);
                 if (Object.keys(tripErrors).length > 0) {
-                  setTripErrors(validateTripSetupDraft(nextDraft));
+                  setTripErrors(localizeTripErrors(validateTripSetupDraft(nextDraft)));
                 }
               }}
             />
@@ -294,7 +313,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
           {currentStep === 3 ? (
             <div className="space-y-3 text-sm">
               <p className="text-slate-700 dark:text-slate-300">
-                Get gate change and delay alerts so you can react before schedules slip.
+                {t("notificationsDescription")}
               </p>
               <button
                 type="button"
@@ -304,7 +323,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
                 disabled={notificationsBusy}
                 className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {notificationsBusy ? "Requesting..." : "Enable notifications"}
+                {notificationsBusy ? t("requesting") : t("enableNotifications")}
               </button>
               {notificationsMessage ? <p className="text-xs text-slate-600 dark:text-slate-400">{notificationsMessage}</p> : null}
             </div>
@@ -313,7 +332,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
           {currentStep === 4 ? (
             <div className="space-y-3 text-sm">
               <p className="text-slate-700 dark:text-slate-300">
-                Import reservations automatically from Gmail to reduce manual entry.
+                {t("gmailDescription")}
               </p>
               <button
                 type="button"
@@ -323,7 +342,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
                 disabled={gmailBusy}
                 className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {gmailBusy ? "Connecting..." : "Connect Gmail"}
+                {gmailBusy ? t("connecting") : t("connectGmail")}
               </button>
               {gmailMessage ? <p className="text-xs text-slate-600 dark:text-slate-400">{gmailMessage}</p> : null}
             </div>
@@ -332,10 +351,9 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
           {currentStep === 5 ? (
             <div className="space-y-3 text-sm">
               <p className="text-slate-700 dark:text-slate-300">
-                You&apos;re all set. Kepi is ready to help you stay ahead of travel changes and execute each stage with
-                confidence.
+                {t("doneDescription")}
               </p>
-              <p className="text-xs text-slate-600 dark:text-slate-400">Press Start to begin using your travel assistant.</p>
+              <p className="text-xs text-slate-600 dark:text-slate-400">{t("doneHint")}</p>
             </div>
           ) : null}
         </div>
@@ -349,7 +367,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
             }}
             className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-900"
           >
-            Back
+            {t("back")}
           </button>
           <div className="flex items-center gap-2">
             <button
@@ -360,7 +378,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
               }}
               className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-semibold hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-900"
             >
-              Skip
+              {t("skip")}
             </button>
             <button
               type="button"
@@ -370,7 +388,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
               }}
               className="rounded-md bg-cyan-500 px-3 py-1.5 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {currentStep === TOTAL_STEPS ? "Start" : "Next"}
+              {currentStep === TOTAL_STEPS ? t("start") : t("next")}
             </button>
           </div>
         </footer>

@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 type ReservationType = "flight" | "hotel" | "train" | "ride" | "dinner";
 type Confidence = "high" | "medium" | "low";
 
@@ -55,13 +57,15 @@ export function ReservationList({
   onCopyCallScript,
   onCopyConfirmationCode,
 }: ReservationListProps) {
+  const t = useTranslations("ReservationList");
+
   return (
     <article className="rounded-2xl border border-slate-200 bg-white/90 p-4 dark:border-slate-700 dark:bg-slate-900/70">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-lg font-semibold">Reservation cards</h2>
+          <h2 className="text-lg font-semibold">{t("title")}</h2>
           <p className="text-xs text-slate-600 dark:text-slate-400">
-            Structured reservations with detail drawers, assignment controls, and operational quick actions.
+            {t("subtitle")}
           </p>
         </div>
         <label className="flex items-center gap-2 rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs dark:border-slate-700 dark:bg-slate-900">
@@ -70,7 +74,7 @@ export function ReservationList({
             checked={personalTimelineOnly}
             onChange={(event) => onPersonalTimelineOnlyChange(event.target.checked)}
           />
-          Personal schedule only ({selectedFamilyMemberName})
+          {t("personalOnly", { name: selectedFamilyMemberName })}
         </label>
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -108,9 +112,9 @@ export function ReservationList({
                         (reservation.type === "flight"
                           ? flightLiveStatusByReservationId.get(reservation.id)
                           : railLiveStatusByReservationId.get(reservation.id)) ?? "on-time";
-                      if (liveStatus === "cancelled") return "Live status: Cancelled";
-                      if (liveStatus === "delayed") return "Live status: Delayed";
-                      return "Live status: On Time";
+                      if (liveStatus === "cancelled") return t("liveStatusCancelled");
+                      if (liveStatus === "delayed") return t("liveStatusDelayed");
+                      return t("liveStatusOnTime");
                     })()}
                   </span>
                 ) : null}
@@ -132,22 +136,22 @@ export function ReservationList({
             </p>
             <p className="text-xs text-slate-600 dark:text-slate-400">{reservation.location}</p>
             <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-              Assigned:{" "}
+              {t("assigned")}{" "}
               {reservation.assignedTo
                 .map((memberId) => familyMembers.find((member) => member.id === memberId)?.name ?? memberId)
                 .join(", ")}
             </p>
             <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-              Sync status:{" "}
+              {t("syncStatus")}{" "}
               {(() => {
                 const reservationPending = pendingOutboxByReservationId.get(reservation.id) ?? 0;
                 if (reservationPending > 0) {
-                  return `${reservationPending} pending action${reservationPending > 1 ? "s" : ""}`;
+                  return t("pendingActions", { count: reservationPending });
                 }
                 if (reservation.critical && hasGlobalOutboxPending) {
-                  return "Partially synced (pending global actions)";
+                  return t("partiallySynced");
                 }
-                return "Synced";
+                return t("synced");
               })()}
             </p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
@@ -156,18 +160,22 @@ export function ReservationList({
                 onClick={() => onOpenReservationDrawer(reservation.id)}
                 className="rounded-md bg-slate-200 px-2 py-1 ring-1 ring-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:ring-slate-700 dark:hover:bg-slate-700"
               >
-                Details
+                {t("details")}
               </button>
               <button
                 type="button"
                 onClick={() =>
                   onCopyCallScript(
-                    `Call ${reservation.provider} and confirm ${reservation.title}. Confirmation code: ${reservation.confirmationCode}.`,
+                    t("callScriptTemplate", {
+                      provider: reservation.provider,
+                      title: reservation.title,
+                      code: reservation.confirmationCode,
+                    }),
                   )
                 }
                 className="rounded-md bg-slate-200 px-2 py-1 ring-1 ring-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:ring-slate-700 dark:hover:bg-slate-700"
               >
-                Copy call script
+                {t("copyCallScript")}
               </button>
               <button
                 type="button"
@@ -176,7 +184,7 @@ export function ReservationList({
                 }}
                 className="rounded-md bg-slate-200 px-2 py-1 ring-1 ring-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:ring-slate-700 dark:hover:bg-slate-700"
               >
-                Copy code
+                {t("copyCode")}
               </button>
             </div>
           </div>

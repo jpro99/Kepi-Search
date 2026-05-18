@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 export interface TripSetupDraft {
   tripName: string;
   destination: string;
@@ -35,35 +37,37 @@ interface TripSetupFormProps {
 }
 
 export function TripSetupForm({ value, errors, onChange }: TripSetupFormProps) {
+  const t = useTranslations("TripSetupForm");
+
   return (
     <div className="space-y-3">
       <label className="block">
         <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          Trip name
+          {t("tripName")}
         </span>
         <input
           value={value.tripName}
           onChange={(event) => onChange({ ...value, tripName: event.target.value })}
-          placeholder="Summer NYC Work Trip"
+          placeholder={t("tripNamePlaceholder")}
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-cyan-300 transition focus-visible:ring-2 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
         />
         {errors?.tripName ? <p className="mt-1 text-xs text-red-500">{errors.tripName}</p> : null}
       </label>
       <label className="block">
         <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          Destination
+          {t("destination")}
         </span>
         <input
           value={value.destination}
           onChange={(event) => onChange({ ...value, destination: event.target.value })}
-          placeholder="New York, NY"
+          placeholder={t("destinationPlaceholder")}
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-cyan-300 transition focus-visible:ring-2 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
         />
         {errors?.destination ? <p className="mt-1 text-xs text-red-500">{errors.destination}</p> : null}
       </label>
       <label className="block">
         <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          Departure date
+          {t("departureDate")}
         </span>
         <input
           type="date"

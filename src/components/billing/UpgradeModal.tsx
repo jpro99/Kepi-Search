@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import type { PlanFeature } from "@/lib/billing/plans";
-import { PLAN_FEATURE_LABELS } from "@/lib/billing/plans";
 
 export interface UpgradeModalGateContext {
   feature: PlanFeature;
@@ -17,15 +17,19 @@ interface UpgradeModalProps {
 }
 
 export function UpgradeModal({ open, gate, onClose }: UpgradeModalProps) {
+  const t = useTranslations("UpgradeModal");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const featureLabel = useMemo(() => {
     if (!gate) {
-      return "Pro features";
+      return t("defaultFeatureLabel");
     }
-    return PLAN_FEATURE_LABELS[gate.feature];
-  }, [gate]);
+    if (gate.feature === "gmail-import") return t("featureGmailImport");
+    if (gate.feature === "ai-suggestions") return t("featureAiSuggestions");
+    if (gate.feature === "push-notifications") return t("featurePushNotifications");
+    return t("featureMultiTrip");
+  }, [gate, t]);
 
   if (!open || !gate) {
     return null;
@@ -60,9 +64,9 @@ export function UpgradeModal({ open, gate, onClose }: UpgradeModalProps) {
         return;
       }
 
-      throw new Error("Checkout session response was incomplete.");
+      throw new Error(t("checkoutIncomplete"));
     } catch (checkoutError) {
-      setError(checkoutError instanceof Error ? checkoutError.message : "Upgrade checkout failed.");
+      setError(checkoutError instanceof Error ? checkoutError.message : t("upgradeCheckoutFailed"));
       setBusy(false);
     }
   };
@@ -77,12 +81,12 @@ export function UpgradeModal({ open, gate, onClose }: UpgradeModalProps) {
       >
         <header className="flex items-start justify-between gap-2">
           <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-cyan-700 dark:text-cyan-300">Kepi Pro</p>
+            <p className="text-xs uppercase tracking-[0.2em] text-cyan-700 dark:text-cyan-300">{t("proBadge")}</p>
             <h2 id="upgrade-modal-title" className="text-xl font-semibold">
-              Unlock {featureLabel}
+              {t("unlockTitle", { feature: featureLabel })}
             </h2>
             <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-              This workflow is part of Pro so advanced logistics tools stay available when you need them most.
+              {t("subtitle")}
             </p>
           </div>
           <button
@@ -90,16 +94,16 @@ export function UpgradeModal({ open, gate, onClose }: UpgradeModalProps) {
             onClick={onClose}
             className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-900"
           >
-            Close
+            {t("close")}
           </button>
         </header>
 
         <div className="mt-4 space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-900/70">
-          <p className="font-medium">What you get on Pro</p>
+          <p className="font-medium">{t("whatYouGetTitle")}</p>
           <ul className="list-disc space-y-1 pl-5 text-slate-700 dark:text-slate-300">
-            <li>Unlimited trips for multi-destination planning</li>
-            <li>Gmail import and proactive AI itinerary guidance</li>
-            <li>Push alerts for critical gate and delay updates</li>
+            <li>{t("benefitOne")}</li>
+            <li>{t("benefitTwo")}</li>
+            <li>{t("benefitThree")}</li>
           </ul>
           {gate.detail ? <p className="text-xs text-slate-600 dark:text-slate-400">{gate.detail}</p> : null}
         </div>
@@ -115,13 +119,13 @@ export function UpgradeModal({ open, gate, onClose }: UpgradeModalProps) {
             }}
             className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {busy ? "Starting checkout..." : "Upgrade to Pro — $9/month"}
+            {busy ? t("startingCheckout") : t("upgradeButton")}
           </button>
           <Link
             href="/billing"
             className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-900"
           >
-            View billing details
+            {t("viewBillingDetails")}
           </Link>
         </div>
       </section>
