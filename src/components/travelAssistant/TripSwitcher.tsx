@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ShareModal } from "@/components/travelAssistant/ShareModal";
 
 export interface TripSwitcherItem {
   id: string;
@@ -32,6 +33,7 @@ export function TripSwitcher({
   disabled = false,
 }: TripSwitcherProps) {
   const [open, setOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
 
   const activeTrip = useMemo(
     () => trips.find((trip) => trip.id === activeTripId) ?? trips[0] ?? null,
@@ -39,7 +41,7 @@ export function TripSwitcher({
   );
 
   return (
-    <div className="relative">
+    <div className="relative flex items-center gap-2">
       <button
         type="button"
         disabled={disabled}
@@ -50,6 +52,14 @@ export function TripSwitcher({
           {activeTrip ? `${activeTrip.name} • ${activeTrip.destination}` : "Select trip"}
         </span>
         <span aria-hidden>▾</span>
+      </button>
+      <button
+        type="button"
+        disabled={disabled || !activeTrip}
+        onClick={() => setShareOpen(true)}
+        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800"
+      >
+        Share Trip
       </button>
 
       {open ? (
@@ -101,6 +111,13 @@ export function TripSwitcher({
           </div>
         </div>
       ) : null}
+
+      <ShareModal
+        open={shareOpen}
+        tripId={activeTrip?.id ?? null}
+        tripName={activeTrip?.name ?? null}
+        onClose={() => setShareOpen(false)}
+      />
     </div>
   );
 }

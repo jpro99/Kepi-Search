@@ -11,7 +11,7 @@
     "lint": "eslint",
     "seed:generate": "node scripts/generate-city-seeds.mjs",
     "hotels:overpass": "node scripts/fetch-hotels-overpass.mjs",
-    "test:adapters": "node --import tsx --test src/lib/travelAssistant/updateAdapters.test.ts src/lib/travelAssistant/providers/providerMappings.test.ts src/lib/travelAssistant/flightStatusProvider.test.ts src/lib/travelAssistant/railStatusProvider.test.ts src/lib/travelAssistant/rideStatusProvider.test.ts src/lib/travelAssistant/gmailImportProvider.test.ts src/lib/travelAssistant/pushNotificationService.test.ts src/lib/travelAssistant/calendarSyncService.test.ts src/lib/travelAssistant/aiSuggestionService.test.ts src/lib/travelAssistant/tripStore.test.ts src/lib/travelAssistant/updateAuditStore.test.ts src/lib/travelAssistant/updateRuntimeStateStore.test.ts src/lib/travelAssistant/backgroundOrchestrator.test.ts src/lib/travelAssistant/opsSnapshot.test.ts src/lib/travelAssistant/backgroundRunManager.test.ts src/lib/travelAssistant/safetyPolicy.test.ts src/lib/travelAssistant/opsActionAuditStore.test.ts src/lib/travelAssistant/opsAlertAuditStore.test.ts src/lib/travelAssistant/tripFlowControls.test.ts src/lib/travelAssistant/offlineOutbox.test.ts src/lib/travelAssistant/clientSessionState.test.ts src/lib/travelAssistant/incidentAutopilot.test.ts src/lib/travelAssistant/reliabilityScenarios.test.ts src/lib/travelAssistant/opsAlertingOrchestrator.test.ts src/lib/travelAssistant/reservationIntegrity.test.ts src/app/api/travel-updates/ops/control/route.test.ts",
+    "test:adapters": "node --import tsx --test src/lib/travelAssistant/updateAdapters.test.ts src/lib/travelAssistant/providers/providerMappings.test.ts src/lib/travelAssistant/flightStatusProvider.test.ts src/lib/travelAssistant/railStatusProvider.test.ts src/lib/travelAssistant/rideStatusProvider.test.ts src/lib/travelAssistant/gmailImportProvider.test.ts src/lib/travelAssistant/pushNotificationService.test.ts src/lib/travelAssistant/calendarSyncService.test.ts src/lib/travelAssistant/aiSuggestionService.test.ts src/lib/travelAssistant/tripStore.test.ts src/lib/travelAssistant/tripShareStore.test.ts src/lib/travelAssistant/updateAuditStore.test.ts src/lib/travelAssistant/updateRuntimeStateStore.test.ts src/lib/travelAssistant/backgroundOrchestrator.test.ts src/lib/travelAssistant/opsSnapshot.test.ts src/lib/travelAssistant/backgroundRunManager.test.ts src/lib/travelAssistant/safetyPolicy.test.ts src/lib/travelAssistant/opsActionAuditStore.test.ts src/lib/travelAssistant/opsAlertAuditStore.test.ts src/lib/travelAssistant/tripFlowControls.test.ts src/lib/travelAssistant/offlineOutbox.test.ts src/lib/travelAssistant/clientSessionState.test.ts src/lib/travelAssistant/incidentAutopilot.test.ts src/lib/travelAssistant/reliabilityScenarios.test.ts src/lib/travelAssistant/opsAlertingOrchestrator.test.ts src/lib/travelAssistant/reservationIntegrity.test.ts src/app/api/travel-updates/ops/control/route.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -29,6 +29,7 @@
     "next-pwa": "^5.6.0",
     "p-limit": "^7.3.0",
     "patch-package": "^8.0.1",
+    "qrcode.react": "^4.2.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "terra-draw": "^1.28.8",
