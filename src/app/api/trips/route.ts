@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getUserPlan } from "@/lib/billing/planGate";
+import { sendDisruptionAlert, sendReservationConfirmation } from "@/lib/email/emailService";
 import { trackServerEvent } from "@/lib/analytics/trackServerEvent";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
 import { logger } from "@/lib/logger";
@@ -268,6 +269,9 @@ export async function PUT(req: Request) {
         tripId: updated.id,
         reservationType: reservation.type,
       });
+      if (reservation.source === "review-accepted") {
+        void sendReservationConfirmation(auth.userId, reservation.id);
+      }
     }
 
     if (
@@ -280,6 +284,16 @@ export async function PUT(req: Request) {
         userId: auth.userId,
         tripId: updated.id,
         disruptionType: updated.activeScenario,
+      });
+      void sendDisruptionAlert(auth.userId, {
+        tripId: updated.id,
+        tripName: updated.name,
+        destination: updated.destination,
+        affectedReservationTitle: "Trip disruption scenario",
+        disruptionType: updated.activeScenario,
+        severity: "warning",
+        detail: `Trip switched into ${updated.activeScenario.replaceAll("-", " ")} mode.`,
+        scenario: updated.activeScenario,
       });
     }
   }

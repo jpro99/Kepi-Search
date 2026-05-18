@@ -11,6 +11,7 @@ import {
   sendDelayAlert,
   sendGateChangeAlert,
 } from "@/lib/travelAssistant/pushNotificationService";
+import { sendDisruptionAlert } from "@/lib/email/emailService";
 import type { TravelUpdateEvent } from "@/lib/travelAssistant/travelUpdateTypes";
 import { runWithKvUserContext } from "@/lib/travelAssistant/kvUserContext";
 
@@ -60,6 +61,14 @@ async function dispatchPushAlerts(userId: string, updates: readonly TravelUpdate
     }
   }
   return sent;
+}
+
+function pickDisruptionUpdate(updates: readonly TravelUpdateEvent[]): TravelUpdateEvent | null {
+  return (
+    updates.find((update) => update.kind === "cancellation" || update.severity === "critical") ??
+    updates.find((update) => update.kind === "delay" && (update.delayMinutes ?? 0) >= 20) ??
+    null
+  );
 }
 
 function resolveEffectiveUpdateMode(requestedMode: "off" | "mock" | "auto" | undefined): {
@@ -117,6 +126,16 @@ export const travelUpdatePass = inngest.createFunction(
           parsed.data.trigger ? `${parsed.data.trigger}-success` : "inngest-travel-update-success",
         );
         const pushAlertsSent = await dispatchPushAlerts(parsed.data.userId, backgroundRun.result.updates);
+        const disruptionUpdate = pickDisruptionUpdate(backgroundRun.result.updates);
+        const disruptionAlertResult = disruptionUpdate
+          ? await sendDisruptionAlert(parsed.data.userId, {
+              affectedReservationTitle:
+                disruptionUpdate.target.titleHint ?? disruptionUpdate.target.confirmationCode ?? "Affected reservation",
+              disruptionType: disruptionUpdate.kind,
+              severity: disruptionUpdate.severity,
+              detail: disruptionUpdate.detail,
+            })
+          : null;
         return {
           status: "success" as const,
           userId: parsed.data.userId,
@@ -126,6 +145,7 @@ export const travelUpdatePass = inngest.createFunction(
           backgroundRun,
           alertSweep,
           pushAlertsSent,
+          disruptionAlertResult,
         };
       } catch (error) {
         if (error instanceof BackgroundRunInProgressError) {

@@ -3,12 +3,13 @@ import { serve } from "inngest/next";
 import type { NextRequest } from "next/server";
 import { logger } from "@/lib/logger";
 import { reminderLadder } from "@/inngest/functions/reminderLadder";
+import { emailScheduler } from "@/inngest/functions/emailScheduler";
 import { travelUpdatePass } from "@/inngest/functions/travelUpdatePass";
 import { inngest } from "@/inngest/client";
 
 const handlers = serve({
   client: inngest,
-  functions: [travelUpdatePass, reminderLadder],
+  functions: [travelUpdatePass, reminderLadder, emailScheduler],
 });
 
 export const GET = async (request: NextRequest, context: unknown): Promise<Response> => {

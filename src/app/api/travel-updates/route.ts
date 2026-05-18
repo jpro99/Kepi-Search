@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isAutomatedTestRuntime } from "@/lib/auth/mockClerkAuth";
+import { sendDisruptionAlert } from "@/lib/email/emailService";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import { logger } from "@/lib/logger";
 import { runTravelUpdateCheck } from "@/lib/travelAssistant/updateAdapters";
 import { persistTravelUpdateAudit } from "@/lib/travelAssistant/updateAuditStore";
 import { persistTravelRuntimeState } from "@/lib/travelAssistant/updateRuntimeStateStore";
+import type { TravelUpdateEvent } from "@/lib/travelAssistant/travelUpdateTypes";
 
 const ReservationSchema = z.object({
   id: z.string().min(1),
@@ -36,6 +38,14 @@ async function resolveAuthenticatedUserId(): Promise<string | null> {
   } catch {
     return isTestEnv ? "test-user" : null;
   }
+}
+
+function pickDisruptionUpdate(updates: readonly TravelUpdateEvent[]): TravelUpdateEvent | null {
+  return (
+    updates.find((update) => update.kind === "cancellation" || update.severity === "critical") ??
+    updates.find((update) => update.kind === "delay" && (update.delayMinutes ?? 0) >= 20) ??
+    null
+  );
 }
 
 export async function POST(req: Request) {
@@ -110,6 +120,23 @@ export async function POST(req: Request) {
     freshUpdates: audit.freshUpdates.length,
     duplicateUpdates: audit.duplicateUpdates,
   });
+
+  const disruptionUpdate = pickDisruptionUpdate(audit.freshUpdates);
+  if (disruptionUpdate) {
+    const affectedReservation =
+      parsed.data.reservations.find(
+        (reservation) =>
+          reservation.confirmationCode === disruptionUpdate.target.confirmationCode ||
+          reservation.title === disruptionUpdate.target.titleHint,
+      ) ?? null;
+    void sendDisruptionAlert(userId, {
+      affectedReservationTitle: affectedReservation?.title ?? disruptionUpdate.target.titleHint ?? "Affected reservation",
+      disruptionType: disruptionUpdate.kind,
+      severity: disruptionUpdate.severity,
+      detail: disruptionUpdate.detail,
+      affectedReservationId: affectedReservation?.id,
+    });
+  }
 
   return NextResponse.json({
     ...result,

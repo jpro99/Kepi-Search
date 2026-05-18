@@ -27,6 +27,7 @@ const SERVICE_GROUPS: ServiceGroup[] = [
   { name: "Anthropic", patterns: [/^ANTHROPIC_/u] },
   { name: "Vercel KV", patterns: [/^KV_/u] },
   { name: "Upstash", patterns: [/^UPSTASH_/u] },
+  { name: "Resend", patterns: [/^RESEND_/u] },
   { name: "Travel Update Runtime", patterns: [/^TRAVEL_UPDATE_/u] },
   { name: "Travel Alerts", patterns: [/^TRAVEL_ALERT_/u] },
 ];
