@@ -7,7 +7,7 @@ import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import { subscribeUser } from "@/lib/travelAssistant/pushNotificationService";
 
-const PushSubscriptionSchema = z.object({
+const WebPushSubscriptionSchema = z.object({
   endpoint: z.string().url(),
   expirationTime: z.number().nullable().optional(),
   keys: z.object({
@@ -15,6 +15,14 @@ const PushSubscriptionSchema = z.object({
     auth: z.string().min(1),
   }),
 });
+
+const NativePushSubscriptionSchema = z.object({
+  channel: z.literal("native"),
+  token: z.string().trim().min(1),
+  platform: z.enum(["ios", "android"]),
+});
+
+const PushSubscriptionSchema = z.union([WebPushSubscriptionSchema, NativePushSubscriptionSchema]);
 
 async function resolveAuthenticatedUserId(): Promise<string | null> {
   const isTestEnv = isAutomatedTestRuntime();
@@ -118,6 +126,8 @@ export async function POST(req: Request) {
   }
 
   await subscribeUser(userId, parsed.data);
-  routeLogger.info("Push subscription saved.");
+  routeLogger.info("Push subscription saved.", {
+    channel: "channel" in parsed.data ? parsed.data.channel : "web",
+  });
   return NextResponse.json({ ok: true });
 }

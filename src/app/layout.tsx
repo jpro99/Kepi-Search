@@ -5,6 +5,7 @@ import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
+import { SplashTransition } from "@/components/native/SplashTransition";
 import { verifyEnvFromExampleAtBoot } from "../../scripts/verify-env";
 import "./globals.css";
 
@@ -50,7 +51,7 @@ export default async function RootLayout({
       <body className="min-h-full flex flex-col">
         <ClerkProvider>
           <NextIntlClientProvider locale={locale} messages={messages}>
-            {children}
+            <SplashTransition>{children}</SplashTransition>
             <Analytics />
             <SpeedInsights />
           </NextIntlClientProvider>

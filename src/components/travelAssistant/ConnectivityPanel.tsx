@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { PushNotifications } from "@capacitor/push-notifications";
+import { useEffect, useMemo, useState } from "react";
 import type {
   TravelConflictResolutionSummary,
   TravelProviderReport,
@@ -8,6 +9,11 @@ import type {
   TravelUpdateMode,
 } from "@/lib/travelAssistant/travelUpdateTypes";
 import type { ReactNode } from "react";
+import {
+  isNative,
+  registerPushToken,
+  scheduleLocalNotification,
+} from "@/lib/native/capacitorBridge";
 
 type NetworkMode = "wifi" | "cellular" | "offline";
 
@@ -96,13 +102,28 @@ export function ConnectivityPanel({
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
+  const nativeContext = useMemo(() => isNative(), []);
   const notificationsSupported =
-    typeof window !== "undefined" && "Notification" in window && "serviceWorker" in navigator && "PushManager" in window;
+    nativeContext ||
+    (typeof window !== "undefined" &&
+      "Notification" in window &&
+      "serviceWorker" in navigator &&
+      "PushManager" in window);
 
   useEffect(() => {
     const refreshNotificationStatus = async (): Promise<void> => {
       if (!notificationsSupported) {
         setNotificationsEnabled(false);
+        return;
+      }
+
+      if (nativeContext) {
+        try {
+          const permissions = await PushNotifications.checkPermissions();
+          setNotificationsEnabled(permissions.receive === "granted");
+        } catch {
+          setNotificationsEnabled(false);
+        }
         return;
       }
 
@@ -116,7 +137,7 @@ export function ConnectivityPanel({
     };
 
     void refreshNotificationStatus();
-  }, [notificationsSupported]);
+  }, [nativeContext, notificationsSupported]);
 
   const handleNotificationToggle = async (): Promise<void> => {
     if (!notificationsSupported || notificationsBusy) {
@@ -125,6 +146,45 @@ export function ConnectivityPanel({
     setNotificationsBusy(true);
     setNotificationsError(null);
     try {
+      if (nativeContext) {
+        if (notificationsEnabled) {
+          const response = await fetch("/api/push/unsubscribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ channel: "native" }),
+          });
+          if (!response.ok) {
+            throw new Error(`Native push unsubscribe failed (${response.status})`);
+          }
+          setNotificationsEnabled(false);
+          return;
+        }
+
+        const registration = await registerPushToken();
+        if (!registration) {
+          throw new Error("Native push permission not granted or token unavailable.");
+        }
+
+        const subscribeResponse = await fetch("/api/push/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            channel: "native",
+            token: registration.token,
+            platform: registration.platform,
+          }),
+        });
+        if (!subscribeResponse.ok) {
+          throw new Error(`Native push subscribe failed (${subscribeResponse.status})`);
+        }
+        setNotificationsEnabled(true);
+        void scheduleLocalNotification({
+          title: "Kepi notifications enabled",
+          body: "Native alerts are now active for this device.",
+        });
+        return;
+      }
+
       const registration = await navigator.serviceWorker.register("/sw.js");
       const existingSubscription = await registration.pushManager.getSubscription();
 

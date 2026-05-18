@@ -2,11 +2,12 @@ import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
 import createBundleAnalyzer from "@next/bundle-analyzer";
 import createNextIntlPlugin from "next-intl/plugin";
+const isCapacitorBuild = process.env.CAPACITOR_BUILD === "true";
 // next-pwa does not currently ship typed exports for TS configs.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const withPWA = require("next-pwa")({
   dest: "public",
-  disable: process.env.NODE_ENV === "development",
+  disable: process.env.NODE_ENV === "development" || isCapacitorBuild,
   register: true,
   skipWaiting: true,
   swSrc: "public/sw.js",
@@ -34,41 +35,47 @@ const contentSecurityPolicy = [
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
+  ...(isCapacitorBuild ? { output: "export" as const } : {}),
   images: {
     formats: ["image/avif", "image/webp"],
+    ...(isCapacitorBuild ? { unoptimized: true } : {}),
   },
   experimental: {
     optimizePackageImports: ["lucide-react", "recharts"],
   },
-  async headers() {
-    return [
-      {
-        source: "/(.*)",
-        headers: [
-          {
-            key: "X-Frame-Options",
-            value: "DENY",
-          },
-          {
-            key: "X-Content-Type-Options",
-            value: "nosniff",
-          },
-          {
-            key: "Referrer-Policy",
-            value: "strict-origin-when-cross-origin",
-          },
-          {
-            key: "Permissions-Policy",
-            value: "camera=(), microphone=(), geolocation=(self)",
-          },
-          {
-            key: "Content-Security-Policy",
-            value: contentSecurityPolicy,
-          },
-        ],
-      },
-    ];
-  },
+  ...(isCapacitorBuild
+    ? {}
+    : {
+        async headers() {
+          return [
+            {
+              source: "/(.*)",
+              headers: [
+                {
+                  key: "X-Frame-Options",
+                  value: "DENY",
+                },
+                {
+                  key: "X-Content-Type-Options",
+                  value: "nosniff",
+                },
+                {
+                  key: "Referrer-Policy",
+                  value: "strict-origin-when-cross-origin",
+                },
+                {
+                  key: "Permissions-Policy",
+                  value: "camera=(), microphone=(), geolocation=(self)",
+                },
+                {
+                  key: "Content-Security-Policy",
+                  value: contentSecurityPolicy,
+                },
+              ],
+            },
+          ];
+        },
+      }),
 };
 
 export default withSentryConfig(withBundleAnalyzer(withPWA(withNextIntl(nextConfig))), {

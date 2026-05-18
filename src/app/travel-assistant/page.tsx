@@ -24,6 +24,7 @@ import {
   parseTravelClientSessionState,
   stringifyTravelClientSessionState,
 } from "@/lib/travelAssistant/clientSessionState";
+import { scheduleLocalNotification, triggerHaptic } from "@/lib/native/capacitorBridge";
 import {
   buildIncidentAutopilotPlan,
   type IncidentAutopilotAction,
@@ -1099,6 +1100,7 @@ export default function TravelAssistantPage() {
     }
     setUndoStack((previous) => previous.slice(1));
     restoreUndoSnapshot(latest);
+    void triggerHaptic("light");
     setToastRaw("Reverted the most recent critical change.");
   }, [restoreUndoSnapshot, undoStack]);
 
@@ -2223,6 +2225,11 @@ export default function TravelAssistantPage() {
     if (criticalUpdateApplied) {
       setTripStatus("red");
       setTripStage("recovery");
+      void triggerHaptic("heavy");
+      void scheduleLocalNotification({
+        title: "Kepi disruption alert",
+        body: "A critical update moved your trip into recovery mode.",
+      });
     }
 
     if (appliedFeed.length > 0) {
@@ -2596,6 +2603,7 @@ export default function TravelAssistantPage() {
     }
     pushUndoSnapshot(`Stage advanced to ${nextStage}`);
     setTripStage(nextStage);
+    void triggerHaptic("light");
     setToast(`Moved to ${STAGE_LABEL[nextStage]} stage.`);
   };
 
@@ -2777,6 +2785,11 @@ export default function TravelAssistantPage() {
     pushUndoSnapshot(`Disruption simulation (${scenario})`);
     setActiveScenario(scenario);
     setTripStage("recovery");
+    void triggerHaptic("heavy");
+    void scheduleLocalNotification({
+      title: "Kepi disruption alert",
+      body: `Disruption mode activated: ${scenario.replaceAll("-", " ")}.`,
+    });
 
     if (scenario === "missed-flight") {
       applyGovernedStatus("red", "manual");
@@ -3314,6 +3327,7 @@ export default function TravelAssistantPage() {
     const nextReservations = [newReservation, ...reservations];
     setReservations((prev) => [newReservation, ...prev]);
     setReviewQueue((prev) => prev.filter((item) => item.id !== reviewId));
+    void triggerHaptic("medium");
     queueMutation("Review item accepted into live trip.", {
       key: "review-accept",
       reservationId: newReservation.id,

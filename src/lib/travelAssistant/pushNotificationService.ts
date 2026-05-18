@@ -3,6 +3,7 @@ import { logger } from "@/lib/logger";
 import { kvStoreDel, kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
 
 const PUSH_SUBSCRIPTION_KEY = "push-sub";
+type NativePushPlatform = "ios" | "android";
 
 type PushNotificationPayload = {
   title: string;
@@ -10,12 +11,46 @@ type PushNotificationPayload = {
   url?: string;
 };
 
+export interface NativePushSubscription {
+  channel: "native";
+  token: string;
+  platform: NativePushPlatform;
+}
+
+type StoredPushSubscription = PushSubscription | NativePushSubscription;
+
 interface WebPushClient {
   setVapidDetails(subject: string, publicKey: string, privateKey: string): void;
   sendNotification(subscription: PushSubscription, payload?: string): Promise<unknown>;
 }
 
 let webPushClient: WebPushClient = webpush;
+
+function isNativeSubscription(value: unknown): value is NativePushSubscription {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<NativePushSubscription>;
+  return (
+    candidate.channel === "native" &&
+    typeof candidate.token === "string" &&
+    candidate.token.length > 0 &&
+    (candidate.platform === "ios" || candidate.platform === "android")
+  );
+}
+
+function isWebPushSubscription(value: unknown): value is PushSubscription {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<PushSubscription>;
+  return (
+    typeof candidate.endpoint === "string" &&
+    candidate.endpoint.length > 0 &&
+    typeof candidate.keys?.auth === "string" &&
+    typeof candidate.keys?.p256dh === "string"
+  );
+}
 
 function resolveVapidConfig(): { publicKey: string; privateKey: string; mailto: string } | null {
   const publicKey = process.env.VAPID_PUBLIC_KEY?.trim();
@@ -40,7 +75,7 @@ function configureWebPush(): boolean {
   return true;
 }
 
-export async function subscribeUser(userId: string, subscription: PushSubscription): Promise<void> {
+export async function subscribeUser(userId: string, subscription: StoredPushSubscription): Promise<void> {
   await kvStoreSet(PUSH_SUBSCRIPTION_KEY, subscription, { userId });
 }
 
@@ -52,14 +87,31 @@ export async function sendPushNotification(
   userId: string,
   payload: PushNotificationPayload,
 ): Promise<boolean> {
-  const subscription = await kvStoreGet<PushSubscription>(PUSH_SUBSCRIPTION_KEY, { userId });
-  if (!subscription) {
+  const storedSubscription = await kvStoreGet<unknown>(PUSH_SUBSCRIPTION_KEY, { userId });
+  if (!storedSubscription) {
     logger.warn("Push subscription missing for user; skipping notification.", {
       scope: "travelAssistant/pushNotificationService",
       userId,
     });
     return false;
   }
+  if (isNativeSubscription(storedSubscription)) {
+    logger.info("Native push token is registered; web push delivery skipped without FCM/APNS bridge.", {
+      scope: "travelAssistant/pushNotificationService",
+      userId,
+      platform: storedSubscription.platform,
+    });
+    return false;
+  }
+  if (!isWebPushSubscription(storedSubscription)) {
+    logger.warn("Stored push subscription payload is invalid; removing stale record.", {
+      scope: "travelAssistant/pushNotificationService",
+      userId,
+    });
+    await unsubscribeUser(userId);
+    return false;
+  }
+  const subscription = storedSubscription;
   if (!configureWebPush()) {
     return false;
   }
