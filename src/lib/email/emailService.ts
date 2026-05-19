@@ -25,7 +25,9 @@ import { TripSummaryEmail, type TripSummaryReservationItem } from "@/lib/email/t
 import { WeeklyDigestEmail, type WeeklyDigestTripItem } from "@/lib/email/templates/weeklyDigest";
 import { kvStoreGet, kvStoreSet, kvStoreSetNx } from "@/lib/travelAssistant/kvStore";
 import type { TravelDocument } from "@/lib/travelAssistant/documentVault";
+import { getLocalTips } from "@/lib/travelAssistant/localIntelligenceService";
 import { getTrip, listTrips, type TravelTrip } from "@/lib/travelAssistant/tripStore";
+import { getWeatherForecast } from "@/lib/travelAssistant/weatherService";
 
 const EMAIL_PREFS_KEY = "email-prefs";
 const TRIP_SUMMARY_SENT_KEY_PREFIX = "email-sent/trip-summary";
@@ -98,41 +100,6 @@ function toWeekKey(date = new Date()): string {
   const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
   const weekNo = Math.ceil((((target.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   return `${target.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
-}
-
-async function fetchDestinationWeather(destination: string): Promise<string | null> {
-  const normalizedDestination = destination.trim();
-  if (!normalizedDestination) return null;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
-  try {
-    const response = await fetch(`https://wttr.in/${encodeURIComponent(normalizedDestination)}?format=j1`, {
-      method: "GET",
-      cache: "no-store",
-      signal: controller.signal,
-      headers: { "User-Agent": "kepi-travel-assistant/1.0" },
-    });
-    if (!response.ok) {
-      return null;
-    }
-    const payload = (await response.json()) as {
-      current_condition?: Array<{ temp_C?: string; weatherDesc?: Array<{ value?: string }> }>;
-    };
-    const current = payload.current_condition?.[0];
-    const temperature = current?.temp_C?.trim();
-    const description = current?.weatherDesc?.[0]?.value?.trim();
-    if (!temperature && !description) {
-      return null;
-    }
-    if (temperature && description) {
-      return `${description}, ${temperature}C`;
-    }
-    return description || (temperature ? `${temperature}C` : null);
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 async function resolveUserEmail(userId: string): Promise<string | null> {
@@ -325,7 +292,14 @@ async function sendTripSummaryCore(userId: string, trip: TravelTrip): Promise<Em
     return { status: "skipped", reason: "already-sent-today" };
   }
 
-  const weatherSummary = await fetchDestinationWeather(trip.destination);
+  const [weather, localTips] = await Promise.all([
+    getWeatherForecast(trip.destination, 3),
+    getLocalTips(trip.destination, {
+      startDate: trip.startDate,
+      endDate: trip.endDate,
+    }),
+  ]);
+  const weatherSummary = weather.condition === "Unavailable" ? null : `${weather.condition}, ${weather.temp}`;
   const subject = `Kepi Trip Summary: ${trip.name} (${trip.destination})`;
   const departureDateLabel = trip.startDate || "Upcoming";
   const appBase = resolveAppBaseUrl().replace(/\/$/u, "");
@@ -335,6 +309,13 @@ async function sendTripSummaryCore(userId: string, trip: TravelTrip): Promise<Em
       destination: trip.destination,
       departureDateLabel,
       weatherSummary,
+      weatherForecast: weather.forecast.slice(0, 3).map((day) => ({
+        date: day.date,
+        condition: day.condition,
+        minTempC: day.minTempC,
+        maxTempC: day.maxTempC,
+      })),
+      localTips,
       reservations: mapTripReservationsForSummary(trip),
       appLink: `${appBase}/travel-assistant`,
       unsubscribeLink: buildUnsubscribeLink(userId),

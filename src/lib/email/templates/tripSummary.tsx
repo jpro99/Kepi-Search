@@ -17,6 +17,19 @@ export interface TripSummaryTemplateProps {
   destination: string;
   departureDateLabel: string;
   weatherSummary: string | null;
+  weatherForecast?: Array<{
+    date: string;
+    condition: string;
+    minTempC: string;
+    maxTempC: string;
+  }>;
+  localTips?: {
+    bestAreasToStay: string[];
+    localTransportTips: string[];
+    currencyAndTippingCustoms: string[];
+    safetyNotes: string[];
+    packingSuggestions: string[];
+  } | null;
   reservations: TripSummaryReservationItem[];
   appLink: string;
   unsubscribeLink: string;
@@ -56,10 +69,14 @@ export function TripSummaryEmail({
   destination,
   departureDateLabel,
   weatherSummary,
+  weatherForecast,
+  localTips,
   reservations,
   appLink,
   unsubscribeLink,
 }: TripSummaryTemplateProps): ReactElement {
+  const hasLocalTips = Boolean(localTips && Object.values(localTips).some((tips) => tips.length > 0));
+
   return (
     <html>
       <body style={shellStyle}>
@@ -81,6 +98,23 @@ export function TripSummaryEmail({
             <p style={{ margin: "0 0 14px", fontSize: "14px", color: "#334155" }}>
               Weather at destination: {weatherSummary ?? "Unavailable right now. Keep checking before departure."}
             </p>
+            {weatherForecast && weatherForecast.length > 0 ? (
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "12px" }}>
+                {weatherForecast.slice(0, 3).map((day) => (
+                  <span
+                    key={`${day.date}-${day.condition}`}
+                    style={{
+                      ...chipStyle,
+                      backgroundColor: "#eef2ff",
+                      border: "1px solid #c7d2fe",
+                      color: "#3730a3",
+                    }}
+                  >
+                    {day.date}: {day.condition} ({day.maxTempC}/{day.minTempC})
+                  </span>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <div style={{ padding: "0 20px 10px" }}>
@@ -118,6 +152,37 @@ export function TripSummaryEmail({
           </div>
 
           <div style={{ padding: "8px 20px 20px" }}>
+            {hasLocalTips && localTips ? (
+              <section
+                style={{
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "10px",
+                  backgroundColor: "#f8fafc",
+                  padding: "12px",
+                  marginBottom: "12px",
+                }}
+              >
+                <p style={{ margin: "0 0 6px", fontSize: "14px", fontWeight: 700 }}>Local intelligence briefing</p>
+                {[
+                  ["Best areas", localTips.bestAreasToStay],
+                  ["Transport", localTips.localTransportTips],
+                  ["Currency & tipping", localTips.currencyAndTippingCustoms],
+                  ["Safety", localTips.safetyNotes],
+                  ["Packing", localTips.packingSuggestions],
+                ].map(([label, tips]) =>
+                  Array.isArray(tips) && tips.length > 0 ? (
+                    <div key={String(label)} style={{ marginBottom: "8px" }}>
+                      <p style={{ margin: "0 0 4px", fontSize: "12px", fontWeight: 700, color: "#0f172a" }}>{label}</p>
+                      <ul style={{ margin: 0, paddingLeft: "18px", fontSize: "12px", color: "#334155", lineHeight: 1.6 }}>
+                        {tips.slice(0, 2).map((tip) => (
+                          <li key={tip}>{tip}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null,
+                )}
+              </section>
+            ) : null}
             <a
               href={appLink}
               style={{

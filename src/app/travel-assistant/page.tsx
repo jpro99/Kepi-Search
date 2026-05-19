@@ -55,6 +55,8 @@ import { TripSwitcher } from "@/components/travelAssistant/TripSwitcher";
 import { TripOrientationCard } from "@/components/travelAssistant/TripOrientationCard";
 import { TripTimeline } from "@/components/travelAssistant/TripTimeline";
 import { DocumentVault } from "@/components/travelAssistant/DocumentVault";
+import { WeatherCard } from "@/components/travelAssistant/WeatherCard";
+import { LocalIntelligencePanel } from "@/components/travelAssistant/LocalIntelligencePanel";
 import { trackEvent } from "@/lib/analytics/trackEvent";
 import type { BillingPlanId, PlanFeature } from "@/lib/billing/plans";
 import { JourneyFlowPanel } from "./components/JourneyFlowPanel";
@@ -1039,6 +1041,12 @@ export default function TravelAssistantPage() {
     () => emailSamples.find((sample) => sample.id === selectedEmailId) ?? emailSamples[0],
     [emailSamples, selectedEmailId],
   );
+  const activeTrip = useMemo(() => {
+    if (!activeTripId) {
+      return null;
+    }
+    return trips.find((trip) => trip.id === activeTripId) ?? null;
+  }, [activeTripId, trips]);
 
   const cloneForUndo = useCallback(
     <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T,
@@ -3736,6 +3744,25 @@ export default function TravelAssistantPage() {
           onToggleMobileSimpleView={() => setMobileSimpleView((value) => !value)}
           onMobileViewPanelChange={setMobileViewPanel}
         />
+        {shouldRenderMobilePanel("essentials") ? (
+          <section className="grid gap-4 sm:gap-6 xl:grid-cols-2">
+            <WeatherCard destination={activeTrip?.destination ?? "Set destination"} />
+            {tripStage === "readiness" ? (
+              <LocalIntelligencePanel
+                destination={activeTrip?.destination ?? "Set destination"}
+                startDate={activeTrip?.startDate}
+                endDate={activeTrip?.endDate}
+              />
+            ) : (
+              <article className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
+                <h2 className="text-sm font-semibold text-slate-100">Local intelligence</h2>
+                <p className="mt-2 text-xs text-slate-400">
+                  Local destination tips are emphasized in readiness mode so your plan is set before departure.
+                </p>
+              </article>
+            )}
+          </section>
+        ) : null}
         {shouldRenderMobilePanel("essentials") ? (
           <AISuggestionPanel
             tripStage={tripStage}
