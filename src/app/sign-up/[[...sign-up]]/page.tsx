@@ -3,20 +3,10 @@
 import { useMemo, useState } from "react";
 import { SignUp } from "@clerk/nextjs";
 
-const ALPHANUMERIC_HYPHEN_CODE_REGEX = /^[A-Z0-9-]{1,50}$/u;
-const INVITE_CODE_REGEX = /^KEPI-FRIEND-[A-Z0-9-]{1,38}$/u;
-const REFERRAL_CODE_REGEX = /^[A-Z0-9]{8}$/u;
+const ALPHANUMERIC_HYPHEN_CODE_REGEX = /^[A-Z0-9-]{1,120}$/u;
 
 function normalizeCode(value: string): string {
   return value.toUpperCase().replaceAll(/\s+/g, "").trim();
-}
-
-function isInviteCode(value: string): boolean {
-  return INVITE_CODE_REGEX.test(value);
-}
-
-function isReferralCode(value: string): boolean {
-  return REFERRAL_CODE_REGEX.test(value);
 }
 
 export default function SignUpPage() {
@@ -25,17 +15,11 @@ export default function SignUpPage() {
   const [codeMessage, setCodeMessage] = useState<string | null>(null);
 
   const normalizedInputCode = normalizeCode(inputCode);
-  const isCodeFormatValid =
-    normalizedInputCode.length === 0 ||
-    (ALPHANUMERIC_HYPHEN_CODE_REGEX.test(normalizedInputCode) &&
-      (isInviteCode(normalizedInputCode) || isReferralCode(normalizedInputCode)));
+  const isCodeFormatValid = normalizedInputCode.length === 0 || ALPHANUMERIC_HYPHEN_CODE_REGEX.test(normalizedInputCode);
 
   const redirectUrl = useMemo(() => {
-    if (isInviteCode(appliedCode)) {
+    if (appliedCode.length > 0) {
       return `/billing?redeemCode=${encodeURIComponent(appliedCode)}`;
-    }
-    if (isReferralCode(appliedCode)) {
-      return `/travel-assistant?ref=${encodeURIComponent(appliedCode)}`;
     }
     return "/travel-assistant";
   }, [appliedCode]);
@@ -63,11 +47,8 @@ export default function SignUpPage() {
                 setCodeMessage("Code cleared.");
                 return;
               }
-              if (
-                !ALPHANUMERIC_HYPHEN_CODE_REGEX.test(normalizedInputCode) ||
-                (!isInviteCode(normalizedInputCode) && !isReferralCode(normalizedInputCode))
-              ) {
-                setCodeMessage("Code format is invalid. Use KEPI-FRIEND-XXXXXX or 8-character referral code.");
+              if (!ALPHANUMERIC_HYPHEN_CODE_REGEX.test(normalizedInputCode)) {
+                setCodeMessage("Code format is invalid. Use letters, numbers, and hyphens only.");
                 return;
               }
               setAppliedCode(normalizedInputCode);
@@ -80,7 +61,7 @@ export default function SignUpPage() {
         </div>
         {!isCodeFormatValid ? (
           <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">
-            Invalid code format. Use KEPI-FRIEND-XXXXXX or an 8-character referral code.
+            Invalid code format. Use letters, numbers, and hyphens only.
           </p>
         ) : null}
         {codeMessage ? <p className="mt-2 text-xs text-emerald-800 dark:text-emerald-200">{codeMessage}</p> : null}

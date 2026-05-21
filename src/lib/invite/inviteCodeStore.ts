@@ -8,7 +8,7 @@ const INVITE_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const INVITE_CODE_RANDOM_LENGTH = 6;
 const MAX_GENERATION_ATTEMPTS = 40;
 const INVITE_CODE_PREFIX = "KEPI-FRIEND-";
-const REDEEMABLE_CODE_REGEX = /^[A-Z0-9-]{1,50}$/u;
+const REDEEMABLE_CODE_REGEX = /^[A-Z0-9-]{1,120}$/u;
 
 export type InviteCodeType = "lifetime" | "trial-30";
 export type InviteCodeStatus = "active" | "revoked" | "used";

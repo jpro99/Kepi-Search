@@ -36,9 +36,7 @@ type BillingStatusResponse = {
 };
 
 const FEATURE_ORDER: PlanFeature[] = ["gmail-import", "ai-suggestions", "push-notifications", "multi-trip"];
-const ALPHANUMERIC_HYPHEN_CODE_REGEX = /^[A-Z0-9-]{1,50}$/u;
-const INVITE_CODE_REGEX = /^KEPI-FRIEND-[A-Z0-9-]{1,38}$/u;
-const REFERRAL_CODE_REGEX = /^[A-Z0-9]{8}$/u;
+const ALPHANUMERIC_HYPHEN_CODE_REGEX = /^[A-Z0-9-]{1,120}$/u;
 
 function normalizeRedeemCode(value: string): string {
   return value.toUpperCase().replaceAll(/\s+/g, "").trim();
@@ -177,19 +175,13 @@ export default function BillingPage() {
       if (!ALPHANUMERIC_HYPHEN_CODE_REGEX.test(normalizedCode)) {
         throw new Error("This code is invalid.");
       }
-      const isInviteCode = INVITE_CODE_REGEX.test(normalizedCode);
-      const isReferralCode = REFERRAL_CODE_REGEX.test(normalizedCode);
-      if (!isInviteCode && !isReferralCode) {
-        throw new Error("This code is invalid.");
-      }
 
-      const endpoint = isInviteCode ? "/api/invite/redeem" : "/api/referral/redeem";
-      const response = await fetch(endpoint, {
+      const inviteResponse = await fetch("/api/invite/redeem", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: normalizedCode }),
       });
-      const payload = (await response.json()) as {
+      const invitePayload = (await inviteResponse.json()) as {
         error?: string;
         reason?: string;
         plan?: "lifetime" | "trial";
@@ -198,30 +190,58 @@ export default function BillingPage() {
           newUserDays?: number;
         };
       };
-      if (!response.ok) {
-        const mappedError =
-          payload.reason === "code-revoked"
-            ? "This code has been revoked."
-            : payload.reason === "already-redeemed" || payload.reason === "code-used"
-              ? "This code has already been used."
-              : payload.reason === "invalid-code"
-                ? "This code is invalid."
-                : payload.error ?? `Code redemption failed (${response.status})`;
-        throw new Error(mappedError);
+
+      if (inviteResponse.ok) {
+        if (redeemInputRef.current) {
+          redeemInputRef.current.value = "";
+        }
+        setInviteMessage(
+          invitePayload.plan === "lifetime"
+            ? "Pro access activated"
+            : `Your 30-day free trial is active, expires ${invitePayload.trialExpiresAt ? new Date(invitePayload.trialExpiresAt).toLocaleDateString() : "in 30 days"}`,
+        );
+        await loadBillingStatus();
+        return;
       }
+
+      if (invitePayload.reason !== "invalid-code") {
+        const mappedInviteError =
+          invitePayload.reason === "code-revoked"
+            ? "This code has been revoked."
+            : invitePayload.reason === "already-redeemed" || invitePayload.reason === "code-used"
+              ? "This code has already been used."
+              : invitePayload.error ?? `Code redemption failed (${inviteResponse.status})`;
+        throw new Error(mappedInviteError);
+      }
+
+      const referralResponse = await fetch("/api/referral/redeem", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: normalizedCode }),
+      });
+      const referralPayload = (await referralResponse.json()) as {
+        error?: string;
+        reason?: string;
+        awarded?: {
+          newUserDays?: number;
+        };
+      };
+
+      if (!referralResponse.ok) {
+        const mappedReferralError =
+          referralPayload.reason === "already-redeemed"
+            ? "This code has already been used."
+            : referralPayload.reason === "invalid-code"
+              ? "This code is invalid."
+              : referralPayload.error ?? `Code redemption failed (${referralResponse.status})`;
+        throw new Error(mappedReferralError);
+      }
+
       if (redeemInputRef.current) {
         redeemInputRef.current.value = "";
       }
-      if (isInviteCode) {
-        setInviteMessage(
-          payload.plan === "lifetime"
-            ? "Pro access activated"
-            : `Your 30-day free trial is active, expires ${payload.trialExpiresAt ? new Date(payload.trialExpiresAt).toLocaleDateString() : "in 30 days"}`,
-        );
-      } else {
-        const awardedDays = payload.awarded?.newUserDays ?? 14;
-        setInviteMessage(`Referral code applied. ${awardedDays} Pro days added to your account.`);
-      }
+      const awardedDays = referralPayload.awarded?.newUserDays ?? 14;
+      setInviteMessage(`Referral code applied. ${awardedDays} Pro days added to your account.`);
       await loadBillingStatus();
     } catch (redeemError) {
       setInviteError(redeemError instanceof Error ? redeemError.message : "Could not redeem invite code.");
