@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { auth } from "@clerk/nextjs/server";
 import { Logo } from "@/components/ui/Logo";
 
 const featureCards = [
@@ -133,7 +134,10 @@ const faqs = [
   },
 ] as const;
 
-export default function Home() {
+export default async function Home() {
+  const { userId } = await auth();
+  const authCtaHref = userId ? "/travel-assistant" : "/sign-up";
+
   return (
     <main className="min-h-screen bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       <section className="mx-auto grid w-full max-w-6xl gap-10 px-4 pb-16 pt-14 sm:px-8 lg:grid-cols-2 lg:items-center lg:gap-14 lg:pt-20">
@@ -147,7 +151,7 @@ export default function Home() {
           </p>
           <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:items-center">
             <Link
-              href="/sign-up"
+              href={authCtaHref}
               className="inline-flex items-center justify-center rounded-xl bg-cyan-500 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
             >
               Start free
@@ -239,7 +243,7 @@ export default function Home() {
                 ))}
               </ul>
               <Link
-                href="/sign-up"
+                href={authCtaHref}
                 className="mt-5 inline-flex w-full items-center justify-center rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 dark:bg-cyan-500 dark:text-slate-950 dark:hover:bg-cyan-400"
               >
                 {plan.cta}

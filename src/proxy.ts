@@ -11,6 +11,12 @@ import {
 import { isMockClerkAuthEnabled } from "@/lib/auth/mockClerkAuth";
 
 const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
+const PUBLIC_PATH_PATTERNS: RegExp[] = [
+  /^\/$/,
+  /^\/sign-in(?:\/.*)?$/,
+  /^\/sign-up(?:\/.*)?$/,
+  /^\/refer(?:\/.*)?$/,
+];
 const PROTECTED_PATH_PATTERNS: RegExp[] = [
   /^\/travel-assistant(?:\/.*)?$/,
   /^\/billing(?:\/.*)?$/,
@@ -42,10 +48,14 @@ function isProtectedPath(pathname: string): boolean {
   return PROTECTED_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
 }
 
+function isPublicPath(pathname: string): boolean {
+  return PUBLIC_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
+}
+
 export default clerkMiddleware(async (auth, req) => {
   const localeFromPath = extractLocalePrefix(req.nextUrl.pathname);
   const pathnameWithoutLocale = stripLocalePrefix(req.nextUrl.pathname);
-  if (isProtectedPath(pathnameWithoutLocale) && !isMockClerkAuthEnabled()) {
+  if (isProtectedPath(pathnameWithoutLocale) && !isPublicPath(pathnameWithoutLocale) && !isMockClerkAuthEnabled()) {
     await auth.protect();
   }
 
