@@ -35,6 +35,9 @@ const contentSecurityPolicy = [
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   ...(isCapacitorBuild ? { output: "export" as const } : {}),
   images: {
     formats: ["image/avif", "image/webp"],

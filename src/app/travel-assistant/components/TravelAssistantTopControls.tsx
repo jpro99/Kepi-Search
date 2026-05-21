@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { UserButton } from "@clerk/nextjs";
+import { useClerk } from "@clerk/nextjs";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { Logo } from "@/components/ui/Logo";
 
 type TripStage = "readiness" | "pre-departure" | "airport" | "arrival" | "recovery";
 type TripStatus = "green" | "yellow" | "red";
@@ -32,9 +33,6 @@ interface TravelAssistantTopControlsProps {
   onEvaluateStatus: () => void;
 }
 
-const TRIP_STAGES: TripStage[] = ["readiness", "pre-departure", "airport", "arrival", "recovery"];
-const TRIP_STATUS_OPTIONS: TripStatus[] = ["green", "yellow", "red"];
-
 export function TravelAssistantTopControls({
   tripStatus,
   statusBadgeByTripStatus,
@@ -49,14 +47,16 @@ export function TravelAssistantTopControls({
   suppressedNudgeCount,
   lastSessionRestoreAt,
   formatClock,
-  onTripStageChange,
-  onTripStatusChange,
-  onGuidanceToneChange,
-  minutesToDeparture,
-  onMinutesToDepartureChange,
-  onEvaluateStatus,
 }: TravelAssistantTopControlsProps) {
+  const clerk = useClerk();
   const [isAdmin, setIsAdmin] = useState(false);
+  const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
+
+  const avatarLabel =
+    clerk.user?.firstName?.slice(0, 1)?.toUpperCase() ??
+    clerk.user?.username?.slice(0, 1)?.toUpperCase() ??
+    clerk.user?.primaryEmailAddress?.emailAddress?.slice(0, 1)?.toUpperCase() ??
+    "U";
 
   useEffect(() => {
     let cancelled = false;
@@ -83,19 +83,12 @@ export function TravelAssistantTopControls({
 
   return (
     <section className="overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-indigo-100/40 shadow-xl dark:border-slate-700/70 dark:from-slate-900 dark:via-slate-900 dark:to-indigo-950/40 dark:shadow-2xl dark:shadow-indigo-950/30">
-      <div className="grid gap-5 p-5 sm:gap-6 sm:p-6 lg:grid-cols-[1.8fr_1fr]">
+      <div className="grid gap-5 p-5 sm:gap-6 sm:p-6">
         <div className="space-y-4">
           <div className="flex items-start justify-between gap-3">
-            <p className="text-xs uppercase tracking-[0.24em] text-cyan-700 dark:text-cyan-300">Adaptive Travel Assistant</p>
+            <Logo size="sm" />
             <div className="flex items-center gap-2">
               <ThemeToggle />
-              <LanguageToggle />
-              <Link
-                href="/billing"
-                className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800/80 dark:text-slate-100 dark:hover:bg-slate-700"
-              >
-                Billing
-              </Link>
               {isAdmin ? (
                 <Link
                   href="/admin"
@@ -104,8 +97,50 @@ export function TravelAssistantTopControls({
                   Admin
                 </Link>
               ) : null}
-              <div className="rounded-full border border-slate-200 bg-white/80 p-1 dark:border-slate-700 dark:bg-slate-900/70">
-                <UserButton />
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setAvatarMenuOpen((value) => !value)}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-cyan-500 text-sm font-bold text-slate-950 shadow-sm ring-1 ring-cyan-300"
+                  aria-label="Open account menu"
+                >
+                  {avatarLabel}
+                </button>
+                {avatarMenuOpen ? (
+                  <div className="absolute right-0 top-[calc(100%+0.5rem)] z-40 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clerk.openUserProfile();
+                        setAvatarMenuOpen(false);
+                      }}
+                      className="w-full rounded-xl px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                    >
+                      Account
+                    </button>
+                    <Link
+                      href="/billing"
+                      className="block rounded-xl px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                      onClick={() => setAvatarMenuOpen(false)}
+                    >
+                      Billing
+                    </Link>
+                    <div className="mt-2 rounded-xl bg-slate-100 p-2 dark:bg-slate-950">
+                      <p className="mb-2 px-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Language</p>
+                      <LanguageToggle />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAvatarMenuOpen(false);
+                        void clerk.signOut();
+                      }}
+                      className="mt-2 w-full rounded-xl px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-500/10"
+                    >
+                      Sign out
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -143,91 +178,6 @@ export function TravelAssistantTopControls({
                 Session restored: {formatClock(lastSessionRestoreAt)}
               </span>
             ) : null}
-          </div>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-700 dark:bg-slate-900/60">
-          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Trip-state editor (live)</p>
-          <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">Controls update status and screens in real time.</p>
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-100/70 p-3 dark:border-slate-700 dark:bg-slate-950/60">
-            <div className="flex items-center justify-between text-xs text-slate-700 dark:text-slate-300">
-              <span>Operational confidence</span>
-              <span>{operationalConfidenceScore}%</span>
-            </div>
-            <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-300 dark:bg-slate-800">
-              <div
-                className={`h-full rounded-full ${
-                  operationalConfidenceScore >= 80
-                    ? "bg-emerald-400"
-                    : operationalConfidenceScore >= 60
-                      ? "bg-amber-400"
-                      : "bg-red-400"
-                }`}
-                style={{ width: `${operationalConfidenceScore}%` }}
-              />
-            </div>
-          </div>
-          <div className="mt-3 space-y-3 text-sm">
-            <label className="block">
-              <span className="mb-1 block text-slate-700 dark:text-slate-300">Trip stage</span>
-              <select
-                value={tripStage}
-                onChange={(event) => onTripStageChange(event.target.value as TripStage)}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900"
-              >
-                {TRIP_STAGES.map((stage) => (
-                  <option key={stage} value={stage}>
-                    {stageLabelByTripStage[stage]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-slate-700 dark:text-slate-300">Trip status</span>
-              <select
-                value={tripStatus}
-                onChange={(event) => onTripStatusChange(event.target.value as TripStatus)}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900"
-              >
-                {TRIP_STATUS_OPTIONS.map((status) => (
-                  <option key={status} value={status}>
-                    {statusLabelByTripStatus[status]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-slate-700 dark:text-slate-300">Guidance tone</span>
-              <select
-                value={guidanceTone}
-                onChange={(event) => onGuidanceToneChange(event.target.value as GuidanceTone)}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900"
-              >
-                <option value="subtle">Subtle (reduced interruption)</option>
-                <option value="standard">Standard</option>
-              </select>
-              <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                Subtle mode deduplicates repeated nudges and slows non-critical prompts.
-              </p>
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-slate-700 dark:text-slate-300">Minutes to departure-critical event</span>
-              <input
-                type="range"
-                min={20}
-                max={360}
-                value={minutesToDeparture}
-                onChange={(event) => onMinutesToDepartureChange(Number(event.target.value))}
-                className="w-full"
-              />
-              <div className="mt-1 text-xs text-slate-600 dark:text-slate-400">{minutesToDeparture} minutes</div>
-            </label>
-            <button
-              type="button"
-              onClick={onEvaluateStatus}
-              className="w-full rounded-lg bg-cyan-500/90 px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400"
-            >
-              Auto-evaluate status from risk
-            </button>
           </div>
         </div>
       </div>

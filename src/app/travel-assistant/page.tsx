@@ -66,6 +66,7 @@ import { ConciergePanel } from "@/components/travelAssistant/ConciergePanel";
 import { trackEvent } from "@/lib/analytics/trackEvent";
 import type { BillingPlanId, PlanFeature } from "@/lib/billing/plans";
 import { AdvancedModeToggle } from "@/components/ui/AdvancedModeToggle";
+import { Logo } from "@/components/ui/Logo";
 import { JourneyFlowPanel } from "./components/JourneyFlowPanel";
 import { TravelAssistantTopControls } from "./components/TravelAssistantTopControls";
 
@@ -1055,6 +1056,7 @@ export default function TravelAssistantPage() {
   const [consumerTripMenuOpen, setConsumerTripMenuOpen] = useState(false);
   const [consumerAvatarMenuOpen, setConsumerAvatarMenuOpen] = useState(false);
   const [showAdvancedShortcut, setShowAdvancedShortcut] = useState(false);
+  const [showSearchBar, setShowSearchBar] = useState(false);
   const advancedShortcutTimerRef = useRef<number | null>(null);
 
   const selectedFamilyMember = useMemo(
@@ -3711,65 +3713,68 @@ export default function TravelAssistantPage() {
         <div className="relative z-10 mx-auto max-w-3xl space-y-4 px-4 py-4 sm:py-6">
           <header className="sticky top-0 z-30 -mx-4 border-b border-slate-200/70 bg-slate-50/90 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90">
             <div className="flex items-center justify-between gap-3">
-              <div className="relative min-w-0">
-                <button
-                  type="button"
-                  onClick={() => setConsumerTripMenuOpen((value) => !value)}
-                  onPointerDown={() => {
-                    advancedShortcutTimerRef.current = window.setTimeout(() => setShowAdvancedShortcut(true), 900);
-                  }}
-                  onPointerUp={() => {
-                    if (advancedShortcutTimerRef.current) {
-                      window.clearTimeout(advancedShortcutTimerRef.current);
-                      advancedShortcutTimerRef.current = null;
-                    }
-                  }}
-                  onPointerLeave={() => {
-                    if (advancedShortcutTimerRef.current) {
-                      window.clearTimeout(advancedShortcutTimerRef.current);
-                      advancedShortcutTimerRef.current = null;
-                    }
-                  }}
-                  className="block max-w-[13rem] truncate rounded-full px-1 py-1 text-left text-lg font-semibold sm:max-w-sm"
-                  aria-label="Switch trips"
-                >
-                  {activeTrip?.name ?? "My trip"} <span aria-hidden>⌄</span>
-                </button>
-                {consumerTripMenuOpen ? (
-                  <div className="absolute left-0 top-[calc(100%+0.5rem)] z-40 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
-                    <ul className="max-h-72 overflow-auto p-2">
-                      {trips.map((trip) => (
-                        <li key={trip.id}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handleSwitchTrip(trip.id);
-                              setConsumerTripMenuOpen(false);
-                            }}
-                            className={`w-full rounded-xl px-3 py-2 text-left text-sm ${
-                              trip.id === activeTripId
-                                ? "bg-cyan-50 font-semibold text-cyan-900 dark:bg-cyan-500/15 dark:text-cyan-100"
-                                : "hover:bg-slate-100 dark:hover:bg-slate-800"
-                            }`}
-                          >
-                            <span className="block truncate">{trip.name}</span>
-                            <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{trip.destination}</span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handleCreateTrip();
-                        setConsumerTripMenuOpen(false);
-                      }}
-                      className="w-full border-t border-slate-200 px-3 py-3 text-left text-sm font-semibold text-cyan-700 hover:bg-slate-50 dark:border-slate-800 dark:text-cyan-200 dark:hover:bg-slate-800"
-                    >
-                      Add trip
-                    </button>
+              <div className="flex min-w-0 items-center gap-2">
+                <Logo size="sm" showWordmark={false} className="shrink-0" />
+                <div className="relative min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setConsumerTripMenuOpen((value) => !value)}
+                    onPointerDown={() => {
+                      advancedShortcutTimerRef.current = window.setTimeout(() => setShowAdvancedShortcut(true), 900);
+                    }}
+                    onPointerUp={() => {
+                      if (advancedShortcutTimerRef.current) {
+                        window.clearTimeout(advancedShortcutTimerRef.current);
+                        advancedShortcutTimerRef.current = null;
+                      }
+                    }}
+                    onPointerLeave={() => {
+                      if (advancedShortcutTimerRef.current) {
+                        window.clearTimeout(advancedShortcutTimerRef.current);
+                        advancedShortcutTimerRef.current = null;
+                      }
+                    }}
+                    className="block max-w-[13rem] truncate rounded-full px-1 py-1 text-left text-lg font-semibold sm:max-w-sm"
+                    aria-label="Switch trips"
+                  >
+                    {activeTrip?.name ?? "My trip"} <span aria-hidden>⌄</span>
+                  </button>
+                  {consumerTripMenuOpen ? (
+                    <div className="absolute left-0 top-[calc(100%+0.5rem)] z-40 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                      <ul className="max-h-72 overflow-auto p-2">
+                        {trips.map((trip) => (
+                          <li key={trip.id}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void handleSwitchTrip(trip.id);
+                                setConsumerTripMenuOpen(false);
+                              }}
+                              className={`w-full rounded-xl px-3 py-2 text-left text-sm ${
+                                trip.id === activeTripId
+                                  ? "bg-cyan-50 font-semibold text-cyan-900 dark:bg-cyan-500/15 dark:text-cyan-100"
+                                  : "hover:bg-slate-100 dark:hover:bg-slate-800"
+                              }`}
+                            >
+                              <span className="block truncate">{trip.name}</span>
+                              <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{trip.destination}</span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleCreateTrip();
+                          setConsumerTripMenuOpen(false);
+                        }}
+                        className="w-full border-t border-slate-200 px-3 py-3 text-left text-sm font-semibold text-cyan-700 hover:bg-slate-50 dark:border-slate-800 dark:text-cyan-200 dark:hover:bg-slate-800"
+                      >
+                        Add trip
+                      </button>
+                    </div>
+                  ) : null}
                   </div>
-                ) : null}
               </div>
               <div className="relative">
                 <button
@@ -4024,24 +4029,38 @@ export default function TravelAssistantPage() {
                 openUpgradeModal("multi-trip", "Upgrade to Pro to create and switch between multiple trips.")
               }
             />
-            <TripSearch
-              trips={trips.map((trip) => ({
-                id: trip.id,
-                name: trip.name,
-                destination: trip.destination,
-                startDate: trip.startDate,
-                endDate: trip.endDate,
-                reservations: trip.reservations.map((reservation) => ({
-                  id: reservation.id,
-                  type: reservation.type,
-                  title: reservation.title,
-                  confirmationCode: reservation.confirmationCode,
-                  localTime: reservation.localTime,
-                })),
-              }))}
-              onSelectResult={handleTripSearchSelection}
-              disabled={tripsLoading}
-            />
+            <button
+              type="button"
+              onClick={() => setShowSearchBar((value) => !value)}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-700 bg-slate-900/70 text-cyan-200 transition hover:border-cyan-400 hover:text-cyan-100"
+              aria-label={showSearchBar ? "Hide search bar" : "Show search bar"}
+              title={showSearchBar ? "Hide search bar" : "Show search bar"}
+            >
+              <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5 fill-none stroke-current stroke-2">
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-3.5-3.5" />
+              </svg>
+            </button>
+            {showSearchBar ? (
+              <TripSearch
+                trips={trips.map((trip) => ({
+                  id: trip.id,
+                  name: trip.name,
+                  destination: trip.destination,
+                  startDate: trip.startDate,
+                  endDate: trip.endDate,
+                  reservations: trip.reservations.map((reservation) => ({
+                    id: reservation.id,
+                    type: reservation.type,
+                    title: reservation.title,
+                    confirmationCode: reservation.confirmationCode,
+                    localTime: reservation.localTime,
+                  })),
+                }))}
+                onSelectResult={handleTripSearchSelection}
+                disabled={tripsLoading}
+              />
+            ) : null}
           </div>
           <TravelAssistantTopControls
             tripStatus={tripStatus}
