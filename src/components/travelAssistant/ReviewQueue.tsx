@@ -88,6 +88,7 @@ export function ReviewQueue({
   const [importInFlight, setImportInFlight] = useState(false);
   const [importMaxResults, setImportMaxResults] = useState(10);
   const [importError, setImportError] = useState<string | null>(null);
+  const [importInfo, setImportInfo] = useState<string | null>(null);
   const [scopeModalOpen, setScopeModalOpen] = useState(false);
   const [scopeModalKey, setScopeModalKey] = useState(0);
 
@@ -95,6 +96,7 @@ export function ReviewQueue({
     if (importInFlight) return;
     setImportInFlight(true);
     setImportError(null);
+    setImportInfo(null);
     try {
       const response = await fetch("/api/travel-updates/gmail-import", {
         method: "POST",
@@ -106,12 +108,20 @@ export function ReviewQueue({
           tripEndDate: scope.tripEndDate,
         }),
       });
-      if (!response.ok) {
-        throw new Error(`Gmail import endpoint returned ${response.status}`);
-      }
       const payload = (await response.json()) as {
+        error?: string;
+        foundCount?: number;
         reservations?: GmailImportedReservation[];
       };
+      if (!response.ok) {
+        throw new Error(payload.error ?? `Gmail import endpoint returned ${response.status}`);
+      }
+      const foundCount = payload.foundCount ?? payload.reservations?.length ?? 0;
+      setImportInfo(
+        foundCount > 0
+          ? `Found ${foundCount} matching email${foundCount === 1 ? "" : "s"}. Adding to review queue...`
+          : "No matching emails found for this scope.",
+      );
       onImportParsedReservations(payload.reservations ?? []);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "Unknown Gmail import error");
@@ -166,6 +176,7 @@ export function ReviewQueue({
           </p>
         ) : null}
         {importError ? <p className="mt-2 text-xs text-red-200">{t("importFailed", { error: importError })}</p> : null}
+        {importInfo ? <p className="mt-2 text-xs text-emerald-200">{importInfo}</p> : null}
       </div>
       <div className="mt-3 space-y-3">
         {reviewQueue.map((item) => (

@@ -7,6 +7,7 @@ import { getUserPlan } from "@/lib/billing/planGate";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import { logger } from "@/lib/logger";
 import { importGmailParsedReservations } from "@/lib/travelAssistant/gmailImportProvider";
+import { getGmailConnectionStatus } from "@/lib/travelAssistant/gmailOAuthService";
 
 const BodySchema = z.object({
   maxResults: z.number().int().min(1).max(50).default(10),
@@ -62,6 +63,14 @@ export async function POST(req: Request) {
         requiresProFeature: "gmail-import",
       },
       { status: 402 },
+    );
+  }
+
+  const gmailConnection = await getGmailConnectionStatus(userId);
+  if (!gmailConnection.connected) {
+    return NextResponse.json(
+      { error: "Gmail is not connected. Connect Gmail first." },
+      { status: 412 },
     );
   }
 
@@ -133,6 +142,7 @@ export async function POST(req: Request) {
     importedCount: reservations.length,
   });
   return NextResponse.json({
+    foundCount: reservations.length,
     reservations,
   });
 }

@@ -54,6 +54,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { QuickAddLane } from "@/components/travelAssistant/QuickAddLane";
 import { ReservationList } from "@/components/travelAssistant/ReservationList";
 import { ReviewQueue } from "@/components/travelAssistant/ReviewQueue";
+import { GmailImportScopeModal, type GmailImportScope } from "@/components/travelAssistant/GmailImportScopeModal";
 import { TripSearch, type TripSearchSelection } from "@/components/travelAssistant/TripSearch";
 import { TripSwitcher } from "@/components/travelAssistant/TripSwitcher";
 import { TripOrientationCard } from "@/components/travelAssistant/TripOrientationCard";
@@ -175,6 +176,12 @@ interface GmailImportedReservation {
     confidence: Confidence;
     issues: string[];
   };
+}
+
+interface GmailConnectionStatus {
+  connected: boolean;
+  emailAddress: string | null;
+  updatedAt: string | null;
 }
 
 interface DrawerState {
@@ -1050,6 +1057,20 @@ export default function TravelAssistantPage() {
   const [timelineSectionTab, setTimelineSectionTab] = useState<TimelineSectionTab>("reservations");
   const [, setPackingCompletionPercent] = useState(0);
   const [consumerTab, setConsumerTab] = useState<ConsumerTab>("trip");
+  const [gmailConnection, setGmailConnection] = useState<GmailConnectionStatus>({
+    connected: false,
+    emailAddress: null,
+    updatedAt: null,
+  });
+  const [gmailConnectionLoading, setGmailConnectionLoading] = useState(true);
+  const [gmailConnectionBusy, setGmailConnectionBusy] = useState(false);
+  const [gmailConnectionMessage, setGmailConnectionMessage] = useState<string | null>(null);
+  const [gmailImportBusy, setGmailImportBusy] = useState(false);
+  const [gmailImportMessage, setGmailImportMessage] = useState<string | null>(null);
+  const [gmailImportError, setGmailImportError] = useState<string | null>(null);
+  const [gmailScopeModalOpen, setGmailScopeModalOpen] = useState(false);
+  const [gmailScopeModalKey, setGmailScopeModalKey] = useState(0);
+  const [gmailImportMaxResults, setGmailImportMaxResults] = useState(10);
   const [advancedModeEnabled, setAdvancedModeEnabled] = useState(false);
   const [advancedModeSaving, setAdvancedModeSaving] = useState(false);
   const [isAdminUser, setIsAdminUser] = useState(false);
@@ -1068,6 +1089,66 @@ export default function TravelAssistantPage() {
     () => emailSamples.find((sample) => sample.id === selectedEmailId) ?? emailSamples[0],
     [emailSamples, selectedEmailId],
   );
+
+  const refreshGmailConnection = useCallback(async (): Promise<void> => {
+    setGmailConnectionLoading(true);
+    try {
+      const response = await fetch("/api/gmail/status", {
+        method: "GET",
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as GmailConnectionStatus & { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? `Gmail status failed (${response.status})`);
+      }
+      setGmailConnection({
+        connected: payload.connected,
+        emailAddress: payload.emailAddress,
+        updatedAt: payload.updatedAt,
+      });
+    } catch (error) {
+      setGmailConnection({
+        connected: false,
+        emailAddress: null,
+        updatedAt: null,
+      });
+      setGmailConnectionMessage(error instanceof Error ? error.message : "Could not load Gmail connection status.");
+    } finally {
+      setGmailConnectionLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get("tab");
+      if (tab === "trip" || tab === "reservations" || tab === "packing" || tab === "more") {
+        setConsumerTab(tab);
+      }
+      const gmailStatus = params.get("gmail");
+      if (gmailStatus === "connected") {
+        setGmailConnectionMessage("Gmail connected successfully.");
+      } else if (gmailStatus === "error") {
+        setGmailConnectionMessage("Gmail connection failed. Please try again.");
+      }
+      if (gmailStatus) {
+        params.delete("gmail");
+        const nextQuery = params.toString();
+        const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
+        window.history.replaceState({}, "", nextUrl);
+      }
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, []);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void refreshGmailConnection();
+    }, 0);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [refreshGmailConnection]);
   const activeTrip = useMemo(() => {
     if (!activeTripId) {
       return null;
@@ -3038,6 +3119,80 @@ export default function TravelAssistantPage() {
     [familyMembers, queueMutation, setToast],
   );
 
+  const handleConnectGmail = useCallback((): void => {
+    const returnTo = encodeURIComponent("/travel-assistant?tab=more");
+    window.location.assign(`/api/gmail/connect?returnTo=${returnTo}`);
+  }, []);
+
+  const handleDisconnectGmail = useCallback(async (): Promise<void> => {
+    if (gmailConnectionBusy) {
+      return;
+    }
+    setGmailConnectionBusy(true);
+    setGmailConnectionMessage(null);
+    try {
+      const response = await fetch("/api/gmail/status", {
+        method: "DELETE",
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? `Gmail disconnect failed (${response.status})`);
+      }
+      setGmailConnectionMessage("Gmail disconnected.");
+      await refreshGmailConnection();
+    } catch (error) {
+      setGmailConnectionMessage(error instanceof Error ? error.message : "Could not disconnect Gmail.");
+    } finally {
+      setGmailConnectionBusy(false);
+    }
+  }, [gmailConnectionBusy, refreshGmailConnection]);
+
+  const handleImportFromGmailWithScope = useCallback(
+    async (scope: GmailImportScope): Promise<void> => {
+      if (gmailImportBusy) {
+        return;
+      }
+      setGmailImportBusy(true);
+      setGmailImportError(null);
+      setGmailImportMessage("Scanning Gmail for matching reservation emails...");
+      try {
+        const response = await fetch("/api/travel-updates/gmail-import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            maxResults: gmailImportMaxResults,
+            lookbackDays: scope.lookbackDays,
+            tripStartDate: scope.tripStartDate,
+            tripEndDate: scope.tripEndDate,
+          }),
+        });
+        const payload = (await response.json()) as {
+          error?: string;
+          foundCount?: number;
+          reservations?: GmailImportedReservation[];
+        };
+        if (!response.ok) {
+          throw new Error(payload.error ?? `Gmail import endpoint returned ${response.status}`);
+        }
+        const importedReservations = payload.reservations ?? [];
+        const foundCount = payload.foundCount ?? importedReservations.length;
+        setGmailImportMessage(
+          foundCount > 0
+            ? `Found ${foundCount} matching email${foundCount === 1 ? "" : "s"} before queueing.`
+            : "No matching emails found for this scope.",
+        );
+        if (importedReservations.length > 0) {
+          handleImportParsedReservations(importedReservations);
+        }
+      } catch (error) {
+        setGmailImportError(error instanceof Error ? error.message : "Unknown Gmail import error.");
+      } finally {
+        setGmailImportBusy(false);
+      }
+    },
+    [gmailImportBusy, gmailImportMaxResults, handleImportParsedReservations],
+  );
+
   const handleImportAction = (target: "live" | "review"): void => {
     if (!selectedEmail) return;
     pushUndoSnapshot(target === "live" ? "Import added to live trip" : "Import routed to review queue");
@@ -3924,6 +4079,94 @@ export default function TravelAssistantPage() {
                   <p className="mt-1 text-sm opacity-80">Kepi found booking details that need a quick look.</p>
                 </article>
               ) : null}
+              <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm dark:border-emerald-500/40 dark:bg-emerald-500/10">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="font-semibold text-emerald-900 dark:text-emerald-100">Email import</h2>
+                    <p className="mt-1 text-xs text-emerald-800 dark:text-emerald-200">
+                      Connect Gmail to scan booking confirmations with read-only access.
+                    </p>
+                  </div>
+                  {gmailConnection.connected ? (
+                    <span className="rounded-full bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-800 dark:text-emerald-200">
+                      Gmail connected
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-slate-900/10 px-2 py-1 text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                      Not connected
+                    </span>
+                  )}
+                </div>
+                <p className="mt-2 text-xs text-emerald-900/90 dark:text-emerald-100/90">
+                  {gmailConnectionLoading
+                    ? "Checking Gmail connection..."
+                    : gmailConnection.connected
+                      ? `Connected as ${gmailConnection.emailAddress ?? "your Google account"}.`
+                      : "Connect Gmail to start importing reservation emails."}
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {gmailConnection.connected ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleDisconnectGmail();
+                      }}
+                      disabled={gmailConnectionBusy}
+                      className="rounded-lg border border-emerald-600/50 px-3 py-2 text-xs font-semibold text-emerald-900 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60 dark:text-emerald-100 dark:hover:bg-emerald-500/20"
+                    >
+                      {gmailConnectionBusy ? "Disconnecting..." : "Disconnect"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleConnectGmail}
+                      disabled={gmailConnectionBusy}
+                      className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Connect Gmail
+                    </button>
+                  )}
+                  <label className="inline-flex items-center gap-2 text-xs text-emerald-900 dark:text-emerald-100">
+                    Max emails
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={gmailImportMaxResults}
+                      onChange={(event) =>
+                        setGmailImportMaxResults(Math.max(1, Math.min(50, Number(event.target.value) || 1)))
+                      }
+                      className="w-20 rounded-md border border-emerald-300 bg-white px-2 py-1 text-xs dark:border-emerald-700 dark:bg-slate-900"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!canUseGmailImport) {
+                        openUpgradeModal("gmail-import", "Upgrade to Pro to import reservations directly from Gmail.");
+                        return;
+                      }
+                      if (!gmailConnection.connected) {
+                        setGmailConnectionMessage("Connect Gmail first.");
+                        return;
+                      }
+                      setGmailScopeModalKey((value) => value + 1);
+                      setGmailScopeModalOpen(true);
+                    }}
+                    disabled={gmailImportBusy}
+                    className="rounded-lg bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {gmailImportBusy ? "Scanning..." : canUseGmailImport ? "Import from Gmail" : "Upgrade to import"}
+                  </button>
+                </div>
+                {gmailConnectionMessage ? (
+                  <p className="mt-2 text-xs text-emerald-900 dark:text-emerald-100">{gmailConnectionMessage}</p>
+                ) : null}
+                {gmailImportMessage ? (
+                  <p className="mt-2 text-xs text-emerald-900 dark:text-emerald-100">{gmailImportMessage}</p>
+                ) : null}
+                {gmailImportError ? <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">{gmailImportError}</p> : null}
+              </section>
               <Link href="/support" className="block rounded-2xl border border-slate-200 bg-white p-4 font-semibold shadow-sm dark:border-slate-800 dark:bg-slate-900">
                 Support
               </Link>
@@ -3998,6 +4241,20 @@ export default function TravelAssistantPage() {
           gate={upgradeModalGate}
           currentPlan={billingPlan}
           onClose={closeUpgradeModal}
+        />
+        <GmailImportScopeModal
+          key={gmailScopeModalKey}
+          open={gmailScopeModalOpen}
+          isSubmitting={gmailImportBusy}
+          onCancel={() => {
+            if (gmailImportBusy) return;
+            setGmailScopeModalOpen(false);
+          }}
+          onConfirm={(scope) => {
+            void handleImportFromGmailWithScope(scope).finally(() => {
+              setGmailScopeModalOpen(false);
+            });
+          }}
         />
         <InstallPrompt />
         <OnboardingFlow onCreateFirstTrip={handleCreateOnboardingTrip} />
@@ -4971,6 +5228,20 @@ export default function TravelAssistantPage() {
         gate={upgradeModalGate}
         currentPlan={billingPlan}
         onClose={closeUpgradeModal}
+      />
+      <GmailImportScopeModal
+        key={gmailScopeModalKey}
+        open={gmailScopeModalOpen}
+        isSubmitting={gmailImportBusy}
+        onCancel={() => {
+          if (gmailImportBusy) return;
+          setGmailScopeModalOpen(false);
+        }}
+        onConfirm={(scope) => {
+          void handleImportFromGmailWithScope(scope).finally(() => {
+            setGmailScopeModalOpen(false);
+          });
+        }}
       />
       <InstallPrompt />
       <OnboardingFlow onCreateFirstTrip={handleCreateOnboardingTrip} />

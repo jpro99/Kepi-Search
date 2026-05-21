@@ -1,5 +1,9 @@
 import { google, type gmail_v1 } from "googleapis";
 import { logger } from "@/lib/logger";
+import {
+  readGmailConnectionRecord,
+  resolveGmailOAuthConfig,
+} from "@/lib/travelAssistant/gmailOAuthService";
 
 const GMAIL_IMPORT_QUERY_KEYWORDS =
   "subject:(confirmation OR itinerary OR booking OR reservation OR ticket OR flight OR hotel OR train)";
@@ -62,29 +66,20 @@ function sanitizeEnvNameSegment(value: string): string {
   return value.toUpperCase().replaceAll(/[^A-Z0-9]/g, "_");
 }
 
-function resolveUserToken(userId: string, key: "GMAIL_REFRESH_TOKEN" | "GMAIL_ACCESS_TOKEN"): string | null {
+function resolveLegacyUserToken(userId: string, key: "GMAIL_REFRESH_TOKEN" | "GMAIL_ACCESS_TOKEN"): string | null {
   const scopedKey = `${key}_${sanitizeEnvNameSegment(userId)}`;
   return process.env[scopedKey]?.trim() || process.env[key]?.trim() || null;
 }
 
-function resolveGmailOAuthConfig(): { clientId: string; clientSecret: string; redirectUri: string } | null {
-  const clientId = process.env.GMAIL_CLIENT_ID?.trim();
-  const clientSecret = process.env.GMAIL_CLIENT_SECRET?.trim();
-  const redirectUri = process.env.GMAIL_REDIRECT_URI?.trim();
-  if (!clientId || !clientSecret || !redirectUri) {
-    return null;
-  }
-  return { clientId, clientSecret, redirectUri };
-}
-
-function createAuthorizedGmailClient(userId: string): GmailApiClient | null {
+async function createAuthorizedGmailClient(userId: string): Promise<GmailApiClient | null> {
   const oauthConfig = resolveGmailOAuthConfig();
   if (!oauthConfig) {
     return null;
   }
 
-  const refreshToken = resolveUserToken(userId, "GMAIL_REFRESH_TOKEN");
-  const accessToken = resolveUserToken(userId, "GMAIL_ACCESS_TOKEN");
+  const connectionRecord = await readGmailConnectionRecord(userId);
+  const refreshToken = connectionRecord?.refreshToken ?? resolveLegacyUserToken(userId, "GMAIL_REFRESH_TOKEN");
+  const accessToken = connectionRecord?.accessToken ?? resolveLegacyUserToken(userId, "GMAIL_ACCESS_TOKEN");
   if (!refreshToken && !accessToken) {
     return null;
   }
@@ -97,6 +92,7 @@ function createAuthorizedGmailClient(userId: string): GmailApiClient | null {
   oauth2Client.setCredentials({
     access_token: accessToken ?? undefined,
     refresh_token: refreshToken ?? undefined,
+    expiry_date: connectionRecord?.expiryDateMs ?? undefined,
   });
   return google.gmail({
     version: "v1",
@@ -357,7 +353,7 @@ export async function importGmailParsedReservations(args: {
   gmailClient?: GmailApiClient;
 }): Promise<ParsedReservation[]> {
   const maxResults = args.maxResults ?? 10;
-  const gmailClient = args.gmailClient ?? createAuthorizedGmailClient(args.userId);
+  const gmailClient = args.gmailClient ?? (await createAuthorizedGmailClient(args.userId));
   if (!gmailClient) {
     logger.warn("Gmail import unavailable; OAuth credentials or user authorization is missing.", {
       scope: "travelAssistant/gmailImportProvider",
