@@ -55,12 +55,17 @@ import { QuickAddLane } from "@/components/travelAssistant/QuickAddLane";
 import { ReservationList } from "@/components/travelAssistant/ReservationList";
 import { ReviewQueue } from "@/components/travelAssistant/ReviewQueue";
 import { GmailImportScopeModal, type GmailImportScope } from "@/components/travelAssistant/GmailImportScopeModal";
+import {
+  ManualReservationEntryModal,
+  type ManualReservationFormValue,
+} from "@/components/travelAssistant/ManualReservationEntryModal";
 import { TripSearch, type TripSearchSelection } from "@/components/travelAssistant/TripSearch";
 import { TripSwitcher } from "@/components/travelAssistant/TripSwitcher";
 import { TripOrientationCard } from "@/components/travelAssistant/TripOrientationCard";
 import { TripTimeline } from "@/components/travelAssistant/TripTimeline";
 import { DocumentVault } from "@/components/travelAssistant/DocumentVault";
 import { PackingList } from "@/components/travelAssistant/PackingList";
+import { TravelVault } from "@/components/travelAssistant/TravelVault";
 import { WeatherCard } from "@/components/travelAssistant/WeatherCard";
 import { LocalIntelligencePanel } from "@/components/travelAssistant/LocalIntelligencePanel";
 import { ConciergePanel } from "@/components/travelAssistant/ConciergePanel";
@@ -606,6 +611,21 @@ function defaultStageForReservationType(type: "flight" | "hotel" | "train" | "ri
   return "readiness";
 }
 
+function mapManualReservationType(type: ManualReservationFormValue["reservationType"]): ReservationType {
+  if (type === "flight") return "flight";
+  if (type === "hotel") return "hotel";
+  if (type === "train") return "train";
+  if (type === "car" || type === "tour") return "ride";
+  return "dinner";
+}
+
+function defaultStageForManualReservationType(type: ManualReservationFormValue["reservationType"]): TripStage {
+  const mapped = mapManualReservationType(type);
+  if (mapped === "flight" || mapped === "train") return "airport";
+  if (mapped === "hotel" || mapped === "ride") return "arrival";
+  return "readiness";
+}
+
 function nextId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -1087,6 +1107,7 @@ export default function TravelAssistantPage() {
   const [consumerAvatarMenuOpen, setConsumerAvatarMenuOpen] = useState(false);
   const [showAdvancedShortcut, setShowAdvancedShortcut] = useState(false);
   const [showSearchBar, setShowSearchBar] = useState(false);
+  const [manualReservationModalOpen, setManualReservationModalOpen] = useState(false);
   const advancedShortcutTimerRef = useRef<number | null>(null);
 
   const selectedFamilyMember = useMemo(
@@ -3061,6 +3082,39 @@ export default function TravelAssistantPage() {
     setToast("Quick add published to live timeline.");
   };
 
+  const handleSaveManualReservation = useCallback(
+    (value: ManualReservationFormValue): void => {
+      const mappedType = mapManualReservationType(value.reservationType);
+      const notesPrefix = value.reservationType === "other" ? "Manual type: Other." : `Manual type: ${value.reservationType}.`;
+      const localTime = value.localDateTime.replace("T", " ");
+      const reservation: Reservation = {
+        id: nextId("res"),
+        type: mappedType,
+        title: value.title.trim(),
+        provider: value.provider.trim(),
+        localTime,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Etc/UTC",
+        location: value.location.trim(),
+        confirmationCode: value.confirmationCode.trim(),
+        assignedTo: value.assignedTo,
+        stage: defaultStageForManualReservationType(value.reservationType),
+        critical: mappedType === "flight" || mappedType === "train" || mappedType === "ride",
+        confidence: "high",
+        notes: [notesPrefix, value.notes.trim()].filter((entry) => entry.length > 0).join(" "),
+        source: "manual",
+      };
+      pushUndoSnapshot("Manual reservation added");
+      setReservations((prev) => [reservation, ...prev]);
+      queueMutation("Manual reservation added to live timeline.", {
+        key: "manual-reservation-add",
+        reservationId: reservation.id,
+      });
+      setManualReservationModalOpen(false);
+      setToast("Reservation added");
+    },
+    [pushUndoSnapshot, queueMutation, setToast],
+  );
+
   const handleImportParsedReservations = useCallback(
     (importedReservations: GmailImportedReservation[]): void => {
       if (importedReservations.length === 0) {
@@ -4156,29 +4210,38 @@ export default function TravelAssistantPage() {
               </section>
             </section>
           ) : consumerTab === "reservations" ? (
-            <ReservationList
-              visibleReservations={visibleReservations}
-              personalTimelineOnly={personalTimelineOnly}
-              onPersonalTimelineOnlyChange={setPersonalTimelineOnly}
-              selectedFamilyMemberName={selectedFamilyMember.name}
-              familyMembers={familyMembers}
-              reservationTypeLabelByType={RESERVATION_TYPE_LABEL}
-              pendingOutboxByReservationId={pendingOutboxByReservationId}
-              hasGlobalOutboxPending={hasGlobalOutboxPending}
-              flightLiveStatusByReservationId={flightLiveStatusByReservationId}
-              railLiveStatusByReservationId={railLiveStatusByReservationId}
-              highlightedReservationId={highlightedReservationId}
-              onOpenReservationDrawer={(reservationId) => openDrawer("reservation", reservationId)}
-              onCopyCallScript={copyScript}
-              onCopyConfirmationCode={async (code) => {
-                try {
-                  await navigator.clipboard.writeText(code);
-                  setToast("Confirmation code copied.");
-                } catch {
-                  setToast("Clipboard unavailable.");
-                }
-              }}
-            />
+            <section className="space-y-3">
+              <button
+                type="button"
+                onClick={() => setManualReservationModalOpen(true)}
+                className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-left text-sm font-semibold text-white shadow-sm hover:bg-emerald-400"
+              >
+                Add Manually
+              </button>
+              <ReservationList
+                visibleReservations={visibleReservations}
+                personalTimelineOnly={personalTimelineOnly}
+                onPersonalTimelineOnlyChange={setPersonalTimelineOnly}
+                selectedFamilyMemberName={selectedFamilyMember.name}
+                familyMembers={familyMembers}
+                reservationTypeLabelByType={RESERVATION_TYPE_LABEL}
+                pendingOutboxByReservationId={pendingOutboxByReservationId}
+                hasGlobalOutboxPending={hasGlobalOutboxPending}
+                flightLiveStatusByReservationId={flightLiveStatusByReservationId}
+                railLiveStatusByReservationId={railLiveStatusByReservationId}
+                highlightedReservationId={highlightedReservationId}
+                onOpenReservationDrawer={(reservationId) => openDrawer("reservation", reservationId)}
+                onCopyCallScript={copyScript}
+                onCopyConfirmationCode={async (code) => {
+                  try {
+                    await navigator.clipboard.writeText(code);
+                    setToast("Confirmation code copied.");
+                  } catch {
+                    setToast("Clipboard unavailable.");
+                  }
+                }}
+              />
+            </section>
           ) : consumerTab === "packing" ? (
             <PackingList tripId={activeTripId} onCompletionChange={(percent) => setPackingCompletionPercent(percent)} />
           ) : (
@@ -4279,6 +4342,7 @@ export default function TravelAssistantPage() {
                 ) : null}
                 {gmailImportError ? <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">{gmailImportError}</p> : null}
               </section>
+              <TravelVault />
               <Link href="/support" className="block rounded-2xl border border-slate-200 bg-white p-4 font-semibold shadow-sm dark:border-slate-800 dark:bg-slate-900">
                 Support
               </Link>
@@ -4354,6 +4418,14 @@ export default function TravelAssistantPage() {
           currentPlan={billingPlan}
           onClose={closeUpgradeModal}
         />
+        {manualReservationModalOpen ? (
+          <ManualReservationEntryModal
+            familyMembers={familyMembers.map((member) => ({ id: member.id, name: member.name }))}
+            defaultAssignedTo={[selectedFamilyMember.id]}
+            onClose={() => setManualReservationModalOpen(false)}
+            onSave={handleSaveManualReservation}
+          />
+        ) : null}
         <GmailImportScopeModal
           key={gmailScopeModalKey}
           open={gmailScopeModalOpen}
