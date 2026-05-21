@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 const BodySchema = z.object({
-  code: z.string().trim().regex(/^[A-Za-z0-9-]{1,120}$/u),
+  code: z.string().trim().regex(/^[A-Za-z0-9-]{1,50}$/u),
 });
 
 export async function POST(req: Request) {

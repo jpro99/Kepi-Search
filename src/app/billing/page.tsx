@@ -36,10 +36,9 @@ type BillingStatusResponse = {
 };
 
 const FEATURE_ORDER: PlanFeature[] = ["gmail-import", "ai-suggestions", "push-notifications", "multi-trip"];
-const ALPHANUMERIC_HYPHEN_CODE_REGEX = /^[A-Z0-9-]{1,120}$/u;
 
 function normalizeRedeemCode(value: string): string {
-  return value.toUpperCase().replaceAll(/\s+/g, "").trim();
+  return value.trim();
 }
 
 export default function BillingPage() {
@@ -165,17 +164,13 @@ export default function BillingPage() {
   const handleRedeemInviteCode = useCallback(async (): Promise<void> => {
     if (inviteBusy) return;
     const rawInputValue = redeemInputRef.current?.value ?? "";
-    console.log("[billing][redeem] submitted code:", rawInputValue);
     const normalizedCode = normalizeRedeemCode(rawInputValue);
+    console.log("[billing][redeem] submitted code:", normalizedCode);
     if (!normalizedCode) return;
     setInviteBusy(true);
     setInviteMessage(null);
     setInviteError(null);
     try {
-      if (!ALPHANUMERIC_HYPHEN_CODE_REGEX.test(normalizedCode)) {
-        throw new Error("This code is invalid.");
-      }
-
       const inviteResponse = await fetch("/api/invite/redeem", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -204,7 +199,10 @@ export default function BillingPage() {
         return;
       }
 
-      if (invitePayload.reason !== "invalid-code") {
+      const inviteRejectedAsInvalid =
+        invitePayload.reason === "invalid-code" || inviteResponse.status === 422 || invitePayload.error === "Validation failed";
+
+      if (!inviteRejectedAsInvalid) {
         const mappedInviteError =
           invitePayload.reason === "code-revoked"
             ? "This code has been revoked."

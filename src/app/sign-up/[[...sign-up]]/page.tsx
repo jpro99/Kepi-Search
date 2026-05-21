@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { SignUp } from "@clerk/nextjs";
 
-const ALPHANUMERIC_HYPHEN_CODE_REGEX = /^[A-Z0-9-]{1,120}$/u;
+const ALPHANUMERIC_HYPHEN_CODE_REGEX = /^[A-Z0-9-]{1,50}$/u;
 
 function normalizeCode(value: string): string {
   return value.toUpperCase().replaceAll(/\s+/g, "").trim();
