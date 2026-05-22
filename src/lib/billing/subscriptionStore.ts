@@ -1,4 +1,4 @@
-import type { BillingPlanId } from "@/lib/billing/plans";
+import type { BillingPlanId, BillingStatusPlan } from "@/lib/billing/plans";
 import { kv } from "@vercel/kv";
 import { invalidateCachedBillingStatus } from "@/lib/billing/billingStatusCache";
 import { kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
@@ -6,6 +6,8 @@ import { kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
 const SUBSCRIPTION_KEY = "subscription";
 const BILLING_SYSTEM_NAMESPACE = "__billing-system";
 const STRIPE_CUSTOMER_OWNER_PREFIX = "stripe-customer-owner";
+const BILLING_PLAN_MIRROR_KEY_PREFIX = "billing:plan:clerk_";
+const USER_LIFETIME_MIRROR_KEY_PREFIX = "user:lifetime:";
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 export interface BillingSubscriptionRecord {
@@ -70,7 +72,7 @@ export async function getSubscriptionRecord(userId: string): Promise<BillingSubs
 }
 
 export async function setSubscriptionRecord(userId: string, record: BillingSubscriptionRecord): Promise<void> {
-  await kvStoreSet(SUBSCRIPTION_KEY, record, { userId });
+  await Promise.all([kvStoreSet(SUBSCRIPTION_KEY, record, { userId }), setLifetimePlanMirrors(userId, record)]);
   invalidateCachedBillingStatus(userId);
 }
 
@@ -78,11 +80,48 @@ export function getSubscriptionStorageKey(userId: string): string {
   return `kepi:${userId.trim()}:subscription`;
 }
 
+export function getBillingPlanMirrorKey(userId: string): string {
+  return `${BILLING_PLAN_MIRROR_KEY_PREFIX}${userId.trim()}`;
+}
+
+export function getUserLifetimeMirrorKey(userId: string): string {
+  return `${USER_LIFETIME_MIRROR_KEY_PREFIX}${userId.trim()}`;
+}
+
 export async function getRawSubscriptionRecordForDebug(userId: string): Promise<unknown> {
   if (isKvConfigured()) {
     return (await kv.get<unknown>(getSubscriptionStorageKey(userId))) ?? null;
   }
   return await kvStoreGet<unknown>(SUBSCRIPTION_KEY, { userId });
+}
+
+export async function getLifetimeMirrorStatus(userId: string): Promise<{
+  billingPlanMirrorRaw: unknown;
+  userLifetimeMirrorRaw: unknown;
+  hasLifetimeAccess: boolean;
+}> {
+  const billingPlanMirrorKey = getBillingPlanMirrorKey(userId);
+  const userLifetimeMirrorKey = getUserLifetimeMirrorKey(userId);
+  if (isKvConfigured()) {
+    const [billingPlanMirrorRaw, userLifetimeMirrorRaw] = await Promise.all([
+      kv.get<unknown>(billingPlanMirrorKey),
+      kv.get<unknown>(userLifetimeMirrorKey),
+    ]);
+    return {
+      billingPlanMirrorRaw: billingPlanMirrorRaw ?? null,
+      userLifetimeMirrorRaw: userLifetimeMirrorRaw ?? null,
+      hasLifetimeAccess: isLifetimeMirrorValue(billingPlanMirrorRaw, userLifetimeMirrorRaw),
+    };
+  }
+  const [billingPlanMirrorRaw, userLifetimeMirrorRaw] = await Promise.all([
+    kvStoreGet<unknown>(billingPlanMirrorKey, { userId: BILLING_SYSTEM_NAMESPACE }),
+    kvStoreGet<unknown>(userLifetimeMirrorKey, { userId: BILLING_SYSTEM_NAMESPACE }),
+  ]);
+  return {
+    billingPlanMirrorRaw: billingPlanMirrorRaw ?? null,
+    userLifetimeMirrorRaw: userLifetimeMirrorRaw ?? null,
+    hasLifetimeAccess: isLifetimeMirrorValue(billingPlanMirrorRaw, userLifetimeMirrorRaw),
+  };
 }
 
 export async function extendSubscriptionProAccess(userId: string, days: number): Promise<BillingSubscriptionRecord> {
@@ -172,4 +211,60 @@ export async function getStripeCustomerOwner(customerId: string): Promise<string
   return await kvStoreGet<string>(`${STRIPE_CUSTOMER_OWNER_PREFIX}/${customerId}`, {
     userId: BILLING_SYSTEM_NAMESPACE,
   });
+}
+
+async function setLifetimePlanMirrors(userId: string, record: BillingSubscriptionRecord): Promise<void> {
+  const billingPlanMirrorKey = getBillingPlanMirrorKey(userId);
+  const userLifetimeMirrorKey = getUserLifetimeMirrorKey(userId);
+  const nowMs = Date.now();
+  const billingPlanMirrorValue = resolvePlanMirrorValue(record, nowMs);
+  const userLifetimeMirrorValue = record.lifetimePlan;
+  if (isKvConfigured()) {
+    await Promise.all([
+      kv.set(billingPlanMirrorKey, billingPlanMirrorValue),
+      kv.set(userLifetimeMirrorKey, userLifetimeMirrorValue),
+    ]);
+    return;
+  }
+  await Promise.all([
+    kvStoreSet(billingPlanMirrorKey, billingPlanMirrorValue, { userId: BILLING_SYSTEM_NAMESPACE }),
+    kvStoreSet(userLifetimeMirrorKey, userLifetimeMirrorValue, { userId: BILLING_SYSTEM_NAMESPACE }),
+  ]);
+}
+
+function resolvePlanMirrorValue(record: BillingSubscriptionRecord, nowMs: number): BillingStatusPlan {
+  if (record.lifetimePlan) {
+    return "lifetime";
+  }
+  const trialExpiresMs =
+    typeof record.trialExpiresAt === "string" && record.trialExpiresAt.length > 0
+      ? Date.parse(record.trialExpiresAt)
+      : Number.NaN;
+  if (!Number.isNaN(trialExpiresMs) && trialExpiresMs > nowMs) {
+    return "trial";
+  }
+  if (record.plan === "concierge" && isSubscriptionActive(record)) {
+    return "concierge";
+  }
+  if (record.plan === "pro" && isSubscriptionActive(record)) {
+    return "pro";
+  }
+  return "free";
+}
+
+function isLifetimeMirrorValue(planMirror: unknown, lifetimeMirror: unknown): boolean {
+  if (typeof planMirror === "string" && planMirror.trim().toLowerCase() === "lifetime") {
+    return true;
+  }
+  if (typeof lifetimeMirror === "boolean") {
+    return lifetimeMirror;
+  }
+  if (typeof lifetimeMirror === "number") {
+    return lifetimeMirror === 1;
+  }
+  if (typeof lifetimeMirror === "string") {
+    const normalized = lifetimeMirror.trim().toLowerCase();
+    return normalized === "true" || normalized === "1" || normalized === "lifetime" || normalized === "yes";
+  }
+  return false;
 }

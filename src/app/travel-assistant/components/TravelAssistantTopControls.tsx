@@ -82,7 +82,7 @@ export function TravelAssistantTopControls({
   }, []);
 
   return (
-    <section className="overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-indigo-100/40 shadow-xl dark:border-slate-700/70 dark:from-slate-900 dark:via-slate-900 dark:to-indigo-950/40 dark:shadow-2xl dark:shadow-indigo-950/30">
+    <section className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 text-slate-100 shadow-xl">
       <div className="grid gap-5 p-5 sm:gap-6 sm:p-6">
         <div className="space-y-4">
           <div className="flex items-start justify-between gap-3">
@@ -147,7 +147,7 @@ export function TravelAssistantTopControls({
           <h1 className="text-3xl font-semibold leading-tight md:text-4xl">
             Premium trip execution for families, with anti-miss safeguards.
           </h1>
-          <p className="max-w-3xl text-sm text-slate-700 dark:text-slate-300">
+          <p className="max-w-3xl text-sm text-slate-200">
             Stage-adaptive controls, confidence-aware imports, recovery playbooks, static exports, and consent-based
             family location sharing.
           </p>
@@ -155,26 +155,26 @@ export function TravelAssistantTopControls({
             <span className={`rounded-full px-3 py-1 text-sm font-medium ring-1 ${statusBadgeByTripStatus[tripStatus]}`}>
               {statusLabelByTripStatus[tripStatus]} ({tripStatus.toUpperCase()})
             </span>
-            <span className="rounded-full bg-slate-200 px-3 py-1 text-sm text-slate-700 ring-1 ring-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700">
+            <span className="rounded-full bg-slate-800 px-3 py-1 text-sm text-slate-100 ring-1 ring-slate-700">
               Stage: {stageLabelByTripStage[tripStage]}
             </span>
-            <span className="rounded-full bg-slate-200 px-3 py-1 text-sm text-slate-700 ring-1 ring-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700">
+            <span className="rounded-full bg-slate-800 px-3 py-1 text-sm text-slate-100 ring-1 ring-slate-700">
               Leave-by buffer: {leaveByMinutes} min
             </span>
-            <span className="rounded-full bg-slate-200 px-3 py-1 text-sm text-slate-700 ring-1 ring-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700">
+            <span className="rounded-full bg-slate-800 px-3 py-1 text-sm text-slate-100 ring-1 ring-slate-700">
               Review queue: {reviewQueueLength}
             </span>
-            <span className="rounded-full bg-indigo-500/20 px-3 py-1 text-sm text-indigo-800 ring-1 ring-indigo-300/40 dark:text-indigo-100">
+            <span className="rounded-full bg-indigo-500/20 px-3 py-1 text-sm text-indigo-100 ring-1 ring-indigo-400/40">
               Confidence score: {operationalConfidenceScore}
             </span>
-            <span className="rounded-full bg-slate-200 px-3 py-1 text-sm text-slate-700 ring-1 ring-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700">
+            <span className="rounded-full bg-slate-800 px-3 py-1 text-sm text-slate-100 ring-1 ring-slate-700">
               Blocking issues: {blockingIssueCount}
             </span>
-            <span className="rounded-full bg-slate-200 px-3 py-1 text-sm text-slate-700 ring-1 ring-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700">
+            <span className="rounded-full bg-slate-800 px-3 py-1 text-sm text-slate-100 ring-1 ring-slate-700">
               Nudges: {guidanceTone} • filtered {suppressedNudgeCount}
             </span>
             {lastSessionRestoreAt ? (
-              <span className="rounded-full bg-violet-500/15 px-3 py-1 text-sm text-violet-800 ring-1 ring-violet-400/40 dark:text-violet-100">
+              <span className="rounded-full bg-violet-500/20 px-3 py-1 text-sm text-violet-100 ring-1 ring-violet-400/40">
                 Session restored: {formatClock(lastSessionRestoreAt)}
               </span>
             ) : null}

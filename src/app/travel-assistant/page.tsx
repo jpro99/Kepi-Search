@@ -4203,8 +4203,7 @@ export default function TravelAssistantPage() {
 
   const openReadinessChecklistInMoreTab = useCallback((): void => {
     setPendingMoreScrollTarget("readiness-checklist");
-    navigateToConsumerTab("more");
-  }, [navigateToConsumerTab]);
+  }, []);
 
   useEffect(() => {
     if (consumerTab !== "more" || pendingMoreScrollTarget !== "readiness-checklist") {
@@ -4226,22 +4225,19 @@ export default function TravelAssistantPage() {
     if (tripStatus === "red" || activeScenario !== "none" || delayedFlight) {
       return {
         label: "Fix this for me",
+        targetTab: "reservations" as ConsumerTab,
         onClick: () => {
           const recommendation = incidentAutopilotRecommendations[0];
           if (recommendation) {
             void applyIncidentAutopilotRecommendation(recommendation);
-            return;
           }
-          navigateToConsumerTab("reservations");
         },
       };
     }
     if (unresolvedReviewCount > 0) {
       return {
         label: unresolvedReviewCount === 1 ? "Review 1 email" : `Review ${unresolvedReviewCount} emails`,
-        onClick: () => {
-          navigateToConsumerTab("more");
-        },
+        targetTab: "more" as ConsumerTab,
       };
     }
     if (unresolvedReadinessCount > 0) {
@@ -4250,6 +4246,7 @@ export default function TravelAssistantPage() {
           unresolvedReadinessCount === 1
             ? "Finish 1 checklist item"
             : `Finish ${unresolvedReadinessCount} checklist items`,
+        targetTab: "more" as ConsumerTab,
         onClick: () => openReadinessChecklistInMoreTab(),
       };
     }
@@ -4344,6 +4341,8 @@ export default function TravelAssistantPage() {
                 statusTitle={consumerStatus.title}
                 statusDetail={consumerStatus.detail}
                 nextActionLabel={consumerPrimaryAction?.label ?? "Enjoy your trip"}
+                actionTargetTab={consumerPrimaryAction?.targetTab}
+                onSwitchTab={navigateToConsumerTab}
                 onNextAction={consumerPrimaryAction?.onClick}
                 statusToneClassName={consumerStatus.tone}
               />
@@ -4862,6 +4861,8 @@ export default function TravelAssistantPage() {
           statusTitle={consumerStatus.title}
           statusDetail={consumerStatus.detail}
           nextActionLabel={consumerPrimaryAction?.label ?? nextStageAction}
+          actionTargetTab={consumerPrimaryAction?.targetTab}
+          onSwitchTab={navigateToConsumerTab}
           onNextAction={consumerPrimaryAction?.onClick ?? advanceTripStage}
           statusToneClassName={consumerStatus.tone}
         />

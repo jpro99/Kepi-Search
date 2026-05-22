@@ -1,5 +1,7 @@
 "use client";
 
+type OnSwitchTab = "trip" | "reservations" | "packing" | "more";
+
 interface TripOrientationCardProps {
   travelerName: string;
   destination: string;
@@ -9,6 +11,8 @@ interface TripOrientationCardProps {
   weatherLabel?: string;
   nextActionLabel: string;
   onNextAction?: () => void;
+  actionTargetTab?: OnSwitchTab;
+  onSwitchTab?: (tab: OnSwitchTab) => void;
   statusToneClassName: string;
 }
 
@@ -21,8 +25,12 @@ export function TripOrientationCard({
   weatherLabel,
   nextActionLabel,
   onNextAction,
+  actionTargetTab,
+  onSwitchTab,
   statusToneClassName,
 }: TripOrientationCardProps) {
+  const canRunNextAction = Boolean(onNextAction || (actionTargetTab && onSwitchTab));
+
   return (
     <section data-testid="trip-orientation-card" className={`rounded-3xl border p-5 shadow-sm ${statusToneClassName}`}>
       <p className="text-sm font-semibold opacity-80">Good morning {travelerName}!</p>
@@ -34,10 +42,15 @@ export function TripOrientationCard({
       <p className="mt-4 rounded-2xl bg-white/60 p-3 text-sm font-medium text-slate-900 dark:bg-slate-950/40 dark:text-slate-100">
         {statusDetail}
       </p>
-      {onNextAction ? (
+      {canRunNextAction ? (
         <button
           type="button"
-          onClick={onNextAction}
+          onClick={() => {
+            if (actionTargetTab && onSwitchTab) {
+              onSwitchTab(actionTargetTab);
+            }
+            onNextAction?.();
+          }}
           className="mt-4 w-full rounded-2xl bg-slate-950 px-4 py-3 text-base font-semibold text-white shadow-sm hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 sm:w-auto"
         >
           {nextActionLabel}

@@ -46,6 +46,28 @@ function applyLifetimePlanCookie(response: NextResponse): void {
   });
 }
 
+async function syncClerkPlanMetadata(
+  userId: string,
+  plan: "lifetime" | "trial",
+  routeLogger: ReturnType<typeof logger.withContext>,
+): Promise<void> {
+  try {
+    const { clerkClient } = await import("@clerk/nextjs/server");
+    const client = await clerkClient();
+    await client.users.updateUserMetadata(userId, {
+      privateMetadata: {
+        kepiPlan: plan,
+        kepiLifetimePlan: plan === "lifetime",
+        kepiPlanSyncedAt: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    routeLogger.warn("Unable to sync plan metadata to Clerk.", {
+      error: error instanceof Error ? error.message : "unknown",
+    });
+  }
+}
+
 async function persistInviteDerivedSubscription(args: {
   userId: string;
   inviteType: "lifetime" | "trial-30";
@@ -154,6 +176,7 @@ export async function POST(req: Request) {
           subscriptionStorageKey,
           persistedRecord: persisted.savedRecord,
         });
+        await syncClerkPlanMetadata(userId, persisted.plan, routeLogger);
         const response = NextResponse.json(
           {
             ok: true,
@@ -212,6 +235,7 @@ export async function POST(req: Request) {
     subscriptionStorageKey,
     persistedRecord: persisted.savedRecord,
   });
+  await syncClerkPlanMetadata(userId, persisted.plan, routeLogger);
 
   void trackServerEvent({
     type: "invite_code_redeemed",

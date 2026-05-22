@@ -20,9 +20,12 @@ import {
 } from "@/lib/billing/planCookie";
 import { getStripePublishableKey } from "@/lib/billing/stripeClient";
 import {
+  getBillingPlanMirrorKey,
+  getLifetimeMirrorStatus,
   getRawSubscriptionRecordForDebug,
   getSubscriptionRecord,
   getSubscriptionStorageKey,
+  getUserLifetimeMirrorKey,
   isSubscriptionActive,
 } from "@/lib/billing/subscriptionStore";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
@@ -91,6 +94,7 @@ function applyLifetimePlanCookie(response: NextResponse): void {
 function resolveEffectivePlanStatus(
   subscriptionRecord: Awaited<ReturnType<typeof getSubscriptionRecord>>,
   nowMs: number,
+  hasLifetimePlanFallback: boolean,
 ): {
   plan: BillingStatusPlan;
   basePlan: BillingPlanId;
@@ -99,7 +103,7 @@ function resolveEffectivePlanStatus(
   trialDaysRemaining: number | null;
   nextBillingDate: string | null;
 } {
-  const lifetimePlanActive = subscriptionRecord.lifetimePlan;
+  const lifetimePlanActive = subscriptionRecord.lifetimePlan || hasLifetimePlanFallback;
   if (lifetimePlanActive) {
     return {
       plan: "lifetime",
@@ -148,6 +152,29 @@ function resolveEffectivePlanStatus(
   };
 }
 
+async function getLifetimePlanFlagFromClerkMetadata(userId: string): Promise<boolean> {
+  try {
+    const { clerkClient } = await import("@clerk/nextjs/server");
+    const client = await clerkClient();
+    const user = await client.users.getUser(userId);
+    const privatePlan = user.privateMetadata?.kepiPlan;
+    if (typeof privatePlan === "string" && privatePlan.trim().toLowerCase() === "lifetime") {
+      return true;
+    }
+    const privateLifetimeFlag = user.privateMetadata?.kepiLifetimePlan;
+    if (typeof privateLifetimeFlag === "boolean") {
+      return privateLifetimeFlag;
+    }
+    if (typeof privateLifetimeFlag === "string") {
+      const normalized = privateLifetimeFlag.trim().toLowerCase();
+      return normalized === "true" || normalized === "1" || normalized === "lifetime";
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(req: Request) {
   const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
   const userId = await resolveAuthenticatedUserId();
@@ -175,19 +202,40 @@ export async function GET(req: Request) {
     return response;
   }
 
-  const [subscriptionRecord, trips] = await Promise.all([getSubscriptionRecord(userId), listTrips(userId)]);
+  const [subscriptionRecord, trips, lifetimeMirrorStatus, clerkMetadataHasLifetime] = await Promise.all([
+    getSubscriptionRecord(userId),
+    listTrips(userId),
+    getLifetimeMirrorStatus(userId),
+    getLifetimePlanFlagFromClerkMetadata(userId),
+  ]);
   const nowMs = Date.now();
-  const planStatus = resolveEffectivePlanStatus(subscriptionRecord, nowMs);
+  const planStatus = resolveEffectivePlanStatus(
+    subscriptionRecord,
+    nowMs,
+    lifetimeMirrorStatus.hasLifetimeAccess || clerkMetadataHasLifetime,
+  );
   const subscriptionStorageKey = getSubscriptionStorageKey(userId);
+  const billingPlanMirrorKey = getBillingPlanMirrorKey(userId);
+  const userLifetimeMirrorKey = getUserLifetimeMirrorKey(userId);
   const rawSubscriptionRecord = await getRawSubscriptionRecordForDebug(userId);
   console.info("[billing/status] subscription lookup", {
     userId,
     subscriptionStorageKey,
+    billingPlanMirrorKey,
+    userLifetimeMirrorKey,
     rawSubscriptionRecord,
+    billingPlanMirrorRaw: lifetimeMirrorStatus.billingPlanMirrorRaw,
+    userLifetimeMirrorRaw: lifetimeMirrorStatus.userLifetimeMirrorRaw,
+    clerkMetadataHasLifetime,
   });
   routeLogger.info("Billing status subscription lookup complete.", {
     subscriptionStorageKey,
+    billingPlanMirrorKey,
+    userLifetimeMirrorKey,
     rawSubscriptionRecord,
+    billingPlanMirrorRaw: lifetimeMirrorStatus.billingPlanMirrorRaw,
+    userLifetimeMirrorRaw: lifetimeMirrorStatus.userLifetimeMirrorRaw,
+    clerkMetadataHasLifetime,
   });
 
   const definition = BILLING_PLANS[planStatus.basePlan];
