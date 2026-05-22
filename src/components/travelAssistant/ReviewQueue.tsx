@@ -177,7 +177,7 @@ export function ReviewQueue({
         reservations?: GmailImportedReservation[];
       };
       if (!response.ok) {
-        throw new Error(payload.error ?? `Gmail import endpoint returned ${response.status}`);
+        throw new Error(payload.error ?? `Email import endpoint returned ${response.status}`);
       }
       const foundCount = payload.foundCount ?? payload.reservations?.length ?? 0;
       setImportInfo(
@@ -187,7 +187,7 @@ export function ReviewQueue({
       );
       onImportParsedReservations(payload.reservations ?? []);
     } catch (error) {
-      setImportError(error instanceof Error ? error.message : "Unknown Gmail import error");
+      setImportError(error instanceof Error ? error.message : "Unknown email import error");
     } finally {
       setImportInFlight(false);
     }
@@ -209,9 +209,9 @@ export function ReviewQueue({
         </span>
       </div>
       <div className="mt-3 rounded-xl border border-slate-200 bg-slate-100/70 p-3 dark:border-slate-700 dark:bg-slate-950/60">
-        <p className="text-sm font-semibold">{t("importTitle")}</p>
+        <p className="text-sm font-semibold">Import from email</p>
         <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-          {t("importSubtitle")}
+          Scan reservation emails and add matching items to your review queue.
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <label htmlFor="gmail-import-max-results" className="text-xs text-slate-700 dark:text-slate-300">
@@ -241,15 +241,11 @@ export function ReviewQueue({
             disabled={importInFlight}
             className="rounded-md bg-cyan-500/90 px-2 py-1 text-xs font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {importInFlight ? t("importing") : canUseGmailImport ? t("importGmail") : t("upgradeImportGmail")}
+            {importInFlight ? "Importing..." : canUseGmailImport ? "Import from inbox" : "Upgrade to import"}
           </button>
         </div>
-        {!canUseGmailImport ? (
-          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-            {t("proNote")}
-          </p>
-        ) : null}
-        {importError ? <p className="mt-2 text-xs text-red-200">{t("importFailed", { error: importError })}</p> : null}
+        {!canUseGmailImport ? <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Pro plan required for email import.</p> : null}
+        {importError ? <p className="mt-2 text-xs text-red-200">Import failed: {importError}</p> : null}
         {importInfo ? <p className="mt-2 text-xs text-emerald-200">{importInfo}</p> : null}
       </div>
       <div className="mt-3 space-y-3">

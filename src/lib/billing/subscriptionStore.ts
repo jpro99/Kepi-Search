@@ -72,6 +72,17 @@ export async function setSubscriptionRecord(userId: string, record: BillingSubsc
   await kvStoreSet(SUBSCRIPTION_KEY, record, { userId });
 }
 
+export function getSubscriptionStorageKey(userId: string): string {
+  return `kepi:${userId.trim()}:subscription`;
+}
+
+export async function getRawSubscriptionRecordForDebug(userId: string): Promise<unknown> {
+  if (isKvConfigured()) {
+    return (await kv.get<unknown>(getSubscriptionStorageKey(userId))) ?? null;
+  }
+  return await kvStoreGet<unknown>(SUBSCRIPTION_KEY, { userId });
+}
+
 export async function extendSubscriptionProAccess(userId: string, days: number): Promise<BillingSubscriptionRecord> {
   const grantDays = Math.max(0, Math.round(days));
   const existing = await getSubscriptionRecord(userId);
