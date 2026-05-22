@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useClerk } from "@clerk/nextjs";
+import { useClerk, useUser } from "@clerk/nextjs";
 import { cache, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   enforceStatusFloor,
@@ -395,7 +395,7 @@ const EMPTY_DRAFT: ReservationDraft = {
 const INITIAL_FAMILY: FamilyMember[] = [
   {
     id: "alex",
-    name: "Alex",
+    name: "Traveler",
     role: "organizer",
     color: "#7dd3fc",
     sharingEnabled: true,
@@ -889,6 +889,18 @@ function normalizeCoordinates(members: FamilyMember[]): Array<{ member: FamilyMe
 
 const TRIP_API_ROUTE = "/api/trips";
 
+function resolveViewerName(firstName: string | null | undefined, emailAddress: string | null | undefined): string {
+  const normalizedFirstName = firstName?.trim();
+  if (normalizedFirstName) {
+    return normalizedFirstName;
+  }
+  const localPart = emailAddress?.split("@")[0]?.trim();
+  if (localPart && localPart.length > 0) {
+    return localPart;
+  }
+  return "Traveler";
+}
+
 function normalizeManagedTrip(trip: unknown): ManagedTrip | null {
   if (!trip || typeof trip !== "object") {
     return null;
@@ -980,6 +992,7 @@ function defaultTripFromCurrentState(input: {
 
 export default function TravelAssistantPage() {
   const clerk = useClerk();
+  const { user } = useUser();
   const {
     status: billingStatus,
     loading: billingLoading,
@@ -1123,6 +1136,31 @@ export default function TravelAssistantPage() {
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [manualReservationModalOpen, setManualReservationModalOpen] = useState(false);
   const advancedShortcutTimerRef = useRef<number | null>(null);
+
+  const viewerDisplayName = useMemo(
+    () => resolveViewerName(user?.firstName, user?.primaryEmailAddress?.emailAddress),
+    [user?.firstName, user?.primaryEmailAddress?.emailAddress],
+  );
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setFamilyMembers((previous) => {
+        const organizer = previous[0];
+        if (!organizer || organizer.name === viewerDisplayName) {
+          return previous;
+        }
+        const next = [...previous];
+        next[0] = {
+          ...organizer,
+          name: viewerDisplayName,
+        };
+        return next;
+      });
+    }, 0);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [viewerDisplayName]);
 
   const selectedFamilyMember = useMemo(
     () => familyMembers.find((member) => member.id === selectedFamilyMemberId) ?? familyMembers[0],
@@ -2493,7 +2531,14 @@ export default function TravelAssistantPage() {
     if (unresolvedReviewCount > 0 || unresolvedReadinessCount > 0 || blockingIssueCount > 0 || tripStatus === "yellow") {
       return {
         title: "Action needed ⚠️",
-        detail: unresolvedReviewCount > 0 ? `${unresolvedReviewCount} email${unresolvedReviewCount === 1 ? "" : "s"} to review.` : "Getting ready 🟡",
+        detail:
+          unresolvedReviewCount > 0
+            ? `${unresolvedReviewCount} email${unresolvedReviewCount === 1 ? "" : "s"} to review.`
+            : unresolvedReadinessCount > 0
+              ? `${unresolvedReadinessCount} checklist item${unresolvedReadinessCount === 1 ? "" : "s"} left.`
+              : blockingIssueCount > 0
+                ? `${blockingIssueCount} blocker${blockingIssueCount === 1 ? "" : "s"} to clear.`
+                : "Action needed to keep this trip on track.",
         tone: "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50",
       };
     }
@@ -4117,6 +4162,14 @@ export default function TravelAssistantPage() {
     openDrawer("review", reviewQueue[0].id);
   }, [openDrawer, reviewQueue, setToast]);
 
+  const navigateToConsumerTab = useCallback((nextTab: ConsumerTab): void => {
+    setConsumerTab(nextTab);
+    const params = new URLSearchParams(window.location.search);
+    params.set("tab", nextTab);
+    const nextUrl = `${window.location.pathname}?${params.toString()}`;
+    window.history.replaceState({}, "", nextUrl);
+  }, []);
+
   const consumerPrimaryAction = (() => {
     if (tripStatus === "red" || activeScenario !== "none" || delayedFlight) {
       return {
@@ -4127,7 +4180,7 @@ export default function TravelAssistantPage() {
             void applyIncidentAutopilotRecommendation(recommendation);
             return;
           }
-          setConsumerTab("reservations");
+          navigateToConsumerTab("reservations");
         },
       };
     }
@@ -4135,14 +4188,17 @@ export default function TravelAssistantPage() {
       return {
         label: unresolvedReviewCount === 1 ? "Review 1 email" : `Review ${unresolvedReviewCount} emails`,
         onClick: () => {
-          setConsumerTab("more");
+          navigateToConsumerTab("more");
         },
       };
     }
     if (unresolvedReadinessCount > 0) {
       return {
-        label: "Show what to finish",
-        onClick: () => setConsumerTab("more"),
+        label:
+          unresolvedReadinessCount === 1
+            ? "Finish 1 checklist item"
+            : `Finish ${unresolvedReadinessCount} checklist items`,
+        onClick: () => navigateToConsumerTab("more"),
       };
     }
     return null;
@@ -4295,7 +4351,7 @@ export default function TravelAssistantPage() {
           ) : consumerTab === "trip" ? (
             <section className="space-y-4">
               <TripOrientationCard
-                travelerName={selectedFamilyMember.name}
+                travelerName={viewerDisplayName}
                 destination={activeTrip?.destination ?? "your trip"}
                 tripDaysAway={tripDaysAway}
                 statusTitle={consumerStatus.title}
@@ -4777,7 +4833,7 @@ export default function TravelAssistantPage() {
           undoStackLength={undoStack.length}
         />
         <TripOrientationCard
-          travelerName={selectedFamilyMember.name}
+          travelerName={viewerDisplayName}
           destination={activeTrip?.destination ?? "your trip"}
           tripDaysAway={tripDaysAway}
           statusTitle={consumerStatus.title}
