@@ -65,7 +65,6 @@ import { TripOrientationCard } from "@/components/travelAssistant/TripOrientatio
 import { TripTimeline } from "@/components/travelAssistant/TripTimeline";
 import { DocumentVault } from "@/components/travelAssistant/DocumentVault";
 import { PackingList } from "@/components/travelAssistant/PackingList";
-import { TravelVault } from "@/components/travelAssistant/TravelVault";
 import { WeatherCard } from "@/components/travelAssistant/WeatherCard";
 import { LocalIntelligencePanel } from "@/components/travelAssistant/LocalIntelligencePanel";
 import { ConciergePanel } from "@/components/travelAssistant/ConciergePanel";
@@ -191,12 +190,6 @@ interface GmailImportedReservation {
     confidence: Confidence;
     issues: string[];
   };
-}
-
-interface GmailConnectionStatus {
-  connected: boolean;
-  emailAddress: string | null;
-  updatedAt: string | null;
 }
 
 interface EmailForwardSetupStatus {
@@ -654,6 +647,34 @@ function formatConsumerReservationTime(value: string): string {
   }).format(new Date(parsed));
 }
 
+function formatConsumerReservationDate(value: string): string {
+  const parsed = parseDateInput(value);
+  if (Number.isNaN(parsed)) {
+    return value || "Date not set";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(parsed));
+}
+
+function formatTripDepartureDate(value: string | null | undefined): string {
+  if (!value) {
+    return "Date not set";
+  }
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    return value;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(parsed));
+}
+
 function getTripDaysAway(minutesToDeparture: number): number {
   return Math.max(0, Math.ceil(minutesToDeparture / 1440));
 }
@@ -675,6 +696,19 @@ function getFriendlyReservationTitle(reservation: Reservation): string {
     return `${reservation.provider} check-in`;
   }
   return reservation.title;
+}
+
+function getReservationRouteLabel(reservation: Reservation): string {
+  if (reservation.type === "flight" || reservation.type === "train" || reservation.type === "ride") {
+    if (reservation.location.includes("→")) {
+      return reservation.location;
+    }
+    const routeFromTitle = reservation.title.match(/\b[A-Z]{3}\b\s*[→-]\s*\b[A-Z]{3}\b/u)?.[0];
+    if (routeFromTitle) {
+      return routeFromTitle.replace("-", "→");
+    }
+  }
+  return reservation.location || reservation.provider || "Details pending";
 }
 
 function formatDateTimeLocal(valueMs: number): string {
@@ -1111,7 +1145,6 @@ export default function TravelAssistantPage() {
   const sessionHydratedRef = useRef(false);
   const tripsHydratedRef = useRef(false);
   const applyingTripStateRef = useRef(false);
-  const readinessChecklistSectionRef = useRef<HTMLElement | null>(null);
   const drawerContainerRef = useRef<HTMLDivElement | null>(null);
   const drawerCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastFocusedElementBeforeDrawerRef = useRef<HTMLElement | null>(null);
@@ -1150,34 +1183,22 @@ export default function TravelAssistantPage() {
   const [timelineSectionTab, setTimelineSectionTab] = useState<TimelineSectionTab>("reservations");
   const [, setPackingCompletionPercent] = useState(0);
   const [consumerTab, setConsumerTab] = useState<ConsumerTab>("trip");
-  const [pendingMoreScrollTarget, setPendingMoreScrollTarget] = useState<"readiness-checklist" | null>(null);
-  const [gmailConnection, setGmailConnection] = useState<GmailConnectionStatus>({
-    connected: false,
-    emailAddress: null,
-    updatedAt: null,
-  });
-  const [gmailConnectionBusy, setGmailConnectionBusy] = useState(false);
   const [emailForwardAddress, setEmailForwardAddress] = useState<string | null>(() => {
     const handle = getEmailHandleFromCookie();
     return handle ? composeForwardAddress(handle) : null;
   });
-  const [emailForwardHandle, setEmailForwardHandle] = useState<string | null>(() => getEmailHandleFromCookie());
-  const [canChangeEmailForwardHandle, setCanChangeEmailForwardHandle] = useState(true);
-  const [nextForwardHandleChangeAt, setNextForwardHandleChangeAt] = useState<string | null>(null);
-  const [emailForwardEditingHandle, setEmailForwardEditingHandle] = useState(false);
-  const [emailForwardCustomHandleInput, setEmailForwardCustomHandleInput] = useState(() => getEmailHandleFromCookie() ?? "");
-  const [emailForwardSetupBusy, setEmailForwardSetupBusy] = useState(false);
   const [emailForwardSetupMessage, setEmailForwardSetupMessage] = useState<string | null>(null);
   const [gmailImportBusy, setGmailImportBusy] = useState(false);
-  const [gmailImportMessage, setGmailImportMessage] = useState<string | null>(null);
-  const [gmailImportError, setGmailImportError] = useState<string | null>(null);
+  const [, setGmailImportMessage] = useState<string | null>(null);
+  const [, setGmailImportError] = useState<string | null>(null);
   const [gmailScopeModalOpen, setGmailScopeModalOpen] = useState(false);
-  const [gmailScopeModalKey, setGmailScopeModalKey] = useState(0);
-  const [gmailImportMaxResults, setGmailImportMaxResults] = useState(10);
+  const [gmailScopeModalKey] = useState(0);
+  const [gmailImportMaxResults] = useState(10);
   const [advancedModeEnabled, setAdvancedModeEnabled] = useState(false);
   const [advancedModeSaving, setAdvancedModeSaving] = useState(false);
   const [isAdminUser, setIsAdminUser] = useState(false);
   const [consumerAvatarMenuOpen, setConsumerAvatarMenuOpen] = useState(false);
+  const [expandedConsumerReservationId, setExpandedConsumerReservationId] = useState<string | null>(null);
   const [showAdvancedShortcut] = useState(false);
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [manualReservationModalOpen, setManualReservationModalOpen] = useState(false);
@@ -1217,37 +1238,11 @@ export default function TravelAssistantPage() {
     [emailSamples, selectedEmailId],
   );
 
-  const refreshGmailConnection = useCallback(async (): Promise<void> => {
-    try {
-      const response = await fetch("/api/gmail/status", {
-        method: "GET",
-        cache: "no-store",
-      });
-      const payload = (await response.json()) as GmailConnectionStatus & { error?: string };
-      if (!response.ok) {
-        throw new Error(payload.error ?? `Gmail status failed (${response.status})`);
-      }
-      setGmailConnection({
-        connected: payload.connected,
-        emailAddress: payload.emailAddress,
-        updatedAt: payload.updatedAt,
-      });
-    } catch {
-      setGmailConnection({
-        connected: false,
-        emailAddress: null,
-        updatedAt: null,
-      });
-    }
-  }, []);
-
   const refreshEmailForwardSetup = useCallback(async (): Promise<void> => {
     const handleFromCookie = getEmailHandleFromCookie();
     if (handleFromCookie) {
       const addressFromCookie = composeForwardAddress(handleFromCookie);
-      setEmailForwardHandle((previous) => previous ?? handleFromCookie);
       setEmailForwardAddress((previous) => previous ?? addressFromCookie);
-      setEmailForwardCustomHandleInput((previous) => previous || handleFromCookie);
     }
     try {
       const response = await fetch("/api/email-handle/mine", {
@@ -1270,22 +1265,10 @@ export default function TravelAssistantPage() {
         writeCookieValue(EMAIL_HANDLE_COOKIE_NAME, normalizedHandle, ONE_YEAR_SECONDS);
       }
       setEmailForwardAddress(normalizedAddress);
-      setEmailForwardHandle(normalizedHandle);
-      setEmailForwardCustomHandleInput(normalizedHandle ?? "");
-      setCanChangeEmailForwardHandle(payload.canChangeHandle !== false);
-      setNextForwardHandleChangeAt(
-        typeof payload.nextHandleChangeAt === "string" && payload.nextHandleChangeAt.trim().length > 0
-          ? payload.nextHandleChangeAt
-          : null,
-      );
     } catch {
       if (!handleFromCookie) {
         setEmailForwardAddress(null);
-        setEmailForwardHandle(null);
-        setEmailForwardCustomHandleInput("");
       }
-      setCanChangeEmailForwardHandle(true);
-      setNextForwardHandleChangeAt(null);
     }
   }, []);
 
@@ -1318,12 +1301,12 @@ export default function TravelAssistantPage() {
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      void Promise.all([refreshGmailConnection(), refreshEmailForwardSetup()]);
+      void refreshEmailForwardSetup();
     }, 0);
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [refreshEmailForwardSetup, refreshGmailConnection]);
+  }, [refreshEmailForwardSetup]);
 
   useEffect(() => {
     if (consumerTab !== "more") {
@@ -2583,6 +2566,34 @@ export default function TravelAssistantPage() {
     unresolvedReadinessCount,
     unresolvedReviewCount,
   ]);
+  const consumerHeroStatus = useMemo(() => {
+    if (tripStatus === "red" || activeScenario !== "none" || delayedFlight) {
+      return {
+        label: "Urgent",
+        className: "bg-red-500/15 text-red-700 ring-1 ring-red-500/30 dark:text-red-200",
+      };
+    }
+    if (tripStatus === "yellow" || unresolvedReviewCount > 0 || unresolvedReadinessCount > 0 || blockingIssueCount > 0) {
+      return {
+        label: "Action needed",
+        className: "bg-amber-500/15 text-amber-700 ring-1 ring-amber-500/30 dark:text-amber-200",
+      };
+    }
+    return {
+      label: "All good",
+      className: "bg-emerald-500/15 text-emerald-700 ring-1 ring-emerald-500/30 dark:text-emerald-200",
+    };
+  }, [activeScenario, blockingIssueCount, delayedFlight, tripStatus, unresolvedReadinessCount, unresolvedReviewCount]);
+  const consumerReservationsSorted = useMemo(() => {
+    return [...reservations].sort((left, right) => {
+      const leftMs = parseDateInput(left.localTime);
+      const rightMs = parseDateInput(right.localTime);
+      if (Number.isNaN(leftMs) && Number.isNaN(rightMs)) return 0;
+      if (Number.isNaN(leftMs)) return 1;
+      if (Number.isNaN(rightMs)) return -1;
+      return leftMs - rightMs;
+    });
+  }, [reservations]);
   const applyGovernedStatus = useCallback(
     (desiredStatus: TripStatus, source: "manual" | "auto"): void => {
       if (source === "manual" && desiredStatus !== tripStatus) {
@@ -3344,79 +3355,6 @@ export default function TravelAssistantPage() {
     },
     [familyMembers, queueMutation, setToast],
   );
-
-  const handleConnectGmail = useCallback(async (): Promise<void> => {
-    if (gmailConnectionBusy) {
-      return;
-    }
-    setGmailConnectionBusy(true);
-    setEmailForwardSetupMessage(null);
-    try {
-      await fetch("/api/email-forward/setup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "mark-gmail-prompt-seen" }),
-      });
-    } finally {
-      setGmailConnectionBusy(false);
-    }
-    const returnTo = encodeURIComponent("/travel-assistant?tab=more");
-    window.location.assign(`/api/gmail/connect?returnTo=${returnTo}`);
-  }, [gmailConnectionBusy]);
-
-  const handleSaveForwardHandle = useCallback(async (): Promise<void> => {
-    const normalizedHandle = emailForwardCustomHandleInput.trim().toLowerCase();
-    if (!normalizedHandle) {
-      setEmailForwardSetupMessage("Enter a forwarding handle first.");
-      return;
-    }
-    if (emailForwardSetupBusy) {
-      return;
-    }
-    setEmailForwardSetupBusy(true);
-    setEmailForwardSetupMessage(null);
-    try {
-      const response = await fetch("/api/email-forward/setup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "change-forward-handle", customHandle: normalizedHandle }),
-      });
-      const payload = (await response.json()) as {
-        error?: string;
-        forwardAddress?: string;
-        handle?: string;
-        canChangeHandle?: boolean;
-        nextHandleChangeAt?: string | null;
-      };
-      if (!response.ok) {
-        throw new Error(payload.error ?? `Forward handle update failed (${response.status})`);
-      }
-      const updatedAddress =
-        typeof payload.forwardAddress === "string" && payload.forwardAddress.trim().length > 0
-          ? payload.forwardAddress.trim()
-          : null;
-      const updatedHandle =
-        typeof payload.handle === "string" && payload.handle.trim().length > 0 ? payload.handle.trim().toLowerCase() : null;
-      if (updatedHandle) {
-        writeCookieValue(EMAIL_HANDLE_COOKIE_NAME, updatedHandle, ONE_YEAR_SECONDS);
-      }
-      setEmailForwardAddress(updatedAddress);
-      setEmailForwardHandle(updatedHandle);
-      setEmailForwardCustomHandleInput(updatedHandle ?? "");
-      setCanChangeEmailForwardHandle(payload.canChangeHandle !== false);
-      setNextForwardHandleChangeAt(
-        typeof payload.nextHandleChangeAt === "string" && payload.nextHandleChangeAt.trim().length > 0
-          ? payload.nextHandleChangeAt
-          : null,
-      );
-      setEmailForwardEditingHandle(false);
-      setEmailForwardSetupMessage(updatedAddress ? `Forwarding address updated: ${updatedAddress}` : "Forwarding address updated.");
-    } catch (error) {
-      setEmailForwardSetupMessage(error instanceof Error ? error.message : "Could not update forwarding handle.");
-    } finally {
-      setEmailForwardSetupBusy(false);
-    }
-  }, [emailForwardCustomHandleInput, emailForwardSetupBusy]);
 
   const handleCopyForwardAddress = useCallback(async (): Promise<void> => {
     if (!emailForwardAddress) {
@@ -4201,43 +4139,17 @@ export default function TravelAssistantPage() {
     window.history.replaceState({}, "", nextUrl);
   }, []);
 
-  const openReadinessChecklistInMoreTab = useCallback((): void => {
-    setPendingMoreScrollTarget("readiness-checklist");
-  }, []);
-
-  useEffect(() => {
-    if (consumerTab !== "more" || pendingMoreScrollTarget !== "readiness-checklist") {
-      return;
-    }
-    const timeout = window.setTimeout(() => {
-      readinessChecklistSectionRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-      setPendingMoreScrollTarget(null);
-    }, 140);
-    return () => {
-      window.clearTimeout(timeout);
-    };
-  }, [consumerTab, pendingMoreScrollTarget]);
-
   const consumerPrimaryAction = (() => {
     if (tripStatus === "red" || activeScenario !== "none" || delayedFlight) {
       return {
-        label: "Fix this for me",
+        label: "View reservations",
         targetTab: "reservations" as ConsumerTab,
-        onClick: () => {
-          const recommendation = incidentAutopilotRecommendations[0];
-          if (recommendation) {
-            void applyIncidentAutopilotRecommendation(recommendation);
-          }
-        },
       };
     }
     if (unresolvedReviewCount > 0) {
       return {
-        label: unresolvedReviewCount === 1 ? "Review 1 email" : `Review ${unresolvedReviewCount} emails`,
-        targetTab: "more" as ConsumerTab,
+        label: unresolvedReviewCount === 1 ? "Review 1 booking" : `Review ${unresolvedReviewCount} bookings`,
+        targetTab: "reservations" as ConsumerTab,
       };
     }
     if (unresolvedReadinessCount > 0) {
@@ -4246,12 +4158,45 @@ export default function TravelAssistantPage() {
           unresolvedReadinessCount === 1
             ? "Finish 1 checklist item"
             : `Finish ${unresolvedReadinessCount} checklist items`,
-        targetTab: "more" as ConsumerTab,
-        onClick: () => openReadinessChecklistInMoreTab(),
+        targetTab: "packing" as ConsumerTab,
       };
     }
     return null;
   })();
+  const getConsumerReservationStatus = useCallback(
+    (reservation: Reservation): { label: string; className: string } => {
+      if (reservation.type === "flight") {
+        const flightStatus = flightLiveStatusByReservationId.get(reservation.id);
+        if (flightStatus === "cancelled") {
+          return {
+            label: "Cancelled",
+            className: "bg-red-500/15 text-red-700 ring-1 ring-red-500/30 dark:text-red-200",
+          };
+        }
+        if (flightStatus === "delayed") {
+          return {
+            label: "Delayed",
+            className: "bg-amber-500/15 text-amber-700 ring-1 ring-amber-500/30 dark:text-amber-200",
+          };
+        }
+        return {
+          label: "On time",
+          className: "bg-emerald-500/15 text-emerald-700 ring-1 ring-emerald-500/30 dark:text-emerald-200",
+        };
+      }
+      if (reservation.critical) {
+        return {
+          label: "Action needed",
+          className: "bg-amber-500/15 text-amber-700 ring-1 ring-amber-500/30 dark:text-amber-200",
+        };
+      }
+      return {
+        label: "Confirmed",
+        className: "bg-slate-900/10 text-slate-700 ring-1 ring-slate-400/30 dark:text-slate-200",
+      };
+    },
+    [flightLiveStatusByReservationId],
+  );
 
   if (!advancedWorkspaceEnabled) {
     return (
@@ -4324,6 +4269,28 @@ export default function TravelAssistantPage() {
             </div>
           </header>
 
+          <div className="grid grid-cols-4 gap-2 rounded-2xl bg-white/80 p-2 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900/80 dark:ring-slate-800">
+            {([
+              ["trip", "Trip"],
+              ["reservations", "Reservations"],
+              ["packing", "Packing"],
+              ["more", "More"],
+            ] as const).map(([tab, label]) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => navigateToConsumerTab(tab)}
+                className={`rounded-xl px-2 py-2 text-sm font-semibold transition ${
+                  consumerTab === tab
+                    ? "bg-cyan-500 text-slate-950"
+                    : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           {tripsLoading ? (
             <section className="space-y-4">
               <div className="h-48 rounded-3xl bg-white shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800" />
@@ -4334,196 +4301,182 @@ export default function TravelAssistantPage() {
             </section>
           ) : consumerTab === "trip" ? (
             <section className="space-y-4">
-              <TripOrientationCard
-                travelerName={viewerDisplayName}
-                destination={activeTrip?.destination ?? "your trip"}
-                tripDaysAway={tripDaysAway}
-                statusTitle={consumerStatus.title}
-                statusDetail={consumerStatus.detail}
-                nextActionLabel={consumerPrimaryAction?.label ?? "Enjoy your trip"}
-                actionTargetTab={consumerPrimaryAction?.targetTab}
-                onSwitchTab={navigateToConsumerTab}
-                onNextAction={consumerPrimaryAction?.onClick}
-                statusToneClassName={consumerStatus.tone}
-              />
-              <section className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-base font-semibold">Coming up</h2>
-                  {unresolvedReviewCount > 0 ? (
-                    <p className="text-sm text-amber-700 dark:text-amber-200">
-                      {unresolvedReviewCount} email{unresolvedReviewCount === 1 ? "" : "s"} to review
+              <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Trip</p>
+                    <h1 className="mt-1 text-2xl font-bold text-slate-950 dark:text-slate-100">
+                      {activeTrip?.name ?? "Your next trip"}
+                    </h1>
+                    <p className="mt-1 text-base text-slate-600 dark:text-slate-300">
+                      {activeTrip?.destination ?? "Destination pending"}
                     </p>
-                  ) : null}
+                  </div>
+                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${consumerHeroStatus.className}`}>
+                    {consumerHeroStatus.label}
+                  </span>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {nextUpcomingReservations.map((reservation) => (
-                    <button
-                      key={reservation.id}
-                      type="button"
-                      onClick={() => setConsumerTab("reservations")}
-                      className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
-                    >
-                      <p className="text-2xl" aria-hidden>
-                        {getReservationEmoji(reservation.type)}
-                      </p>
-                      <p className="mt-2 text-sm font-semibold">{getFriendlyReservationTitle(reservation)}</p>
-                      <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                        {reservation.type === "hotel" ? "Check-in " : ""}
-                        {formatConsumerReservationTime(reservation.localTime)}
-                      </p>
-                    </button>
-                  ))}
-                </div>
+                <p className="mt-4 text-sm text-slate-700 dark:text-slate-300">
+                  Departure {formatTripDepartureDate(activeTrip?.startDate)} •{" "}
+                  {tripDaysAway === 0 ? "Today" : tripDaysAway === 1 ? "1 day away" : `${tripDaysAway} days away`}
+                </p>
+                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{consumerStatus.detail}</p>
+                {consumerPrimaryAction?.targetTab ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigateToConsumerTab(consumerPrimaryAction.targetTab);
+                      consumerPrimaryAction.onClick?.();
+                    }}
+                    className="mt-4 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-slate-200"
+                  >
+                    {consumerPrimaryAction.label}
+                  </button>
+                ) : null}
+              </article>
+
+              <section className="space-y-3">
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Upcoming reservations</h2>
+                {nextUpcomingReservations.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                    No trips yet — forward a confirmation email to get started
+                  </div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {nextUpcomingReservations.map((reservation) => {
+                      const statusMeta = getConsumerReservationStatus(reservation);
+                      return (
+                        <button
+                          key={reservation.id}
+                          type="button"
+                          onClick={() => openDrawer("reservation", reservation.id)}
+                          className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-2xl" aria-hidden>
+                              {getReservationEmoji(reservation.type)}
+                            </p>
+                            <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${statusMeta.className}`}>
+                              {statusMeta.label}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-base font-semibold text-slate-900 dark:text-slate-100">
+                            {reservation.type === "flight" ? getReservationRouteLabel(reservation) : getFriendlyReservationTitle(reservation)}
+                          </p>
+                          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{reservation.provider}</p>
+                          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                            {formatConsumerReservationDate(reservation.localTime)} • {formatConsumerReservationTime(reservation.localTime)}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Confirmation: {reservation.confirmationCode || "Not set"}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </section>
             </section>
           ) : consumerTab === "reservations" ? (
             <section className="space-y-3">
-              <button
-                type="button"
-                onClick={() => setManualReservationModalOpen(true)}
-                className="w-full rounded-2xl bg-emerald-500 px-4 py-3 text-left text-sm font-semibold text-white shadow-sm hover:bg-emerald-400"
-              >
-                Add Manually
-              </button>
-              <ReservationList
-                visibleReservations={visibleReservations}
-                personalTimelineOnly={personalTimelineOnly}
-                onPersonalTimelineOnlyChange={setPersonalTimelineOnly}
-                selectedFamilyMemberName={selectedFamilyMember.name}
-                familyMembers={familyMembers}
-                reservationTypeLabelByType={RESERVATION_TYPE_LABEL}
-                pendingOutboxByReservationId={pendingOutboxByReservationId}
-                hasGlobalOutboxPending={hasGlobalOutboxPending}
-                flightLiveStatusByReservationId={flightLiveStatusByReservationId}
-                railLiveStatusByReservationId={railLiveStatusByReservationId}
-                highlightedReservationId={highlightedReservationId}
-                onOpenReservationDrawer={(reservationId) => openDrawer("reservation", reservationId)}
-                onCopyCallScript={copyScript}
-                onCopyConfirmationCode={async (code) => {
-                  try {
-                    await navigator.clipboard.writeText(code);
-                    setToast("Confirmation code copied.");
-                  } catch {
-                    setToast("Clipboard unavailable.");
-                  }
-                }}
-              />
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">All reservations</h2>
+                <button
+                  type="button"
+                  onClick={() => setManualReservationModalOpen(true)}
+                  className="rounded-xl bg-emerald-500 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-400"
+                >
+                  Add manually
+                </button>
+              </div>
+
+              {consumerReservationsSorted.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  No trips yet — forward a confirmation email to get started
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {consumerReservationsSorted.map((reservation) => {
+                    const expanded = expandedConsumerReservationId === reservation.id;
+                    const statusMeta = getConsumerReservationStatus(reservation);
+                    return (
+                      <article
+                        key={reservation.id}
+                        className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedConsumerReservationId((current) =>
+                              current === reservation.id ? null : reservation.id,
+                            )
+                          }
+                          className="w-full px-4 py-3 text-left"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                                {getReservationEmoji(reservation.type)} {getFriendlyReservationTitle(reservation)}
+                              </p>
+                              <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                                {formatConsumerReservationDate(reservation.localTime)} •{" "}
+                                {formatConsumerReservationTime(reservation.localTime)}
+                              </p>
+                            </div>
+                            <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${statusMeta.className}`}>
+                              {statusMeta.label}
+                            </span>
+                          </div>
+                        </button>
+                        {expanded ? (
+                          <div className="border-t border-slate-200 px-4 py-3 text-sm text-slate-700 dark:border-slate-800 dark:text-slate-200">
+                            <p>
+                              <span className="font-semibold">Provider:</span> {reservation.provider || "Not set"}
+                            </p>
+                            <p className="mt-1">
+                              <span className="font-semibold">Location:</span> {reservation.location || "Not set"}
+                            </p>
+                            <p className="mt-1">
+                              <span className="font-semibold">Timezone:</span> {reservation.timezone || "Not set"}
+                            </p>
+                            <p className="mt-1">
+                              <span className="font-semibold">Confirmation:</span>{" "}
+                              {reservation.confirmationCode || "Not set"}
+                            </p>
+                            {reservation.notes ? (
+                              <p className="mt-1">
+                                <span className="font-semibold">Notes:</span> {reservation.notes}
+                              </p>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => openDrawer("reservation", reservation.id)}
+                              className="mt-3 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-slate-200"
+                            >
+                              Open full details
+                            </button>
+                          </div>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
             </section>
           ) : consumerTab === "packing" ? (
-            <PackingList tripId={activeTripId} onCompletionChange={(percent) => setPackingCompletionPercent(percent)} />
+            <PackingList
+              mode="consumer"
+              tripId={activeTripId}
+              onCompletionChange={(percent) => setPackingCompletionPercent(percent)}
+            />
           ) : (
             <section className="space-y-3">
-              <article
-                className={`rounded-2xl border p-4 shadow-sm ${
-                  billingLoading
-                    ? "border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-                    : isLifetime
-                    ? "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-500/50 dark:bg-amber-500/15 dark:text-amber-50"
-                    : isTrial
-                      ? "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50"
-                      : billingStatusPlan === "free"
-                        ? "border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900"
-                        : "border-cyan-200 bg-cyan-50 text-cyan-950 dark:border-cyan-500/40 dark:bg-cyan-500/15 dark:text-cyan-50"
-                }`}
-              >
-                {billingLoading ? (
-                  <>
-                    <p className="text-sm font-semibold">Loading plan status…</p>
-                    <p className="mt-1 text-xs opacity-90">Checking your latest billing access.</p>
-                  </>
-                ) : isLifetime ? (
-                  <>
-                    <p className="text-sm font-semibold">You have lifetime Pro access ✨</p>
-                    <p className="mt-1 text-xs opacity-90">No subscription is required for your Pro features.</p>
-                  </>
-                ) : isTrial ? (
-                  <>
-                    <p className="text-sm font-semibold">Your free trial is active — {trialDaysRemaining} day{trialDaysRemaining === 1 ? "" : "s"} remaining</p>
-                    <p className="mt-1 text-xs opacity-90">
-                      Expires {trialExpiresAt ? new Date(trialExpiresAt).toLocaleDateString() : "soon"}.
-                    </p>
-                  </>
-                ) : billingStatusPlan === "free" ? (
-                  <>
-                    <p className="text-sm font-semibold">You are on the Free plan</p>
-                    <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
-                      Upgrade to unlock full Pro automation across your trip workflow.
-                    </p>
-                    <Link
-                      href="/billing"
-                      className="mt-3 inline-flex rounded-lg bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-cyan-400"
-                    >
-                      View upgrade options
-                    </Link>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-sm font-semibold">Pro plan active</p>
-                    <p className="mt-1 text-xs opacity-90">All Pro features are currently enabled for this account.</p>
-                  </>
-                )}
-              </article>
-              {reviewQueue.length > 0 ? (
-                <article className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50">
-                  <p className="text-sm font-semibold">
-                    {reviewQueue.length} email{reviewQueue.length === 1 ? "" : "s"} to review
-                  </p>
-                  <p className="mt-1 text-sm opacity-80">Kepi found booking details that need a quick look.</p>
-                </article>
-              ) : null}
-              <section
-                id="readiness-checklist-section"
-                ref={readinessChecklistSectionRef}
-                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <h2 className="font-semibold">Readiness checklist</h2>
-                  <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-900 dark:bg-amber-500/20 dark:text-amber-100">
-                    {unresolvedReadinessCount} pending
-                  </span>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {readinessItems.map((item) => (
-                    <label
-                      key={item.id}
-                      className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 ${
-                        item.complete
-                          ? "border-emerald-500/40 bg-emerald-500/10"
-                          : "border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-950/60"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={item.complete}
-                        onChange={() => handleChecklistToggle(item.id)}
-                        className="mt-1"
-                      />
-                      <span className="flex-1">
-                        <span className="block text-sm font-medium">{item.title}</span>
-                        <span className="text-xs text-slate-500 dark:text-slate-400">
-                          {item.category} {item.required ? "• Required" : "• Optional"}
-                        </span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </section>
-              <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm dark:border-emerald-500/40 dark:bg-emerald-500/10">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h2 className="font-semibold text-emerald-900 dark:text-emerald-100">Email import & forwarding</h2>
-                    <p className="mt-1 text-xs text-emerald-800 dark:text-emerald-200">
-                      Your private forward address is ready. Forward confirmations to scan and review booking details.
-                    </p>
-                  </div>
-                  <span className="rounded-full bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-800 dark:text-emerald-200">
-                    Forwarding ready
-                  </span>
-                </div>
+              <article className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm dark:border-emerald-500/40 dark:bg-emerald-500/10">
+                <h2 className="font-semibold text-emerald-900 dark:text-emerald-100">Forward email address</h2>
                 {emailForwardAddress ? (
-                  <div className="mt-2 rounded-lg border border-emerald-300/70 bg-white/80 p-3 dark:border-emerald-700/50 dark:bg-slate-900/60">
-                    <p className="text-sm font-semibold text-emerald-900 dark:text-emerald-100">
-                      Your forward address is <span className="break-all">{emailForwardAddress}</span>
+                  <>
+                    <p className="mt-1 text-sm text-emerald-900 dark:text-emerald-100">
+                      {emailForwardAddress}
                     </p>
                     <button
                       type="button"
@@ -4537,139 +4490,57 @@ export default function TravelAssistantPage() {
                     <p className="mt-2 text-xs text-emerald-900/90 dark:text-emerald-100/90">
                       Forward any flight, hotel, or booking confirmation from any email app to this address.
                     </p>
-                    {!emailForwardEditingHandle ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEmailForwardEditingHandle(true);
-                          setEmailForwardSetupMessage(null);
-                        }}
-                        disabled={!canChangeEmailForwardHandle}
-                        className="mt-2 text-xs font-semibold text-emerald-800 underline underline-offset-4 disabled:cursor-not-allowed disabled:opacity-60 dark:text-emerald-200"
-                      >
-                        Change address
-                      </button>
-                    ) : (
-                      <div className="mt-3 rounded-lg border border-emerald-300/70 bg-white p-3 dark:border-emerald-700/60 dark:bg-slate-950/70">
-                        <label className="block text-xs font-semibold uppercase tracking-wide text-emerald-900 dark:text-emerald-100">
-                          Custom handle
-                        </label>
-                        <div className="mt-2 flex items-center gap-2">
-                          <span className="text-xs text-emerald-900 dark:text-emerald-100">@</span>
-                          <input
-                            value={emailForwardCustomHandleInput}
-                            onChange={(event) => {
-                              const normalized = event.target.value.toLowerCase().replace(/[^a-z0-9-]/gu, "").slice(0, 20);
-                              setEmailForwardCustomHandleInput(normalized);
-                            }}
-                            placeholder={emailForwardHandle ?? "yourname"}
-                            className="flex-1 rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm text-emerald-900 outline-none ring-emerald-300 transition focus-visible:ring-2 dark:border-emerald-700 dark:bg-slate-900 dark:text-emerald-100"
-                          />
-                        </div>
-                        <p className="mt-2 text-[11px] text-emerald-900/80 dark:text-emerald-100/80">
-                          Letters, numbers, and dashes only.
-                        </p>
-                        <div className="mt-3 flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handleSaveForwardHandle();
-                            }}
-                            disabled={emailForwardSetupBusy}
-                            className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {emailForwardSetupBusy ? "Saving..." : "Save"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEmailForwardEditingHandle(false);
-                              setEmailForwardCustomHandleInput(emailForwardHandle ?? "");
-                            }}
-                            disabled={emailForwardSetupBusy}
-                            className="rounded-lg border border-emerald-500/60 px-3 py-2 text-xs font-semibold text-emerald-900 transition hover:bg-emerald-100 dark:text-emerald-100 dark:hover:bg-emerald-500/20"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {!canChangeEmailForwardHandle && nextForwardHandleChangeAt ? (
-                      <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">
-                        You can change this again on {new Date(nextForwardHandleChangeAt).toLocaleDateString()}.
-                      </p>
-                    ) : null}
-                  </div>
+                  </>
                 ) : (
-                  <div className="mt-2">
-                    <p className="text-xs text-emerald-900/90 dark:text-emerald-100/90">
-                      Assigning your forwarding address...
-                    </p>
-                  </div>
+                  <p className="mt-1 text-sm text-emerald-900 dark:text-emerald-100">Assigning your forwarding address...</p>
                 )}
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <label className="inline-flex items-center gap-2 text-xs text-emerald-900 dark:text-emerald-100">
-                    Max emails
-                    <input
-                      type="number"
-                      min={1}
-                      max={50}
-                      value={gmailImportMaxResults}
-                      onChange={(event) =>
-                        setGmailImportMaxResults(Math.max(1, Math.min(50, Number(event.target.value) || 1)))
-                      }
-                      className="w-20 rounded-md border border-emerald-300 bg-white px-2 py-1 text-xs dark:border-emerald-700 dark:bg-slate-900"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!canUseGmailImport) {
-                        openUpgradeModal("gmail-import", "Upgrade to Pro to import reservations from your connected email account.");
-                        return;
-                      }
-                      if (!gmailConnection.connected) {
-                        void handleConnectGmail();
-                        return;
-                      }
-                      setGmailScopeModalKey((value) => value + 1);
-                      setGmailScopeModalOpen(true);
-                    }}
-                    disabled={gmailImportBusy}
-                    className="rounded-lg bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {gmailImportBusy ? "Scanning..." : canUseGmailImport ? "Import from inbox" : "Upgrade to import"}
-                  </button>
+              </article>
+
+              <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="font-semibold">Plan status</h2>
+                  <span className="rounded-full bg-slate-900 px-2 py-1 text-xs font-semibold text-white dark:bg-slate-100 dark:text-slate-950">
+                    {isLifetime ? "Pro" : isTrial ? `Trial — ${trialDaysRemaining}d` : hasProAccess ? "Pro" : "Free"}
+                  </span>
                 </div>
-                {emailForwardSetupMessage ? (
-                  <p className="mt-2 text-xs text-emerald-900 dark:text-emerald-100">{emailForwardSetupMessage}</p>
-                ) : null}
-                {gmailImportMessage ? (
-                  <p className="mt-2 text-xs text-emerald-900 dark:text-emerald-100">{gmailImportMessage}</p>
-                ) : null}
-                {gmailImportError ? <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">{gmailImportError}</p> : null}
+                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                  {billingLoading
+                    ? "Loading your plan..."
+                    : isLifetime
+                      ? "You have lifetime Pro access."
+                      : isTrial
+                        ? `Trial ends ${trialExpiresAt ? new Date(trialExpiresAt).toLocaleDateString() : "soon"}.`
+                        : hasProAccess
+                          ? "Your Pro plan is active."
+                          : "You are on the free plan."}
+                </p>
+              </article>
+
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-center justify-between">
+                  <h2 className="font-semibold">Theme</h2>
+                  <ThemeToggle />
+                </div>
               </section>
-              <TravelVault />
-              <Link href="/support" className="block rounded-2xl border border-slate-200 bg-white p-4 font-semibold shadow-sm dark:border-slate-800 dark:bg-slate-900">
+
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <h2 className="font-semibold">Language</h2>
+                <div className="mt-3">
+                  <LanguageToggle />
+                </div>
+              </section>
+
+              <Link
+                href="/support"
+                className="block rounded-2xl border border-slate-200 bg-white p-4 font-semibold shadow-sm transition hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:bg-slate-800"
+              >
                 Support
               </Link>
-              <button type="button" className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-left font-semibold shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                Documents
-              </button>
-              <button type="button" className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-left font-semibold shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                Family
-              </button>
-              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <h2 className="font-semibold">Settings</h2>
-                <div className="mt-3">
-                  <AdvancedModeToggle
-                    enabled={advancedModeEnabled}
-                    onChange={handleAdvancedModeChange}
-                    disabled={advancedModeSaving}
-                    description="Turn this on only when you want the full travel operations workspace."
-                  />
-                </div>
-              </section>
+
+              {emailForwardSetupMessage ? (
+                <p className="text-xs text-emerald-700 dark:text-emerald-300">{emailForwardSetupMessage}</p>
+              ) : null}
+
               <button
                 type="button"
                 onClick={() => {
@@ -4694,7 +4565,7 @@ export default function TravelAssistantPage() {
               <button
                 key={tab}
                 type="button"
-                onClick={() => setConsumerTab(tab)}
+                onClick={() => navigateToConsumerTab(tab)}
                 className={`rounded-xl px-2 py-2 ${
                   consumerTab === tab
                     ? "bg-cyan-500 text-slate-950"

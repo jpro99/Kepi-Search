@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type PackingCategory = "essentials" | "clothing" | "toiletries" | "electronics" | "documents" | "optional";
+type PackingListMode = "advanced" | "consumer";
 
 interface PackingItem {
   id: string;
@@ -28,6 +29,7 @@ interface PackingResponse {
 interface PackingListProps {
   tripId: string | null;
   onCompletionChange?: (percent: number) => void;
+  mode?: PackingListMode;
 }
 
 const CATEGORIES: PackingCategory[] = [
@@ -48,11 +50,21 @@ const CATEGORY_LABEL: Record<PackingCategory, string> = {
   optional: "Optional",
 };
 
+const CONSUMER_CATEGORY_ORDER = ["documents", "clothes", "electronics", "toiletries", "other"] as const;
+type ConsumerCategory = (typeof CONSUMER_CATEGORY_ORDER)[number];
+const CONSUMER_CATEGORY_LABEL: Record<ConsumerCategory, string> = {
+  documents: "Documents",
+  clothes: "Clothes",
+  electronics: "Electronics",
+  toiletries: "Toiletries",
+  other: "Other",
+};
+
 function sortedByChecked(items: PackingItem[]): PackingItem[] {
   return [...items].sort((left, right) => Number(left.checked) - Number(right.checked));
 }
 
-export function PackingList({ tripId, onCompletionChange }: PackingListProps) {
+export function PackingList({ tripId, onCompletionChange, mode = "advanced" }: PackingListProps) {
   const [list, setList] = useState<PackingListState | null>(null);
   const [completionPercent, setCompletionPercent] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -217,40 +229,80 @@ export function PackingList({ tripId, onCompletionChange }: PackingListProps) {
         : 0,
     [list],
   );
+  const consumerCategoryItems = useMemo(() => {
+    if (!list) {
+      return [] as Array<{ category: ConsumerCategory; items: PackingItem[] }>;
+    }
+    const grouped: Record<ConsumerCategory, PackingItem[]> = {
+      documents: list.categories.documents ?? [],
+      clothes: list.categories.clothing ?? [],
+      electronics: list.categories.electronics ?? [],
+      toiletries: list.categories.toiletries ?? [],
+      other: [...(list.categories.essentials ?? []), ...(list.categories.optional ?? [])],
+    };
+    return CONSUMER_CATEGORY_ORDER.map((category) => ({
+      category,
+      items: sortedByChecked(grouped[category]),
+    })).filter((entry) => entry.items.length > 0);
+  }, [list]);
 
   return (
-    <section className="space-y-4 rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
+    <section
+      className={
+        mode === "consumer"
+          ? "space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+          : "space-y-4 rounded-2xl border border-slate-700 bg-slate-900/70 p-4"
+      }
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-lg font-semibold">Smart packing list</h2>
-          <p className="text-xs text-slate-400">AI-generated list that adapts to destination, weather, and trip profile.</p>
+          <h2 className="text-lg font-semibold">{mode === "consumer" ? "Packing checklist" : "Smart packing list"}</h2>
+          <p className={mode === "consumer" ? "text-xs text-slate-500 dark:text-slate-400" : "text-xs text-slate-400"}>
+            {mode === "consumer"
+              ? "Check off what you have packed."
+              : "AI-generated list that adapts to destination, weather, and trip profile."}
+          </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              void regenerateWithAI();
-            }}
-            disabled={!tripId || busy}
-            className="rounded-lg bg-cyan-500/90 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
-          >
-            Regenerate with AI
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              void handleSharePackingList();
-            }}
-            disabled={!tripId || busy}
-            className="rounded-lg bg-slate-800 px-3 py-2 text-xs font-semibold ring-1 ring-slate-700 hover:bg-slate-700 disabled:opacity-60"
-          >
-            Share packing list
-          </button>
-        </div>
+        {mode === "advanced" ? (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                void regenerateWithAI();
+              }}
+              disabled={!tripId || busy}
+              className="rounded-lg bg-cyan-500/90 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+            >
+              Regenerate with AI
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void handleSharePackingList();
+              }}
+              disabled={!tripId || busy}
+              className="rounded-lg bg-slate-800 px-3 py-2 text-xs font-semibold ring-1 ring-slate-700 hover:bg-slate-700 disabled:opacity-60"
+            >
+              Share packing list
+            </button>
+          </div>
+        ) : null}
       </div>
 
-      <div className="rounded-lg border border-slate-700 bg-slate-950/60 p-3">
-        <div className="flex items-center justify-between text-xs text-slate-300">
+      <div
+        className={
+          mode === "consumer"
+            ? "rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/60"
+            : "rounded-lg border border-slate-700 bg-slate-950/60 p-3"
+        }
+      >
+        <div
+          className={
+            mode === "consumer"
+              ? "flex items-center justify-between text-xs text-slate-600 dark:text-slate-300"
+              : "flex items-center justify-between text-xs text-slate-300"
+          }
+        >
           <span>
             {packedItems} of {totalItems} items packed
           </span>
@@ -264,37 +316,39 @@ export function PackingList({ tripId, onCompletionChange }: PackingListProps) {
         </div>
       </div>
 
-      <div className="grid gap-2 md:grid-cols-[1fr_auto]">
-        <input
-          value={customItemText}
-          onChange={(event) => setCustomItemText(event.target.value)}
-          placeholder="Add custom packing item..."
-          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-        />
-        <div className="flex gap-2">
-          <select
-            value={customItemCategory}
-            onChange={(event) => setCustomItemCategory(event.target.value as PackingCategory)}
-            className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-xs"
-          >
-            {CATEGORIES.map((category) => (
-              <option key={category} value={category}>
-                {CATEGORY_LABEL[category]}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => {
-              void addCustomItem();
-            }}
-            disabled={busy || !customItemText.trim()}
-            className="rounded-lg bg-emerald-500/90 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-60"
-          >
-            Add
-          </button>
+      {mode === "advanced" ? (
+        <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+          <input
+            value={customItemText}
+            onChange={(event) => setCustomItemText(event.target.value)}
+            placeholder="Add custom packing item..."
+            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+          />
+          <div className="flex gap-2">
+            <select
+              value={customItemCategory}
+              onChange={(event) => setCustomItemCategory(event.target.value as PackingCategory)}
+              className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-xs"
+            >
+              {CATEGORIES.map((category) => (
+                <option key={category} value={category}>
+                  {CATEGORY_LABEL[category]}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => {
+                void addCustomItem();
+              }}
+              disabled={busy || !customItemText.trim()}
+              className="rounded-lg bg-emerald-500/90 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-60"
+            >
+              Add
+            </button>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {loading ? (
         <div className="grid gap-2 md:grid-cols-2" aria-label="Packing list loading">
@@ -306,86 +360,132 @@ export function PackingList({ tripId, onCompletionChange }: PackingListProps) {
       {shareMessage ? <p className="text-xs text-emerald-300">{shareMessage}</p> : null}
 
       {!loading && !list ? (
-        <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/50 p-4 text-sm text-slate-300">
-          <p>No packing list generated yet for this trip.</p>
-          <button
-            type="button"
-            onClick={() => {
-              void regenerateWithAI();
-            }}
-            disabled={!tripId || busy}
-            className="mt-3 rounded-lg bg-cyan-500/90 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
-          >
-            Generate smart packing list
-          </button>
+        <div
+          className={
+            mode === "consumer"
+              ? "rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-950/50 dark:text-slate-300"
+              : "rounded-lg border border-dashed border-slate-700 bg-slate-950/50 p-4 text-sm text-slate-300"
+          }
+        >
+          <p>{mode === "consumer" ? "No packing items yet for this trip." : "No packing list generated yet for this trip."}</p>
+          {mode === "advanced" ? (
+            <button
+              type="button"
+              onClick={() => {
+                void regenerateWithAI();
+              }}
+              disabled={!tripId || busy}
+              className="mt-3 rounded-lg bg-cyan-500/90 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+            >
+              Generate smart packing list
+            </button>
+          ) : null}
         </div>
       ) : null}
 
       {list
-        ? CATEGORIES.map((category) => {
-            const items = sortedByChecked(list.categories[category] ?? []);
-            if (items.length === 0) {
-              return null;
-            }
-            return (
-              <article key={category} className="rounded-xl border border-slate-700 bg-slate-950/60 p-3">
-                <h3 className="text-sm font-semibold text-slate-100">{CATEGORY_LABEL[category]}</h3>
-                <ul className="mt-2 space-y-2">
-                  {items.map((item) => (
-                    <li
-                      key={item.id}
-                      onTouchStart={(event) => {
-                        touchStartByItemRef.current[item.id] = event.changedTouches[0]?.clientX ?? 0;
-                      }}
-                      onTouchEnd={(event) => {
-                        const startX = touchStartByItemRef.current[item.id];
-                        const endX = event.changedTouches[0]?.clientX ?? 0;
-                        if (startX - endX > 70) {
-                          void patchPacking({
-                            action: "remove",
-                            itemId: item.id,
-                          });
-                        }
-                      }}
-                      className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2"
-                    >
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={item.checked}
-                          onChange={() => {
-                            void patchPacking({
-                              action: "toggle",
-                              itemId: item.id,
-                            });
+        ? (mode === "consumer"
+            ? consumerCategoryItems.map(({ category, items }) => (
+                <article
+                  key={category}
+                  className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950/60"
+                >
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    {CONSUMER_CATEGORY_LABEL[category]}
+                  </h3>
+                  <ul className="mt-2 space-y-2">
+                    {items.map((item) => (
+                      <li key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={item.checked}
+                            onChange={() => {
+                              void patchPacking({
+                                action: "toggle",
+                                itemId: item.id,
+                              });
+                            }}
+                          />
+                          <span
+                            className={`flex-1 text-sm ${
+                              item.checked
+                                ? "text-slate-500 line-through dark:text-slate-400"
+                                : "text-slate-900 dark:text-slate-100"
+                            }`}
+                          >
+                            {item.label}
+                          </span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                </article>
+              ))
+            : CATEGORIES.map((category) => {
+                const items = sortedByChecked(list.categories[category] ?? []);
+                if (items.length === 0) {
+                  return null;
+                }
+                return (
+                  <article key={category} className="rounded-xl border border-slate-700 bg-slate-950/60 p-3">
+                    <h3 className="text-sm font-semibold text-slate-100">{CATEGORY_LABEL[category]}</h3>
+                    <ul className="mt-2 space-y-2">
+                      {items.map((item) => (
+                        <li
+                          key={item.id}
+                          onTouchStart={(event) => {
+                            touchStartByItemRef.current[item.id] = event.changedTouches[0]?.clientX ?? 0;
                           }}
-                        />
-                        <span
-                          className={`flex-1 text-sm ${
-                            item.checked ? "text-slate-500 line-through" : "text-slate-100"
-                          }`}
-                        >
-                          {item.label}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void patchPacking({
-                              action: "remove",
-                              itemId: item.id,
-                            });
+                          onTouchEnd={(event) => {
+                            const startX = touchStartByItemRef.current[item.id];
+                            const endX = event.changedTouches[0]?.clientX ?? 0;
+                            if (startX - endX > 70) {
+                              void patchPacking({
+                                action: "remove",
+                                itemId: item.id,
+                              });
+                            }
                           }}
-                          className="rounded bg-slate-800 px-2 py-1 text-[10px] ring-1 ring-slate-700 hover:bg-slate-700"
+                          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2"
                         >
-                          Delete
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            );
-          })
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={item.checked}
+                              onChange={() => {
+                                void patchPacking({
+                                  action: "toggle",
+                                  itemId: item.id,
+                                });
+                              }}
+                            />
+                            <span
+                              className={`flex-1 text-sm ${
+                                item.checked ? "text-slate-500 line-through" : "text-slate-100"
+                              }`}
+                            >
+                              {item.label}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void patchPacking({
+                                  action: "remove",
+                                  itemId: item.id,
+                                });
+                              }}
+                              className="rounded bg-slate-800 px-2 py-1 text-[10px] ring-1 ring-slate-700 hover:bg-slate-700"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </article>
+                );
+              }))
         : null}
     </section>
   );
