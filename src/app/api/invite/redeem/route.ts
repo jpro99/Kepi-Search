@@ -3,7 +3,12 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { trackServerEvent } from "@/lib/analytics/trackServerEvent";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
-import { getSubscriptionRecord, setSubscriptionRecord } from "@/lib/billing/subscriptionStore";
+import {
+  getSubscriptionRecord,
+  getSubscriptionStorageKey,
+  setSubscriptionRecord,
+  type BillingSubscriptionRecord,
+} from "@/lib/billing/subscriptionStore";
 import { getInviteCodeRecord, getInviteCodeRedeemedByUser, redeemInviteCode } from "@/lib/invite/inviteCodeStore";
 import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
@@ -29,28 +34,30 @@ async function persistInviteDerivedSubscription(args: {
   inviteType: "lifetime" | "trial-30";
   existingSubscription: Awaited<ReturnType<typeof getSubscriptionRecord>>;
   usedAt: string | null;
-}): Promise<{ plan: "lifetime" | "trial"; trialExpiresAt: string | null }> {
+}): Promise<{ plan: "lifetime" | "trial"; trialExpiresAt: string | null; savedRecord: BillingSubscriptionRecord }> {
   if (args.inviteType === "lifetime") {
-    await setSubscriptionRecord(args.userId, {
+    const nextRecord: BillingSubscriptionRecord = {
       plan: "pro",
       stripeCustomerId: args.existingSubscription.stripeCustomerId,
       stripeSubscriptionId: null,
       validUntil: null,
       lifetimePlan: true,
       trialExpiresAt: null,
-    });
-    return { plan: "lifetime", trialExpiresAt: null };
+    };
+    await setSubscriptionRecord(args.userId, nextRecord);
+    return { plan: "lifetime", trialExpiresAt: null, savedRecord: nextRecord };
   }
   const trialExpiresAt = trialExpiryFromInviteUsage(args.usedAt);
-  await setSubscriptionRecord(args.userId, {
+  const nextRecord: BillingSubscriptionRecord = {
     plan: "pro",
     stripeCustomerId: args.existingSubscription.stripeCustomerId,
     stripeSubscriptionId: null,
     validUntil: trialExpiresAt,
     lifetimePlan: false,
     trialExpiresAt,
-  });
-  return { plan: "trial", trialExpiresAt };
+  };
+  await setSubscriptionRecord(args.userId, nextRecord);
+  return { plan: "trial", trialExpiresAt, savedRecord: nextRecord };
 }
 
 export async function POST(req: Request) {
@@ -112,6 +119,7 @@ export async function POST(req: Request) {
             ? {
                 plan: existingSubscription.lifetimePlan ? "lifetime" : "trial",
                 trialExpiresAt: existingSubscription.trialExpiresAt,
+                savedRecord: existingSubscription,
               }
             : await persistInviteDerivedSubscription({
                 userId,
@@ -119,6 +127,16 @@ export async function POST(req: Request) {
                 existingSubscription,
                 usedAt: redeemedInviteRecord.usedAt,
               });
+        const subscriptionStorageKey = getSubscriptionStorageKey(userId);
+        console.info("[invite/redeem] restored subscription persistence", {
+          userId,
+          subscriptionStorageKey,
+          persistedRecord: persisted.savedRecord,
+        });
+        routeLogger.info("Invite Code subscription restored.", {
+          subscriptionStorageKey,
+          persistedRecord: persisted.savedRecord,
+        });
         return NextResponse.json(
           {
             ok: true,
@@ -162,6 +180,16 @@ export async function POST(req: Request) {
     inviteType: redemption.record.type,
     existingSubscription,
     usedAt: redemption.record.usedAt,
+  });
+  const subscriptionStorageKey = getSubscriptionStorageKey(userId);
+  console.info("[invite/redeem] saved subscription persistence", {
+    userId,
+    subscriptionStorageKey,
+    persistedRecord: persisted.savedRecord,
+  });
+  routeLogger.info("Invite Code subscription persisted.", {
+    subscriptionStorageKey,
+    persistedRecord: persisted.savedRecord,
   });
 
   void trackServerEvent({

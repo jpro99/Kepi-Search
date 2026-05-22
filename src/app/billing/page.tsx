@@ -304,13 +304,18 @@ export default function BillingPage() {
       <section className="rounded-2xl border border-emerald-300 bg-emerald-50/80 p-5 shadow-sm dark:border-emerald-700/50 dark:bg-emerald-950/30">
         <h2 className="text-lg font-semibold text-emerald-900 dark:text-emerald-100">Code redemption</h2>
         {hideRedeemInputs ? (
-          <p className="mt-1 text-sm text-emerald-900 dark:text-emerald-100">
-            {lifetimePlanActive
-              ? "Pro access active"
-              : `Trial active — expires ${
-                  trialExpiresAt ? new Date(trialExpiresAt).toLocaleDateString() : "soon"
-                }`}
-          </p>
+          <article className="mt-3 rounded-xl border border-emerald-400/60 bg-white/80 p-4 dark:border-emerald-600/60 dark:bg-slate-900/60">
+            <p className="text-sm font-semibold text-emerald-900 dark:text-emerald-100">
+              {lifetimePlanActive ? "Pro access active" : "Trial active"}
+            </p>
+            <p className="mt-1 text-sm text-emerald-900/90 dark:text-emerald-100/90">
+              {lifetimePlanActive
+                ? "Your Invite Code is already applied. No additional code entry is needed."
+                : `Your 30-day free trial is active and expires ${
+                    trialExpiresAt ? new Date(trialExpiresAt).toLocaleDateString() : "soon"
+                  }.`}
+            </p>
+          </article>
         ) : (
           <>
             <p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">Use Invite Code or Referral Code below.</p>

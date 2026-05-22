@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { BILLING_PLANS, PLAN_FEATURE_LABELS, type PlanFeature } from "@/lib/billing/plans";
 import { getUserPlan } from "@/lib/billing/planGate";
 import { getStripePublishableKey } from "@/lib/billing/stripeClient";
-import { getSubscriptionRecord } from "@/lib/billing/subscriptionStore";
+import { getRawSubscriptionRecordForDebug, getSubscriptionRecord, getSubscriptionStorageKey } from "@/lib/billing/subscriptionStore";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
 import { logger } from "@/lib/logger";
 import { listTrips } from "@/lib/travelAssistant/tripStore";
@@ -41,6 +41,17 @@ export async function GET(req: Request) {
     getSubscriptionRecord(userId),
     listTrips(userId),
   ]);
+  const subscriptionStorageKey = getSubscriptionStorageKey(userId);
+  const rawSubscriptionRecord = await getRawSubscriptionRecordForDebug(userId);
+  console.info("[billing/status] subscription lookup", {
+    userId,
+    subscriptionStorageKey,
+    rawSubscriptionRecord,
+  });
+  routeLogger.info("Billing status subscription lookup complete.", {
+    subscriptionStorageKey,
+    rawSubscriptionRecord,
+  });
   const definition = BILLING_PLANS[plan];
   const tripLimit = definition.maxTrips;
   const tripCount = trips.length;

@@ -423,24 +423,6 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
     }
   }, [notificationsBusy, t]);
 
-  const handleConnectGmail = useCallback(async (): Promise<void> => {
-    if (gmailBusy) return;
-    setGmailBusy(true);
-    try {
-      await fetch("/api/email-forward/setup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "mark-gmail-prompt-seen" }),
-      });
-      const returnTo = encodeURIComponent("/travel-assistant?tab=more");
-      window.location.assign(`/api/gmail/connect?returnTo=${returnTo}`);
-    } catch {
-      setGmailMessage("Could not start Gmail connection. You can continue and set it up later.");
-    } finally {
-      setGmailBusy(false);
-    }
-  }, [gmailBusy]);
-
   const handleCopyForwardAddress = useCallback(async (): Promise<void> => {
     if (!forwardAddress) return;
     try {
@@ -503,7 +485,7 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
     if (currentStep === 1) return t("stepWelcome");
     if (currentStep === 2) return t("stepFirstTrip");
     if (currentStep === 3) return t("stepNotifications");
-    if (currentStep === 4) return t("stepGmail");
+    if (currentStep === 4) return "Email forwarding";
     return t("stepDone");
   }, [currentStep, t]);
 
@@ -725,20 +707,11 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
               ) : (
                 <p className="text-slate-700 dark:text-slate-300">Assigning your forwarding address...</p>
               )}
-              <p className="text-slate-700 dark:text-slate-300">{t("gmailDescription")}</p>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (gmailConnected) return;
-                    void handleConnectGmail();
-                  }}
-                  disabled={gmailBusy || gmailConnected}
-                  className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {gmailConnected ? "Gmail connected" : gmailBusy ? t("connecting") : t("connectGmail")}
-                </button>
-              </div>
+              <p className="text-slate-700 dark:text-slate-300">
+                {gmailConnected
+                  ? "Email import account connected."
+                  : "Email import account connection can be completed later from the More tab."}
+              </p>
               {gmailMessage ? <p className="text-xs text-slate-600 dark:text-slate-400">{gmailMessage}</p> : null}
             </div>
           ) : null}
