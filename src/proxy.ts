@@ -26,6 +26,7 @@ const PROTECTED_PATH_PATTERNS: RegExp[] = [
   /^\/api\/ai(?:\/.*)?$/,
   /^\/api\/trips(?:\/.*)?$/,
   /^\/api\/gmail(?:\/.*)?$/,
+  /^\/api\/email-forward\/setup(?:\/.*)?$/,
   /^\/api\/vault(?:\/.*)?$/,
   /^\/api\/billing\/checkout(?:\/.*)?$/,
   /^\/api\/billing\/portal(?:\/.*)?$/,

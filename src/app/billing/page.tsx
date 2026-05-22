@@ -33,6 +33,11 @@ type BillingStatusResponse = {
     lifetimePlan: boolean;
     trialExpiresAt: string | null;
   };
+  inviteAccess?: {
+    lifetimePlanActive: boolean;
+    trialActive: boolean;
+    trialExpiresAt: string | null;
+  };
 };
 
 const FEATURE_ORDER: PlanFeature[] = ["gmail-import", "ai-suggestions", "push-notifications", "multi-trip"];
@@ -108,9 +113,13 @@ export default function BillingPage() {
 
   const activePlan = status?.plan ?? "free";
   const planDefinition = status?.definition ?? BILLING_PLANS.free;
-  const lifetimePlanActive = Boolean(status?.subscription?.lifetimePlan);
-  const trialExpiresAt = status?.subscription?.trialExpiresAt ?? null;
-  const trialPlanActive = activePlan === "pro" && !lifetimePlanActive && Boolean(trialExpiresAt);
+  const lifetimePlanActive = Boolean(status?.inviteAccess?.lifetimePlanActive ?? status?.subscription?.lifetimePlan);
+  const trialExpiresAt = status?.inviteAccess?.trialExpiresAt ?? status?.subscription?.trialExpiresAt ?? null;
+  const trialPlanActive = Boolean(
+    status?.inviteAccess?.trialActive ??
+      (activePlan === "pro" && !lifetimePlanActive && typeof trialExpiresAt === "string" && trialExpiresAt.length > 0),
+  );
+  const hideRedeemInputs = lifetimePlanActive || trialPlanActive;
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -294,64 +303,76 @@ export default function BillingPage() {
 
       <section className="rounded-2xl border border-emerald-300 bg-emerald-50/80 p-5 shadow-sm dark:border-emerald-700/50 dark:bg-emerald-950/30">
         <h2 className="text-lg font-semibold text-emerald-900 dark:text-emerald-100">Code redemption</h2>
-        <p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">Use Invite Code or Referral Code below.</p>
-        <div className="mt-3 grid gap-4 sm:grid-cols-2">
-          <form
-            className="w-full space-y-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void handleRedeemInviteCode();
-            }}
-          >
-            <label className="block text-xs font-semibold uppercase tracking-wide text-emerald-900 dark:text-emerald-100">
-              Invite Code
-            </label>
-            <input
-              ref={inviteCodeInputRef}
-              type="text"
-              defaultValue={prefilledCodes.inviteCode}
-              placeholder="KEPI-FRIEND-ABC123"
-              className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm uppercase tracking-wide text-slate-900 dark:border-emerald-700 dark:bg-slate-900 dark:text-slate-100"
-            />
-            <button
-              type="submit"
-              disabled={inviteBusy}
-              className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {inviteBusy ? "Redeeming..." : "Redeem Invite Code"}
-            </button>
-          </form>
-          <form
-            className="w-full space-y-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void handleRedeemReferralCode();
-            }}
-          >
-            <label className="block text-xs font-semibold uppercase tracking-wide text-emerald-900 dark:text-emerald-100">
-              Referral Code
-            </label>
-            <input
-              ref={referralCodeInputRef}
-              type="text"
-              defaultValue={prefilledCodes.referralCode}
-              placeholder="ABCD1234"
-              className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm uppercase tracking-wide text-slate-900 dark:border-emerald-700 dark:bg-slate-900 dark:text-slate-100"
-            />
-            <button
-              type="submit"
-              disabled={referralBusy}
-              className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {referralBusy ? "Redeeming..." : "Redeem Referral Code"}
-            </button>
-          </form>
-        </div>
-        {(prefilledCodes.inviteCode.length > 0 || prefilledCodes.referralCode.length > 0) ? (
-          <p className="mt-2 text-xs text-emerald-900 dark:text-emerald-100">
-            Code prefilled from onboarding. Tap the matching redeem button to activate.
+        {hideRedeemInputs ? (
+          <p className="mt-1 text-sm text-emerald-900 dark:text-emerald-100">
+            {lifetimePlanActive
+              ? "Pro access active"
+              : `Trial active — expires ${
+                  trialExpiresAt ? new Date(trialExpiresAt).toLocaleDateString() : "soon"
+                }`}
           </p>
-        ) : null}
+        ) : (
+          <>
+            <p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">Use Invite Code or Referral Code below.</p>
+            <div className="mt-3 grid gap-4 sm:grid-cols-2">
+              <form
+                className="w-full space-y-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleRedeemInviteCode();
+                }}
+              >
+                <label className="block text-xs font-semibold uppercase tracking-wide text-emerald-900 dark:text-emerald-100">
+                  Invite Code
+                </label>
+                <input
+                  ref={inviteCodeInputRef}
+                  type="text"
+                  defaultValue={prefilledCodes.inviteCode}
+                  placeholder="KEPI-FRIEND-ABC123"
+                  className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm uppercase tracking-wide text-slate-900 dark:border-emerald-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+                <button
+                  type="submit"
+                  disabled={inviteBusy}
+                  className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {inviteBusy ? "Redeeming..." : "Redeem Invite Code"}
+                </button>
+              </form>
+              <form
+                className="w-full space-y-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleRedeemReferralCode();
+                }}
+              >
+                <label className="block text-xs font-semibold uppercase tracking-wide text-emerald-900 dark:text-emerald-100">
+                  Referral Code
+                </label>
+                <input
+                  ref={referralCodeInputRef}
+                  type="text"
+                  defaultValue={prefilledCodes.referralCode}
+                  placeholder="ABCD1234"
+                  className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm uppercase tracking-wide text-slate-900 dark:border-emerald-700 dark:bg-slate-900 dark:text-slate-100"
+                />
+                <button
+                  type="submit"
+                  disabled={referralBusy}
+                  className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {referralBusy ? "Redeeming..." : "Redeem Referral Code"}
+                </button>
+              </form>
+            </div>
+            {prefilledCodes.inviteCode.length > 0 || prefilledCodes.referralCode.length > 0 ? (
+              <p className="mt-2 text-xs text-emerald-900 dark:text-emerald-100">
+                Code prefilled from onboarding. Tap the matching redeem button to activate.
+              </p>
+            ) : null}
+          </>
+        )}
         {inviteMessage ? <p className="mt-2 text-sm text-emerald-900 dark:text-emerald-100">{inviteMessage}</p> : null}
         {inviteError ? <p className="mt-2 text-sm text-rose-700 dark:text-rose-300">{inviteError}</p> : null}
         {referralMessage ? <p className="mt-2 text-sm text-emerald-900 dark:text-emerald-100">{referralMessage}</p> : null}

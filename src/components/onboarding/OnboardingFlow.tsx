@@ -24,6 +24,12 @@ type OnboardingResponse = {
   referralRedeemedAt: string | null;
 };
 
+type EmailForwardSetupStatus = {
+  forwardAddress: string | null;
+  gmailPromptSeen: boolean;
+  gmailConnected: boolean;
+};
+
 interface OnboardingFlowProps {
   onCreateFirstTrip: (trip: TripSetupDraft) => void;
 }
@@ -68,6 +74,9 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
 
   const [notificationsBusy, setNotificationsBusy] = useState(false);
   const [gmailBusy, setGmailBusy] = useState(false);
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [forwardAddress, setForwardAddress] = useState<string | null>(null);
+  const [gmailPromptSeen, setGmailPromptSeen] = useState(false);
   const referralCodeFromUrl = useMemo(() => {
     const raw = searchParams.get("ref")?.trim().toUpperCase() ?? "";
     return /^[A-Z0-9-]{1,50}$/u.test(raw) ? raw : "";
@@ -89,6 +98,26 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
     },
     [tTripSetup],
   );
+
+  const refreshEmailForwardSetupStatus = useCallback(async (): Promise<void> => {
+    try {
+      const response = await fetch("/api/email-forward/setup", {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(`Email forward setup API returned ${response.status}`);
+      }
+      const payload = (await response.json()) as Partial<EmailForwardSetupStatus>;
+      setForwardAddress(typeof payload.forwardAddress === "string" && payload.forwardAddress.trim().length > 0 ? payload.forwardAddress.trim() : null);
+      setGmailConnected(Boolean(payload.gmailConnected));
+      setGmailPromptSeen(Boolean(payload.gmailPromptSeen));
+    } catch {
+      setForwardAddress(null);
+      setGmailConnected(false);
+      setGmailPromptSeen(false);
+    }
+  }, []);
 
   const loadOnboardingState = useCallback(async (): Promise<void> => {
     setIsLoading(true);
@@ -154,14 +183,14 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
   useEffect(() => {
     let active = true;
     const run = async (): Promise<void> => {
-      await loadOnboardingState();
+      await Promise.all([loadOnboardingState(), refreshEmailForwardSetupStatus()]);
       if (!active) return;
     };
     void run();
     return () => {
       active = false;
     };
-  }, [loadOnboardingState]);
+  }, [loadOnboardingState, refreshEmailForwardSetupStatus]);
 
   const persistProgress = useCallback(
     async (
@@ -327,12 +356,18 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
       await completeOnboarding();
       return;
     }
-    const nextStep = currentStep + 1;
+    const nextStep =
+      currentStep === 3 && (gmailConnected || Boolean(forwardAddress) || gmailPromptSeen)
+        ? 5
+        : currentStep + 1;
     setCurrentStep(nextStep);
     await persistProgress(nextStep, tripDraft, inviteCode, nextInviteRedeemedAt, referralCode, nextReferralRedeemedAt);
   }, [
     completeOnboarding,
     currentStep,
+    forwardAddress,
+    gmailConnected,
+    gmailPromptSeen,
     localizeTripErrors,
     onCreateFirstTrip,
     inviteCode,
@@ -376,23 +411,62 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
     if (gmailBusy) return;
     setGmailBusy(true);
     try {
-      const response = await fetch("/api/travel-updates/gmail-import", {
+      await fetch("/api/email-forward/setup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxResults: 1 }),
+        body: JSON.stringify({ action: "mark-gmail-prompt-seen" }),
       });
-      if (!response.ok) {
-        const fallbackMessage = t("gmailFallbackMessage", { status: response.status });
-        setGmailMessage(fallbackMessage);
-        return;
-      }
-      setGmailMessage(t("gmailConnected"));
+      const returnTo = encodeURIComponent("/travel-assistant?tab=more");
+      window.location.assign(`/api/gmail/connect?returnTo=${returnTo}`);
     } catch {
-      setGmailMessage(t("gmailUnavailable"));
+      setGmailMessage("Could not start Gmail connection. You can continue and set it up later.");
     } finally {
       setGmailBusy(false);
     }
-  }, [gmailBusy, t]);
+  }, [gmailBusy]);
+
+  const handleSetupForwardAddress = useCallback(async (): Promise<void> => {
+    if (gmailBusy) return;
+    setGmailBusy(true);
+    try {
+      const response = await fetch("/api/email-forward/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create-forward-address" }),
+      });
+      const payload = (await response.json()) as { forwardAddress?: string; error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? `Forward setup failed (${response.status})`);
+      }
+      const nextForwardAddress =
+        typeof payload.forwardAddress === "string" && payload.forwardAddress.trim().length > 0
+          ? payload.forwardAddress.trim()
+          : null;
+      setForwardAddress(nextForwardAddress);
+      setGmailPromptSeen(true);
+      setGmailMessage(nextForwardAddress ? `Forwarding address ready: ${nextForwardAddress}` : "Forwarding address created.");
+    } catch (error) {
+      setGmailMessage(error instanceof Error ? error.message : "Could not set up forwarding address.");
+    } finally {
+      setGmailBusy(false);
+    }
+  }, [gmailBusy]);
+
+  const handleDismissGmailPrompt = useCallback(async (): Promise<void> => {
+    if (gmailBusy) return;
+    setGmailBusy(true);
+    try {
+      await fetch("/api/email-forward/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "dismiss-gmail-prompt" }),
+      });
+      setGmailPromptSeen(true);
+      setGmailMessage("Got it — you can set this up later from the More tab.");
+    } finally {
+      setGmailBusy(false);
+    }
+  }, [gmailBusy]);
 
   const stepTitle = useMemo(() => {
     if (currentStep === 1) return t("stepWelcome");
@@ -543,19 +617,54 @@ export function OnboardingFlow({ onCreateFirstTrip }: OnboardingFlowProps) {
 
           {currentStep === 4 ? (
             <div className="space-y-3 text-sm">
-              <p className="text-slate-700 dark:text-slate-300">
-                {t("gmailDescription")}
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  void handleConnectGmail();
-                }}
-                disabled={gmailBusy}
-                className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {gmailBusy ? t("connecting") : t("connectGmail")}
-              </button>
+              {gmailConnected || forwardAddress ? (
+                <p className="text-slate-700 dark:text-slate-300">
+                  Setup already complete. {gmailConnected ? "Gmail is connected." : null}
+                  {forwardAddress ? ` Forwarding address: ${forwardAddress}` : null}
+                </p>
+              ) : gmailPromptSeen ? (
+                <p className="text-slate-700 dark:text-slate-300">
+                  You can set up Gmail or forwarding later from the More tab.
+                </p>
+              ) : (
+                <>
+                  <p className="text-slate-700 dark:text-slate-300">
+                    {t("gmailDescription")}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleConnectGmail();
+                      }}
+                      disabled={gmailBusy}
+                      className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {gmailBusy ? t("connecting") : t("connectGmail")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleSetupForwardAddress();
+                      }}
+                      disabled={gmailBusy}
+                      className="rounded-lg border border-cyan-400 px-3 py-2 text-sm font-semibold text-cyan-700 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-cyan-300 dark:hover:bg-cyan-500/10"
+                    >
+                      Set up forwarding address
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleDismissGmailPrompt();
+                      }}
+                      disabled={gmailBusy}
+                      className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:hover:bg-slate-900"
+                    >
+                      Not now
+                    </button>
+                  </div>
+                </>
+              )}
               {gmailMessage ? <p className="text-xs text-slate-600 dark:text-slate-400">{gmailMessage}</p> : null}
             </div>
           ) : null}

@@ -44,6 +44,13 @@ export async function GET(req: Request) {
   const definition = BILLING_PLANS[plan];
   const tripLimit = definition.maxTrips;
   const tripCount = trips.length;
+  const lifetimePlanActive = subscriptionRecord.lifetimePlan;
+  const trialExpiresAt = subscriptionRecord.trialExpiresAt;
+  const trialActive =
+    !lifetimePlanActive &&
+    typeof trialExpiresAt === "string" &&
+    trialExpiresAt.length > 0 &&
+    Date.parse(trialExpiresAt) > Date.now();
   const publishableKey = getStripePublishableKey();
   const stripeProPriceConfigured = Boolean(process.env.STRIPE_PRO_PRICE_ID?.trim());
   const stripeConciergePriceConfigured = Boolean(process.env.STRIPE_CONCIERGE_PRICE_ID?.trim());
@@ -52,6 +59,11 @@ export async function GET(req: Request) {
     plan,
     definition,
     subscription: subscriptionRecord,
+    inviteAccess: {
+      lifetimePlanActive,
+      trialActive,
+      trialExpiresAt,
+    },
     usage: {
       tripCount,
       tripLimit,

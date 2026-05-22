@@ -4,7 +4,7 @@ import { z } from "zod";
 import { trackServerEvent } from "@/lib/analytics/trackServerEvent";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
 import { getSubscriptionRecord, setSubscriptionRecord } from "@/lib/billing/subscriptionStore";
-import { redeemInviteCode } from "@/lib/invite/inviteCodeStore";
+import { getInviteCodeRecord, getInviteCodeRedeemedByUser, redeemInviteCode } from "@/lib/invite/inviteCodeStore";
 import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
 
@@ -17,6 +17,41 @@ const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const BodySchema = z.object({
   code: z.string().trim().regex(/^[A-Za-z0-9-]{1,50}$/u),
 });
+
+function trialExpiryFromInviteUsage(usedAt: string | null): string {
+  const usedAtMs = usedAt ? Date.parse(usedAt) : Number.NaN;
+  const baseMs = Number.isNaN(usedAtMs) ? Date.now() : usedAtMs;
+  return new Date(baseMs + 30 * DAY_IN_MS).toISOString();
+}
+
+async function persistInviteDerivedSubscription(args: {
+  userId: string;
+  inviteType: "lifetime" | "trial-30";
+  existingSubscription: Awaited<ReturnType<typeof getSubscriptionRecord>>;
+  usedAt: string | null;
+}): Promise<{ plan: "lifetime" | "trial"; trialExpiresAt: string | null }> {
+  if (args.inviteType === "lifetime") {
+    await setSubscriptionRecord(args.userId, {
+      plan: "pro",
+      stripeCustomerId: args.existingSubscription.stripeCustomerId,
+      stripeSubscriptionId: null,
+      validUntil: null,
+      lifetimePlan: true,
+      trialExpiresAt: null,
+    });
+    return { plan: "lifetime", trialExpiresAt: null };
+  }
+  const trialExpiresAt = trialExpiryFromInviteUsage(args.usedAt);
+  await setSubscriptionRecord(args.userId, {
+    plan: "pro",
+    stripeCustomerId: args.existingSubscription.stripeCustomerId,
+    stripeSubscriptionId: null,
+    validUntil: trialExpiresAt,
+    lifetimePlan: false,
+    trialExpiresAt,
+  });
+  return { plan: "trial", trialExpiresAt };
+}
 
 export async function POST(req: Request) {
   const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
@@ -63,6 +98,40 @@ export async function POST(req: Request) {
   const normalizedCode = parsed.data.code.toUpperCase().trim();
   const redemption = await redeemInviteCode(normalizedCode, userId);
   if (!redemption.ok) {
+    if (redemption.reason === "already-redeemed") {
+      const redeemedCode = await getInviteCodeRedeemedByUser(userId);
+      const redeemedInviteRecord = redeemedCode ? await getInviteCodeRecord(redeemedCode) : null;
+      if (redeemedInviteRecord?.usedBy === userId) {
+        const existingSubscription = await getSubscriptionRecord(userId);
+        const hasInviteDerivedAccess =
+          existingSubscription.lifetimePlan ||
+          (typeof existingSubscription.trialExpiresAt === "string" &&
+            Date.parse(existingSubscription.trialExpiresAt) > Date.now());
+        const persisted =
+          hasInviteDerivedAccess && (existingSubscription.lifetimePlan || existingSubscription.trialExpiresAt)
+            ? {
+                plan: existingSubscription.lifetimePlan ? "lifetime" : "trial",
+                trialExpiresAt: existingSubscription.trialExpiresAt,
+              }
+            : await persistInviteDerivedSubscription({
+                userId,
+                inviteType: redeemedInviteRecord.type,
+                existingSubscription,
+                usedAt: redeemedInviteRecord.usedAt,
+              });
+        return NextResponse.json(
+          {
+            ok: true,
+            restored: true,
+            code: redeemedInviteRecord.code,
+            type: redeemedInviteRecord.type,
+            plan: persisted.plan,
+            trialExpiresAt: persisted.trialExpiresAt,
+          },
+          { headers: rateLimit.headers },
+        );
+      }
+    }
     const statusCode =
       redemption.reason === "already-redeemed"
         ? 409
@@ -88,29 +157,12 @@ export async function POST(req: Request) {
   }
 
   const existingSubscription = await getSubscriptionRecord(userId);
-  const nowMs = Date.now();
-  let responseTrialExpiresAt: string | null = null;
-  if (redemption.record.type === "lifetime") {
-    await setSubscriptionRecord(userId, {
-      plan: "pro",
-      stripeCustomerId: existingSubscription.stripeCustomerId,
-      stripeSubscriptionId: null,
-      validUntil: null,
-      lifetimePlan: true,
-      trialExpiresAt: null,
-    });
-  } else {
-    const trialExpiresAt = new Date(nowMs + 30 * DAY_IN_MS).toISOString();
-    responseTrialExpiresAt = trialExpiresAt;
-    await setSubscriptionRecord(userId, {
-      plan: "pro",
-      stripeCustomerId: existingSubscription.stripeCustomerId,
-      stripeSubscriptionId: null,
-      validUntil: trialExpiresAt,
-      lifetimePlan: false,
-      trialExpiresAt,
-    });
-  }
+  const persisted = await persistInviteDerivedSubscription({
+    userId,
+    inviteType: redemption.record.type,
+    existingSubscription,
+    usedAt: redemption.record.usedAt,
+  });
 
   void trackServerEvent({
     type: "invite_code_redeemed",
@@ -129,8 +181,8 @@ export async function POST(req: Request) {
       ok: true,
       code: redemption.record.code,
       type: redemption.record.type,
-      plan: redemption.record.type === "lifetime" ? "lifetime" : "trial",
-      trialExpiresAt: responseTrialExpiresAt,
+      plan: persisted.plan,
+      trialExpiresAt: persisted.trialExpiresAt,
     },
     { headers: rateLimit.headers },
   );

@@ -198,6 +198,12 @@ interface GmailConnectionStatus {
   updatedAt: string | null;
 }
 
+interface EmailForwardSetupStatus {
+  forwardAddress: string | null;
+  gmailPromptSeen: boolean;
+  gmailConnected: boolean;
+}
+
 interface DrawerState {
   kind: "reservation" | "review";
   id: string;
@@ -1094,6 +1100,10 @@ export default function TravelAssistantPage() {
   const [gmailConnectionLoading, setGmailConnectionLoading] = useState(true);
   const [gmailConnectionBusy, setGmailConnectionBusy] = useState(false);
   const [gmailConnectionMessage, setGmailConnectionMessage] = useState<string | null>(null);
+  const [emailForwardAddress, setEmailForwardAddress] = useState<string | null>(null);
+  const [gmailPromptSeen, setGmailPromptSeen] = useState(false);
+  const [emailForwardSetupBusy, setEmailForwardSetupBusy] = useState(false);
+  const [emailForwardSetupMessage, setEmailForwardSetupMessage] = useState<string | null>(null);
   const [gmailImportBusy, setGmailImportBusy] = useState(false);
   const [gmailImportMessage, setGmailImportMessage] = useState<string | null>(null);
   const [gmailImportError, setGmailImportError] = useState<string | null>(null);
@@ -1148,6 +1158,30 @@ export default function TravelAssistantPage() {
     }
   }, []);
 
+  const refreshEmailForwardSetup = useCallback(async (): Promise<void> => {
+    try {
+      const response = await fetch("/api/email-forward/setup", {
+        method: "GET",
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as Partial<EmailForwardSetupStatus> & { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? `Email forward setup status failed (${response.status})`);
+      }
+      setEmailForwardAddress(
+        typeof payload.forwardAddress === "string" && payload.forwardAddress.trim().length > 0
+          ? payload.forwardAddress.trim()
+          : null,
+      );
+      setGmailPromptSeen(Boolean(payload.gmailPromptSeen));
+      if (payload.gmailConnected) {
+        setGmailPromptSeen(true);
+      }
+    } catch {
+      setEmailForwardAddress(null);
+    }
+  }, []);
+
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       const params = new URLSearchParams(window.location.search);
@@ -1158,6 +1192,14 @@ export default function TravelAssistantPage() {
       const gmailStatus = params.get("gmail");
       if (gmailStatus === "connected") {
         setGmailConnectionMessage("Gmail connected successfully.");
+        setGmailPromptSeen(true);
+        void fetch("/api/email-forward/setup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "mark-gmail-prompt-seen" }),
+        }).then(() => {
+          void refreshEmailForwardSetup();
+        });
       } else if (gmailStatus === "error") {
         setGmailConnectionMessage("Gmail connection failed. Please try again.");
       }
@@ -1169,16 +1211,16 @@ export default function TravelAssistantPage() {
       }
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, []);
+  }, [refreshEmailForwardSetup]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      void refreshGmailConnection();
+      void Promise.all([refreshGmailConnection(), refreshEmailForwardSetup()]);
     }, 0);
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [refreshGmailConnection]);
+  }, [refreshEmailForwardSetup, refreshGmailConnection]);
   const activeTrip = useMemo(() => {
     if (!activeTripId) {
       return null;
@@ -3205,10 +3247,25 @@ export default function TravelAssistantPage() {
     [familyMembers, queueMutation, setToast],
   );
 
-  const handleConnectGmail = useCallback((): void => {
+  const handleConnectGmail = useCallback(async (): Promise<void> => {
+    if (gmailConnectionBusy) {
+      return;
+    }
+    setGmailConnectionBusy(true);
+    setGmailConnectionMessage(null);
+    setEmailForwardSetupMessage(null);
+    try {
+      await fetch("/api/email-forward/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "mark-gmail-prompt-seen" }),
+      });
+    } finally {
+      setGmailConnectionBusy(false);
+    }
     const returnTo = encodeURIComponent("/travel-assistant?tab=more");
     window.location.assign(`/api/gmail/connect?returnTo=${returnTo}`);
-  }, []);
+  }, [gmailConnectionBusy]);
 
   const handleDisconnectGmail = useCallback(async (): Promise<void> => {
     if (gmailConnectionBusy) {
@@ -3225,13 +3282,77 @@ export default function TravelAssistantPage() {
         throw new Error(payload.error ?? `Gmail disconnect failed (${response.status})`);
       }
       setGmailConnectionMessage("Gmail disconnected.");
-      await refreshGmailConnection();
+      await Promise.all([refreshGmailConnection(), refreshEmailForwardSetup()]);
     } catch (error) {
       setGmailConnectionMessage(error instanceof Error ? error.message : "Could not disconnect Gmail.");
     } finally {
       setGmailConnectionBusy(false);
     }
-  }, [gmailConnectionBusy, refreshGmailConnection]);
+  }, [gmailConnectionBusy, refreshEmailForwardSetup, refreshGmailConnection]);
+
+  const handleSetupForwardAddress = useCallback(async (): Promise<void> => {
+    if (emailForwardSetupBusy) {
+      return;
+    }
+    setEmailForwardSetupBusy(true);
+    setEmailForwardSetupMessage(null);
+    setGmailConnectionMessage(null);
+    try {
+      const response = await fetch("/api/email-forward/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create-forward-address" }),
+      });
+      const payload = (await response.json()) as { forwardAddress?: string; error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? `Forward setup failed (${response.status})`);
+      }
+      const nextForwardAddress =
+        typeof payload.forwardAddress === "string" && payload.forwardAddress.trim().length > 0
+          ? payload.forwardAddress.trim()
+          : null;
+      setEmailForwardAddress(nextForwardAddress);
+      setGmailPromptSeen(true);
+      setEmailForwardSetupMessage(
+        nextForwardAddress ? `Forwarding address ready: ${nextForwardAddress}` : "Forwarding address created.",
+      );
+    } catch (error) {
+      setEmailForwardSetupMessage(error instanceof Error ? error.message : "Could not create forwarding address.");
+    } finally {
+      setEmailForwardSetupBusy(false);
+    }
+  }, [emailForwardSetupBusy]);
+
+  const handleDismissGmailPrompt = useCallback(async (): Promise<void> => {
+    if (emailForwardSetupBusy) {
+      return;
+    }
+    setEmailForwardSetupBusy(true);
+    setEmailForwardSetupMessage(null);
+    try {
+      await fetch("/api/email-forward/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "dismiss-gmail-prompt" }),
+      });
+      setGmailPromptSeen(true);
+      setEmailForwardSetupMessage("Gmail setup prompt dismissed. You can connect anytime from this tab.");
+    } finally {
+      setEmailForwardSetupBusy(false);
+    }
+  }, [emailForwardSetupBusy]);
+
+  const handleCopyForwardAddress = useCallback(async (): Promise<void> => {
+    if (!emailForwardAddress) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(emailForwardAddress);
+      setEmailForwardSetupMessage("Forwarding address copied.");
+    } catch {
+      setEmailForwardSetupMessage("Clipboard unavailable.");
+    }
+  }, [emailForwardAddress]);
 
   const handleImportFromGmailWithScope = useCallback(
     async (scope: GmailImportScope): Promise<void> => {
@@ -4257,12 +4378,16 @@ export default function TravelAssistantPage() {
               <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm dark:border-emerald-500/40 dark:bg-emerald-500/10">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <h2 className="font-semibold text-emerald-900 dark:text-emerald-100">Email import</h2>
+                    <h2 className="font-semibold text-emerald-900 dark:text-emerald-100">Email import & forwarding</h2>
                     <p className="mt-1 text-xs text-emerald-800 dark:text-emerald-200">
-                      Connect Gmail to scan booking confirmations with read-only access.
+                      Forward confirmations or connect Gmail to scan booking confirmations with read-only access.
                     </p>
                   </div>
-                  {gmailConnection.connected ? (
+                  {emailForwardAddress ? (
+                    <span className="rounded-full bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-800 dark:text-emerald-200">
+                      Forwarding ready
+                    </span>
+                  ) : gmailConnection.connected ? (
                     <span className="rounded-full bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold text-emerald-800 dark:text-emerald-200">
                       Gmail connected
                     </span>
@@ -4272,13 +4397,42 @@ export default function TravelAssistantPage() {
                     </span>
                   )}
                 </div>
-                <p className="mt-2 text-xs text-emerald-900/90 dark:text-emerald-100/90">
-                  {gmailConnectionLoading
-                    ? "Checking Gmail connection..."
-                    : gmailConnection.connected
-                      ? `Connected as ${gmailConnection.emailAddress ?? "your Google account"}.`
-                      : "Connect Gmail to start importing reservation emails."}
-                </p>
+                {gmailConnectionLoading ? (
+                  <p className="mt-2 text-xs text-emerald-900/90 dark:text-emerald-100/90">Checking Gmail connection...</p>
+                ) : null}
+                {emailForwardAddress ? (
+                  <div className="mt-2 rounded-lg border border-emerald-300/70 bg-white/80 p-3 dark:border-emerald-700/50 dark:bg-slate-900/60">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-emerald-900 dark:text-emerald-100">
+                      Your forwarding address
+                    </p>
+                    <p className="mt-1 break-all text-sm text-emerald-900 dark:text-emerald-100">{emailForwardAddress}</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleCopyForwardAddress();
+                      }}
+                      className="mt-2 rounded-lg border border-emerald-500/50 px-3 py-2 text-xs font-semibold text-emerald-900 transition hover:bg-emerald-100 dark:text-emerald-100 dark:hover:bg-emerald-500/20"
+                    >
+                      Copy address
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-2">
+                    <p className="text-xs text-emerald-900/90 dark:text-emerald-100/90">
+                      Create your forwarding address to route reservation emails into Kepi automatically.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleSetupForwardAddress();
+                      }}
+                      disabled={emailForwardSetupBusy}
+                      className="mt-2 rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {emailForwardSetupBusy ? "Setting up..." : "Set up forwarding address"}
+                    </button>
+                  </div>
+                )}
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   {gmailConnection.connected ? (
                     <button
@@ -4292,14 +4446,32 @@ export default function TravelAssistantPage() {
                       {gmailConnectionBusy ? "Disconnecting..." : "Disconnect"}
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={handleConnectGmail}
-                      disabled={gmailConnectionBusy}
-                      className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      Connect Gmail
-                    </button>
+                    <>
+                      {!gmailPromptSeen && !emailForwardAddress ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleConnectGmail();
+                          }}
+                          disabled={gmailConnectionBusy}
+                          className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Connect Gmail
+                        </button>
+                      ) : null}
+                      {!gmailPromptSeen && !emailForwardAddress ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleDismissGmailPrompt();
+                          }}
+                          disabled={emailForwardSetupBusy}
+                          className="rounded-lg border border-emerald-600/50 px-3 py-2 text-xs font-semibold text-emerald-900 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60 dark:text-emerald-100 dark:hover:bg-emerald-500/20"
+                        >
+                          Not now
+                        </button>
+                      ) : null}
+                    </>
                   )}
                   <label className="inline-flex items-center gap-2 text-xs text-emerald-900 dark:text-emerald-100">
                     Max emails
@@ -4336,6 +4508,9 @@ export default function TravelAssistantPage() {
                 </div>
                 {gmailConnectionMessage ? (
                   <p className="mt-2 text-xs text-emerald-900 dark:text-emerald-100">{gmailConnectionMessage}</p>
+                ) : null}
+                {emailForwardSetupMessage ? (
+                  <p className="mt-2 text-xs text-emerald-900 dark:text-emerald-100">{emailForwardSetupMessage}</p>
                 ) : null}
                 {gmailImportMessage ? (
                   <p className="mt-2 text-xs text-emerald-900 dark:text-emerald-100">{gmailImportMessage}</p>
