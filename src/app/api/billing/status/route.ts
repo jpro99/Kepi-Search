@@ -18,6 +18,7 @@ import {
   KEPI_PLAN_COOKIE_NAME,
   KEPI_PLAN_LIFETIME_VALUE,
 } from "@/lib/billing/planCookie";
+import { CLERK_METADATA_LIFETIME_KEY, CLERK_METADATA_PLAN_KEY } from "@/lib/billing/clerkMetadataKeys";
 import { getStripePublishableKey } from "@/lib/billing/stripeClient";
 import {
   getBillingPlanMirrorKey,
@@ -153,15 +154,18 @@ function resolveEffectivePlanStatus(
 }
 
 async function getLifetimePlanFlagFromClerkMetadata(userId: string): Promise<boolean> {
+  if (!process.env.CLERK_SECRET_KEY?.trim()) {
+    return false;
+  }
   try {
     const { clerkClient } = await import("@clerk/nextjs/server");
     const client = await clerkClient();
     const user = await client.users.getUser(userId);
-    const privatePlan = user.privateMetadata?.kepiPlan;
+    const privatePlan = user.privateMetadata?.[CLERK_METADATA_PLAN_KEY];
     if (typeof privatePlan === "string" && privatePlan.trim().toLowerCase() === "lifetime") {
       return true;
     }
-    const privateLifetimeFlag = user.privateMetadata?.kepiLifetimePlan;
+    const privateLifetimeFlag = user.privateMetadata?.[CLERK_METADATA_LIFETIME_KEY];
     if (typeof privateLifetimeFlag === "boolean") {
       return privateLifetimeFlag;
     }

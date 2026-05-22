@@ -14,6 +14,7 @@ import {
   KEPI_PLAN_COOKIE_NAME,
   KEPI_PLAN_LIFETIME_VALUE,
 } from "@/lib/billing/planCookie";
+import { CLERK_METADATA_LIFETIME_KEY, CLERK_METADATA_PLAN_KEY } from "@/lib/billing/clerkMetadataKeys";
 import { getInviteCodeRecord, getInviteCodeRedeemedByUser, redeemInviteCode } from "@/lib/invite/inviteCodeStore";
 import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
@@ -51,13 +52,17 @@ async function syncClerkPlanMetadata(
   plan: "lifetime" | "trial",
   routeLogger: ReturnType<typeof logger.withContext>,
 ): Promise<void> {
+  if (!process.env.CLERK_SECRET_KEY?.trim()) {
+    routeLogger.error("CLERK_SECRET_KEY is missing; skipping Clerk metadata sync.");
+    return;
+  }
   try {
     const { clerkClient } = await import("@clerk/nextjs/server");
     const client = await clerkClient();
     await client.users.updateUserMetadata(userId, {
       privateMetadata: {
-        kepiPlan: plan,
-        kepiLifetimePlan: plan === "lifetime",
+        [CLERK_METADATA_PLAN_KEY]: plan,
+        [CLERK_METADATA_LIFETIME_KEY]: plan === "lifetime",
         kepiPlanSyncedAt: new Date().toISOString(),
       },
     });
