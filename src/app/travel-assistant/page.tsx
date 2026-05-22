@@ -2505,7 +2505,7 @@ export default function TravelAssistantPage() {
     [blockingIssueCount, opsSnapshot, unresolvedReadinessCount],
   );
 
-  const advancedWorkspaceEnabled = advancedModeEnabled || isAdminUser;
+  const advancedWorkspaceEnabled = advancedModeEnabled;
   const tripDaysAway = getTripDaysAway(minutesToDeparture);
   const nextUpcomingReservations = useMemo(() => {
     const reservationsWithTimes = reservations
@@ -4236,6 +4236,15 @@ export default function TravelAssistantPage() {
                     >
                       Billing
                     </Link>
+                    {isAdminUser ? (
+                      <Link
+                        href="/admin"
+                        className="block rounded-xl px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                        onClick={() => setConsumerAvatarMenuOpen(false)}
+                      >
+                        Admin
+                      </Link>
+                    ) : null}
                     <div className="mt-2 rounded-xl bg-slate-100 p-2 dark:bg-slate-950">
                       <p className="mb-2 px-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Language</p>
                       <LanguageToggle />

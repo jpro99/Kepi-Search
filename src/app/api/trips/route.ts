@@ -131,27 +131,42 @@ export async function GET(req: Request) {
   const auth = await authorize(req);
   if (!auth.ok) return auth.response;
 
-  const url = new URL(req.url);
-  const tripId = url.searchParams.get("id")?.trim() ?? "";
-  if (tripId) {
-    const trip = await getTrip(tripId, auth.userId);
+  try {
+    const url = new URL(req.url);
+    const tripId = url.searchParams.get("id")?.trim() ?? "";
+    if (tripId) {
+      const trip = await getTrip(tripId, auth.userId);
+      return NextResponse.json(
+        {
+          trip,
+        },
+        { headers: auth.headers },
+      );
+    }
+
+    const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
     return NextResponse.json(
       {
-        trip,
+        trips,
+        activeTripId: activeTrip?.id ?? null,
+        activeTrip,
+      },
+      { headers: auth.headers },
+    );
+  } catch (error) {
+    auth.routeLogger.error("Trips GET failed; returning empty fallback.", {
+      error: error instanceof Error ? error.message : "unknown",
+    });
+    return NextResponse.json(
+      {
+        trips: [],
+        activeTripId: null,
+        activeTrip: null,
+        degraded: true,
       },
       { headers: auth.headers },
     );
   }
-
-  const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
-  return NextResponse.json(
-    {
-      trips,
-      activeTripId: activeTrip?.id ?? null,
-      activeTrip,
-    },
-    { headers: auth.headers },
-  );
 }
 
 export async function POST(req: Request) {
@@ -172,40 +187,50 @@ export async function POST(req: Request) {
     );
   }
 
-  const [userPlan, existingTrips] = await Promise.all([getUserPlan(auth.userId), listTrips(auth.userId)]);
-  if (userPlan === "free" && existingTrips.length >= 1) {
+  try {
+    const [userPlan, existingTrips] = await Promise.all([getUserPlan(auth.userId), listTrips(auth.userId)]);
+    if (userPlan === "free" && existingTrips.length >= 1) {
+      return NextResponse.json(
+        {
+          error: "Free tier allows one trip. Upgrade to Pro to create additional trips.",
+          requiresProFeature: "multi-trip",
+        },
+        { status: 402, headers: auth.headers },
+      );
+    }
+
+    const created = await createTrip(parsed.data.trip, auth.userId);
+    if (parsed.data.setActive) {
+      await setActiveTrip(created.id, auth.userId);
+    }
+    const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
+    auth.routeLogger.info("Trip created.", {
+      tripId: created.id,
+    });
+    void trackServerEvent({
+      type: "trip_created",
+      userId: auth.userId,
+      tripId: created.id,
+      plan: userPlan,
+    });
     return NextResponse.json(
       {
-        error: "Free tier allows one trip. Upgrade to Pro to create additional trips.",
-        requiresProFeature: "multi-trip",
+        trip: created,
+        trips,
+        activeTripId: activeTrip?.id ?? null,
+        activeTrip,
       },
-      { status: 402, headers: auth.headers },
+      { headers: auth.headers },
+    );
+  } catch (error) {
+    auth.routeLogger.error("Trips POST failed.", {
+      error: error instanceof Error ? error.message : "unknown",
+    });
+    return NextResponse.json(
+      { error: "Trip storage unavailable. Please try again." },
+      { status: 503, headers: auth.headers },
     );
   }
-
-  const created = await createTrip(parsed.data.trip, auth.userId);
-  if (parsed.data.setActive) {
-    await setActiveTrip(created.id, auth.userId);
-  }
-  const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
-  auth.routeLogger.info("Trip created.", {
-    tripId: created.id,
-  });
-  void trackServerEvent({
-    type: "trip_created",
-    userId: auth.userId,
-    tripId: created.id,
-    plan: userPlan,
-  });
-  return NextResponse.json(
-    {
-      trip: created,
-      trips,
-      activeTripId: activeTrip?.id ?? null,
-      activeTrip,
-    },
-    { headers: auth.headers },
-  );
 }
 
 export async function PUT(req: Request) {
@@ -226,88 +251,98 @@ export async function PUT(req: Request) {
     );
   }
 
-  if (parsed.data.action === "set-active") {
-    const activeTrip = await setActiveTrip(parsed.data.id, auth.userId);
-    if (!activeTrip) {
+  try {
+    if (parsed.data.action === "set-active") {
+      const activeTrip = await setActiveTrip(parsed.data.id, auth.userId);
+      if (!activeTrip) {
+        return NextResponse.json({ error: "Trip not found" }, { status: 404, headers: auth.headers });
+      }
+      const trips = await listTrips(auth.userId);
+      return NextResponse.json(
+        {
+          activeTrip,
+          activeTripId: activeTrip.id,
+          trips,
+        },
+        { headers: auth.headers },
+      );
+    }
+
+    const existingTrip = await getTrip(parsed.data.id, auth.userId);
+    const updated = await updateTrip(parsed.data.id, parsed.data.patch, auth.userId);
+    if (!updated) {
       return NextResponse.json({ error: "Trip not found" }, { status: 404, headers: auth.headers });
     }
-    const trips = await listTrips(auth.userId);
-    return NextResponse.json(
-      {
-        activeTrip,
-        activeTripId: activeTrip.id,
-        trips,
-      },
-      { headers: auth.headers },
-    );
-  }
 
-  const existingTrip = await getTrip(parsed.data.id, auth.userId);
-  const updated = await updateTrip(parsed.data.id, parsed.data.patch, auth.userId);
-  if (!updated) {
-    return NextResponse.json({ error: "Trip not found" }, { status: 404, headers: auth.headers });
-  }
+    if (existingTrip) {
+      const previousStageRank = STAGE_RANK[existingTrip.stage];
+      const nextStageRank = STAGE_RANK[updated.stage];
+      if (nextStageRank > previousStageRank) {
+        void trackServerEvent({
+          type: "stage_advanced",
+          userId: auth.userId,
+          tripId: updated.id,
+          newStage: updated.stage,
+        });
+      }
 
-  if (existingTrip) {
-    const previousStageRank = STAGE_RANK[existingTrip.stage];
-    const nextStageRank = STAGE_RANK[updated.stage];
-    if (nextStageRank > previousStageRank) {
-      void trackServerEvent({
-        type: "stage_advanced",
-        userId: auth.userId,
-        tripId: updated.id,
-        newStage: updated.stage,
-      });
-    }
+      const previousReservationIds = new Set(existingTrip.reservations.map((reservation) => reservation.id));
+      const addedReservations = updated.reservations.filter((reservation) => !previousReservationIds.has(reservation.id));
+      for (const reservation of addedReservations) {
+        void trackServerEvent({
+          type: "reservation_added",
+          userId: auth.userId,
+          tripId: updated.id,
+          reservationType: reservation.type,
+        });
+        if (reservation.source === "review-accepted") {
+          void sendReservationConfirmation(auth.userId, reservation.id);
+        }
+      }
 
-    const previousReservationIds = new Set(existingTrip.reservations.map((reservation) => reservation.id));
-    const addedReservations = updated.reservations.filter((reservation) => !previousReservationIds.has(reservation.id));
-    for (const reservation of addedReservations) {
-      void trackServerEvent({
-        type: "reservation_added",
-        userId: auth.userId,
-        tripId: updated.id,
-        reservationType: reservation.type,
-      });
-      if (reservation.source === "review-accepted") {
-        void sendReservationConfirmation(auth.userId, reservation.id);
+      if (
+        updated.activeScenario &&
+        updated.activeScenario !== "none" &&
+        updated.activeScenario !== existingTrip.activeScenario
+      ) {
+        void trackServerEvent({
+          type: "disruption_detected",
+          userId: auth.userId,
+          tripId: updated.id,
+          disruptionType: updated.activeScenario,
+        });
+        void sendDisruptionAlert(auth.userId, {
+          tripId: updated.id,
+          tripName: updated.name,
+          destination: updated.destination,
+          affectedReservationTitle: "Trip disruption scenario",
+          disruptionType: updated.activeScenario,
+          severity: "warning",
+          detail: `Trip switched into ${updated.activeScenario.replaceAll("-", " ")} mode.`,
+          scenario: updated.activeScenario,
+        });
       }
     }
 
-    if (
-      updated.activeScenario &&
-      updated.activeScenario !== "none" &&
-      updated.activeScenario !== existingTrip.activeScenario
-    ) {
-      void trackServerEvent({
-        type: "disruption_detected",
-        userId: auth.userId,
-        tripId: updated.id,
-        disruptionType: updated.activeScenario,
-      });
-      void sendDisruptionAlert(auth.userId, {
-        tripId: updated.id,
-        tripName: updated.name,
-        destination: updated.destination,
-        affectedReservationTitle: "Trip disruption scenario",
-        disruptionType: updated.activeScenario,
-        severity: "warning",
-        detail: `Trip switched into ${updated.activeScenario.replaceAll("-", " ")} mode.`,
-        scenario: updated.activeScenario,
-      });
-    }
+    const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
+    return NextResponse.json(
+      {
+        trip: updated,
+        trips,
+        activeTripId: activeTrip?.id ?? null,
+        activeTrip,
+      },
+      { headers: auth.headers },
+    );
+  } catch (error) {
+    auth.routeLogger.error("Trips PUT failed.", {
+      error: error instanceof Error ? error.message : "unknown",
+    });
+    return NextResponse.json(
+      { error: "Trip storage unavailable. Please try again." },
+      { status: 503, headers: auth.headers },
+    );
   }
-
-  const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
-  return NextResponse.json(
-    {
-      trip: updated,
-      trips,
-      activeTripId: activeTrip?.id ?? null,
-      activeTrip,
-    },
-    { headers: auth.headers },
-  );
 }
 
 export async function DELETE(req: Request) {
@@ -328,18 +363,28 @@ export async function DELETE(req: Request) {
     );
   }
 
-  const removed = await deleteTrip(parsed.data.id, auth.userId);
-  if (!removed) {
-    return NextResponse.json({ error: "Trip not found" }, { status: 404, headers: auth.headers });
+  try {
+    const removed = await deleteTrip(parsed.data.id, auth.userId);
+    if (!removed) {
+      return NextResponse.json({ error: "Trip not found" }, { status: 404, headers: auth.headers });
+    }
+    const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
+    return NextResponse.json(
+      {
+        ok: true,
+        trips,
+        activeTripId: activeTrip?.id ?? null,
+        activeTrip,
+      },
+      { headers: auth.headers },
+    );
+  } catch (error) {
+    auth.routeLogger.error("Trips DELETE failed.", {
+      error: error instanceof Error ? error.message : "unknown",
+    });
+    return NextResponse.json(
+      { error: "Trip storage unavailable. Please try again." },
+      { status: 503, headers: auth.headers },
+    );
   }
-  const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
-  return NextResponse.json(
-    {
-      ok: true,
-      trips,
-      activeTripId: activeTrip?.id ?? null,
-      activeTrip,
-    },
-    { headers: auth.headers },
-  );
 }

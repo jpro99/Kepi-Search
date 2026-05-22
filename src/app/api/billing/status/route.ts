@@ -188,6 +188,9 @@ export async function GET(req: Request) {
     routeLogger.warn("Unauthorized billing status request.");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const subscriptionStorageKey = getSubscriptionStorageKey(userId);
+  console.info(`BILLING READ KEY: ${subscriptionStorageKey}`);
+  routeLogger.info("Billing read key resolved.", { subscriptionStorageKey });
 
   const cached = getCachedBillingStatus<BillingStatusPayload>(userId);
   if (cached) {
@@ -214,7 +217,6 @@ export async function GET(req: Request) {
     nowMs,
     lifetimeMirrorStatus.hasLifetimeAccess || clerkMetadataHasLifetime,
   );
-  const subscriptionStorageKey = getSubscriptionStorageKey(userId);
   const billingPlanMirrorKey = getBillingPlanMirrorKey(userId);
   const userLifetimeMirrorKey = getUserLifetimeMirrorKey(userId);
   const rawSubscriptionRecord = await getRawSubscriptionRecordForDebug(userId);

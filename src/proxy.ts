@@ -34,6 +34,7 @@ const PROTECTED_PATH_PATTERNS: RegExp[] = [
   /^\/api\/billing\/checkout(?:\/.*)?$/,
   /^\/api\/billing\/portal(?:\/.*)?$/,
   /^\/api\/billing\/status(?:\/.*)?$/,
+  /^\/api\/preferences\/advanced-mode(?:\/.*)?$/,
 ];
 
 function extractLocalePrefix(pathname: string): AppLocale | null {
