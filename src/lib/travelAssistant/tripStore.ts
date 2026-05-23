@@ -12,6 +12,7 @@ const ACTIVE_TRIP_ID_KEY = "active-trip-id";
 
 export type TripStatus = "green" | "yellow" | "red";
 export type TripScenario = "none" | "missed-flight" | "train-delay" | "ride-no-show";
+export type TripAirportTransport = "driving-myself" | "getting-dropped-off" | "uber-lyft" | "train-bus" | "other";
 
 export interface TripFeedItem {
   id: string;
@@ -39,6 +40,8 @@ export interface TravelTrip {
   reviewQueue?: SessionReviewItem[];
   readinessItems?: SessionReadinessItem[];
   updateFeed?: TripFeedItem[];
+  airportTransport?: TripAirportTransport | null;
+  hotelArrivalTime?: string | null;
 }
 
 export interface CreateTripInput {
@@ -54,6 +57,8 @@ export interface CreateTripInput {
   reviewQueue?: SessionReviewItem[];
   readinessItems?: SessionReadinessItem[];
   updateFeed?: TripFeedItem[];
+  airportTransport?: TripAirportTransport | null;
+  hotelArrivalTime?: string | null;
 }
 
 export type UpdateTripInput = Partial<Omit<TravelTrip, "id" | "createdAt">>;
@@ -96,6 +101,17 @@ function sanitizeTrip(raw: unknown): TravelTrip | null {
       : undefined;
   const minutesToDeparture =
     typeof raw.minutesToDeparture === "number" ? Math.round(raw.minutesToDeparture) : undefined;
+  const airportTransport =
+    raw.airportTransport === "driving-myself" ||
+    raw.airportTransport === "getting-dropped-off" ||
+    raw.airportTransport === "uber-lyft" ||
+    raw.airportTransport === "train-bus" ||
+    raw.airportTransport === "other"
+      ? raw.airportTransport
+      : null;
+  const hotelArrivalTime = typeof raw.hotelArrivalTime === "string" && raw.hotelArrivalTime.trim().length > 0
+    ? raw.hotelArrivalTime.trim()
+    : null;
 
   return {
     id: raw.id,
@@ -112,6 +128,8 @@ function sanitizeTrip(raw: unknown): TravelTrip | null {
     reviewQueue: asStringArrayValue<SessionReviewItem>(raw.reviewQueue),
     readinessItems: asStringArrayValue<SessionReadinessItem>(raw.readinessItems),
     updateFeed: asStringArrayValue<TripFeedItem>(raw.updateFeed),
+    airportTransport,
+    hotelArrivalTime,
   };
 }
 
@@ -165,6 +183,8 @@ export async function createTrip(input: CreateTripInput, userId?: string): Promi
     reviewQueue: input.reviewQueue ? [...input.reviewQueue] : [],
     readinessItems: input.readinessItems ? [...input.readinessItems] : [],
     updateFeed: input.updateFeed ? [...input.updateFeed] : [],
+    airportTransport: input.airportTransport ?? null,
+    hotelArrivalTime: input.hotelArrivalTime ?? null,
   };
   const nextTrips = [...trips, trip];
   await writeTrips(nextTrips, userId);

@@ -20,6 +20,13 @@ import { generateId } from "@/lib/utils/generateId";
 const TripStageSchema = z.enum(["readiness", "pre-departure", "airport", "arrival", "recovery"]);
 const TripStatusSchema = z.enum(["green", "yellow", "red"]);
 const TripScenarioSchema = z.enum(["none", "missed-flight", "train-delay", "ride-no-show"]);
+const AirportTransportSchema = z.enum([
+  "driving-myself",
+  "getting-dropped-off",
+  "uber-lyft",
+  "train-bus",
+  "other",
+]);
 const STAGE_RANK: Record<z.infer<typeof TripStageSchema>, number> = {
   readiness: 0,
   "pre-departure": 1,
@@ -41,6 +48,8 @@ const TripPayloadSchema = z.object({
   reviewQueue: z.array(z.any()).default([]),
   readinessItems: z.array(z.any()).default([]),
   updateFeed: z.array(z.any()).default([]),
+  airportTransport: AirportTransportSchema.nullable().optional(),
+  hotelArrivalTime: z.string().trim().min(1).max(80).nullable().optional(),
 });
 
 const TripPatchSchema = z.object({
@@ -56,6 +65,8 @@ const TripPatchSchema = z.object({
   reviewQueue: z.array(z.any()).optional(),
   readinessItems: z.array(z.any()).optional(),
   updateFeed: z.array(z.any()).optional(),
+  airportTransport: AirportTransportSchema.nullable().optional(),
+  hotelArrivalTime: z.string().trim().min(1).max(80).nullable().optional(),
 });
 
 const PostBodySchema = z.object({
