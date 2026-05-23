@@ -55,158 +55,266 @@ function extractRecipientCandidates(toValue?: string): string[] {
     .filter((candidate) => candidate.length > 0);
 }
 
-export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
+function extractIncomingWebhookSignature(headers: Headers): string {
+  return (
+    headers.get("x-resend-signature")?.trim() ??
+    headers.get("svix-signature")?.trim() ??
+    headers.get("x-webhook-signature")?.trim() ??
+    ""
+  );
+}
+
+function verifyResendWebhookSignature(headers: Headers, requestId: string): boolean {
+  const expectedSecret = process.env.RESEND_WEBHOOK_SECRET?.trim() ?? "";
+  const receivedSignature = extractIncomingWebhookSignature(headers);
+  if (!expectedSecret) {
+    console.info("[email-forward-webhook] Signature verification skipped (RESEND_WEBHOOK_SECRET not set).", {
+      requestId,
+      receivedSignature,
+    });
+    return true;
+  }
+  console.info("[email-forward-webhook] Signature verification check.", {
+    requestId,
+    receivedSignature,
+    expectedSecret,
+  });
+  if (!receivedSignature) {
+    console.error("[email-forward-webhook] Missing webhook signature header.", {
+      requestId,
+      expectedSecret,
+    });
+    return false;
+  }
+  if (receivedSignature === expectedSecret || receivedSignature.includes(expectedSecret)) {
+    return true;
+  }
+  console.error("[email-forward-webhook] Signature mismatch.", {
+    requestId,
+    receivedSignature,
+    expectedSecret,
+  });
+  return false;
+}
+
+async function processEmailForwardWebhook(req: Request, requestId: string): Promise<void> {
   const routeLogger = logger.withContext({
     route: "/api/email-forward/receive",
     requestId,
   });
-
-  let body: unknown = {};
   try {
-    body = await req.json();
-  } catch {
-    body = {};
-  }
-  const parsed = BodySchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json(
-      {
-        error: "Validation failed",
+    if (!verifyResendWebhookSignature(req.headers, requestId)) {
+      return;
+    }
+
+    const rawBody = await req.text();
+    let body: unknown = {};
+    try {
+      body = rawBody.trim().length > 0 ? (JSON.parse(rawBody) as unknown) : {};
+    } catch (error) {
+      console.error("[email-forward-webhook] Failed to parse JSON body.", {
+        requestId,
+        error,
+        rawBody,
+      });
+      return;
+    }
+
+    const parsed = BodySchema.safeParse(body);
+    if (!parsed.success) {
+      console.error("[email-forward-webhook] Validation failed.", {
+        requestId,
         details: parsed.error.flatten(),
+        body,
+      });
+      return;
+    }
+
+    const authUserId = await resolveAuthenticatedUserId();
+    const providedUserId = parsed.data.userId?.trim() || null;
+    let addressedUserId: string | null = null;
+    for (const candidateAddress of extractRecipientCandidates(parsed.data.to)) {
+      const resolved = await resolveUserIdByForwardAddress(candidateAddress);
+      if (resolved) {
+        addressedUserId = resolved;
+        break;
+      }
+    }
+    const targetUserId = authUserId ?? providedUserId ?? addressedUserId;
+    if (!targetUserId) {
+      console.error("[email-forward-webhook] Unable to resolve target user.", {
+        requestId,
+        authUserId,
+        providedUserId,
+        addressedUserId,
+      });
+      return;
+    }
+
+    if (authUserId && providedUserId && authUserId !== providedUserId) {
+      console.error("[email-forward-webhook] Auth user and provided user mismatch.", {
+        requestId,
+        authUserId,
+        providedUserId,
+      });
+      return;
+    }
+    if (authUserId && addressedUserId && authUserId !== addressedUserId) {
+      console.error("[email-forward-webhook] Auth user and addressed user mismatch.", {
+        requestId,
+        authUserId,
+        addressedUserId,
+      });
+      return;
+    }
+    if (!authUserId && providedUserId && addressedUserId && providedUserId !== addressedUserId) {
+      console.error("[email-forward-webhook] Provided user and addressed user mismatch.", {
+        requestId,
+        providedUserId,
+        addressedUserId,
+      });
+      return;
+    }
+
+    const ingestSecret = process.env.EMAIL_FORWARD_INGEST_SECRET?.trim();
+    if (!authUserId && ingestSecret) {
+      const incomingSecret = req.headers.get("x-email-forward-secret")?.trim() ?? "";
+      if (!incomingSecret || incomingSecret !== ingestSecret) {
+        console.error("[email-forward-webhook] Ingest secret mismatch.", {
+          requestId,
+          incomingSecret,
+          ingestSecret,
+        });
+        return;
+      }
+    }
+
+    const targetTrip = parsed.data.tripId
+      ? await getTrip(parsed.data.tripId, targetUserId)
+      : await getActiveTrip(targetUserId);
+    if (!targetTrip) {
+      console.error("[email-forward-webhook] No active trip found for target user.", {
+        requestId,
+        userId: targetUserId,
+        tripId: parsed.data.tripId ?? null,
+      });
+      return;
+    }
+
+    const parserResult = await parseForwardedEmail({
+      subject: parsed.data.subject,
+      from: parsed.data.from,
+      text: parsed.data.text,
+      html: parsed.data.html,
+      attachments: parsed.data.attachments,
+    });
+
+    const defaultAssignees = Array.from(
+      new Set(targetTrip.reservations.flatMap((reservation) => reservation.assignedTo)),
+    );
+    const sourceSubject = parsed.data.subject?.trim() || "Forwarded email";
+    const reviewItem = {
+      id: `review-email-${generateId()}`,
+      reasons:
+        parserResult.parserNotes.length > 0
+          ? parserResult.parserNotes
+          : ["Forwarded email parsed and queued for confirmation."],
+      impact:
+        parserResult.parsingStatus === "needs-user-input"
+          ? "We need your help with this one"
+          : parserResult.parsingStatus === "needs-review"
+            ? "A few fields need review before publish."
+            : "Ready for quick confirmation.",
+      sourceEmailSubject: sourceSubject,
+      draft: {
+        type: parserResult.draft.type,
+        title: parserResult.draft.title,
+        provider: parserResult.draft.provider,
+        localTime: parserResult.draft.localTime,
+        timezone: parserResult.draft.timezone || "Etc/UTC",
+        location: parserResult.draft.location,
+        confirmationCode: parserResult.draft.confirmationCode,
+        assignedTo: defaultAssignees,
+        stage: targetTrip.stage,
+        critical:
+          parserResult.draft.type === "flight" ||
+          parserResult.draft.type === "train" ||
+          parserResult.draft.type === "ride",
+        confidence: confidenceToDraftValue(parserResult.confidenceScore),
+        notes: parserResult.draft.notes,
       },
-      { status: 422 },
-    );
-  }
-
-  const authUserId = await resolveAuthenticatedUserId();
-  const providedUserId = parsed.data.userId?.trim() || null;
-  let addressedUserId: string | null = null;
-  for (const candidateAddress of extractRecipientCandidates(parsed.data.to)) {
-    const resolved = await resolveUserIdByForwardAddress(candidateAddress);
-    if (resolved) {
-      addressedUserId = resolved;
-      break;
-    }
-  }
-  const targetUserId = authUserId ?? providedUserId ?? addressedUserId;
-  if (!targetUserId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  if (authUserId && providedUserId && authUserId !== providedUserId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-  if (authUserId && addressedUserId && authUserId !== addressedUserId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-  if (!authUserId && providedUserId && addressedUserId && providedUserId !== addressedUserId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-
-  const ingestSecret = process.env.EMAIL_FORWARD_INGEST_SECRET?.trim();
-  if (!authUserId && ingestSecret) {
-    const incomingSecret = req.headers.get("x-email-forward-secret")?.trim() ?? "";
-    if (!incomingSecret || incomingSecret !== ingestSecret) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
-
-  const targetTrip = parsed.data.tripId
-    ? await getTrip(parsed.data.tripId, targetUserId)
-    : await getActiveTrip(targetUserId);
-  if (!targetTrip) {
-    return NextResponse.json(
-      { error: "No active trip found for this user. Create a trip first, then retry forwarding." },
-      { status: 404 },
-    );
-  }
-
-  const parserResult = await parseForwardedEmail({
-    subject: parsed.data.subject,
-    from: parsed.data.from,
-    text: parsed.data.text,
-    html: parsed.data.html,
-    attachments: parsed.data.attachments,
-  });
-
-  const defaultAssignees = Array.from(
-    new Set(targetTrip.reservations.flatMap((reservation) => reservation.assignedTo)),
-  );
-  const sourceSubject = parsed.data.subject?.trim() || "Forwarded email";
-  const reviewItem = {
-    id: `review-email-${generateId()}`,
-    reasons:
-      parserResult.parserNotes.length > 0
-        ? parserResult.parserNotes
-        : ["Forwarded email parsed and queued for confirmation."],
-    impact:
-      parserResult.parsingStatus === "needs-user-input"
-        ? "We need your help with this one"
-        : parserResult.parsingStatus === "needs-review"
-          ? "A few fields need review before publish."
-          : "Ready for quick confirmation.",
-    sourceEmailSubject: sourceSubject,
-    draft: {
-      type: parserResult.draft.type,
-      title: parserResult.draft.title,
-      provider: parserResult.draft.provider,
-      localTime: parserResult.draft.localTime,
-      timezone: parserResult.draft.timezone || "Etc/UTC",
-      location: parserResult.draft.location,
-      confirmationCode: parserResult.draft.confirmationCode,
-      assignedTo: defaultAssignees,
-      stage: targetTrip.stage,
-      critical:
-        parserResult.draft.type === "flight" ||
-        parserResult.draft.type === "train" ||
-        parserResult.draft.type === "ride",
-      confidence: confidenceToDraftValue(parserResult.confidenceScore),
-      notes: parserResult.draft.notes,
-    },
-    sourceChannel: "email-forward",
-    parseConfidenceScore: parserResult.confidenceScore,
-    parsingStatus: parserResult.parsingStatus,
-    missingFields: parserResult.missingFields,
-    originalEmailText: parserResult.originalEmailText,
-    hasPdfAttachment: parserResult.hasPdfAttachment,
-    imageBasedEmail: parserResult.imageBasedEmail,
-    reviewStatus: parserResult.parsingStatus === "needs-user-input" ? "incomplete" : "pending",
-    parserNotes: parserResult.parserNotes,
-  };
-
-  const nextQueue = [reviewItem, ...(targetTrip.reviewQueue ?? [])];
-  const updated = await updateTrip(targetTrip.id, { reviewQueue: nextQueue }, targetUserId);
-  if (!updated) {
-    return NextResponse.json({ error: "Trip update failed" }, { status: 500 });
-  }
-
-  const notificationSent = await sendPushNotification(targetUserId, {
-    title: "Forwarded reservation received",
-    body: buildPushBody(parserResult.confidenceScore),
-    url: `/travel-assistant?tripId=${encodeURIComponent(targetTrip.id)}`,
-  });
-
-  routeLogger.info("Forwarded email parsed into review queue.", {
-    userId: targetUserId,
-    tripId: targetTrip.id,
-    score: parserResult.confidenceScore,
-    status: parserResult.parsingStatus,
-    usedAiFallback: parserResult.usedAiFallback,
-    notificationSent,
-  });
-
-  return NextResponse.json({
-    ok: true,
-    tripId: targetTrip.id,
-    reviewItem,
-    parser: {
-      confidenceScore: parserResult.confidenceScore,
+      sourceChannel: "email-forward",
+      parseConfidenceScore: parserResult.confidenceScore,
       parsingStatus: parserResult.parsingStatus,
       missingFields: parserResult.missingFields,
-      usedAiFallback: parserResult.usedAiFallback,
-      imageBasedEmail: parserResult.imageBasedEmail,
+      originalEmailText: parserResult.originalEmailText,
       hasPdfAttachment: parserResult.hasPdfAttachment,
-    },
+      imageBasedEmail: parserResult.imageBasedEmail,
+      reviewStatus: parserResult.parsingStatus === "needs-user-input" ? "incomplete" : "pending",
+      parserNotes: parserResult.parserNotes,
+    };
+
+    const nextQueue = [reviewItem, ...(targetTrip.reviewQueue ?? [])];
+    const updated = await updateTrip(targetTrip.id, { reviewQueue: nextQueue }, targetUserId);
+    if (!updated) {
+      console.error("[email-forward-webhook] Trip update failed.", {
+        requestId,
+        tripId: targetTrip.id,
+        userId: targetUserId,
+      });
+      return;
+    }
+
+    const notificationSent = await sendPushNotification(targetUserId, {
+      title: "Forwarded reservation received",
+      body: buildPushBody(parserResult.confidenceScore),
+      url: `/travel-assistant?tripId=${encodeURIComponent(targetTrip.id)}`,
+    });
+
+    routeLogger.info("Forwarded email parsed into review queue.", {
+      userId: targetUserId,
+      tripId: targetTrip.id,
+      score: parserResult.confidenceScore,
+      status: parserResult.parsingStatus,
+      usedAiFallback: parserResult.usedAiFallback,
+      notificationSent,
+    });
+  } catch (error) {
+    console.error("[email-forward-webhook] Unhandled processing error.", {
+      requestId,
+      error,
+    });
+  }
+}
+
+export async function POST(req: Request) {
+  const immediateResponse = NextResponse.json({
+    ok: true,
+    accepted: true,
+    message: "Email forward webhook accepted",
+  });
+  try {
+    const requestId = req.headers.get("x-request-id")?.trim() || generateId();
+    const requestClone = req.clone();
+    queueMicrotask(() => {
+      void processEmailForwardWebhook(requestClone, requestId).catch((error) => {
+        console.error("[email-forward-webhook] Background processor failed.", {
+          requestId,
+          error,
+        });
+      });
+    });
+  } catch (error) {
+    console.error("[email-forward-webhook] Failed to queue background processing.", {
+      error,
+    });
+  }
+  return immediateResponse;
+}
+
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    message: "Email forward webhook is running",
   });
 }
