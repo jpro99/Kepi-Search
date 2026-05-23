@@ -286,6 +286,19 @@ interface ManagedTrip {
   hotelArrivalTime: string | null;
 }
 
+type ManagedTripRuntimeSnapshot = {
+  stage: TripStage;
+  reservations: Reservation[];
+  tripStatus: TripStatus;
+  minutesToDeparture: number;
+  activeScenario: DisruptionScenario;
+  reviewQueue: ReviewItem[];
+  readinessItems: ReadinessItem[];
+  updateFeed: UpdateFeedItem[];
+  airportTransport: AirportTransportChoice | null;
+  hotelArrivalTime: string | null;
+};
+
 const fetchInitialOpsSnapshotCached = cache(async (): Promise<TravelOpsSnapshot> => {
   const response = await fetch("/api/travel-updates/ops?limit=12", {
     method: "GET",
@@ -1117,6 +1130,25 @@ function normalizeManagedTrip(trip: unknown): ManagedTrip | null {
   };
 }
 
+function areSnapshotsEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function createRuntimeSnapshotFromManagedTrip(trip: ManagedTrip): ManagedTripRuntimeSnapshot {
+  return {
+    stage: trip.stage,
+    reservations: trip.reservations,
+    tripStatus: trip.tripStatus,
+    minutesToDeparture: trip.minutesToDeparture,
+    activeScenario: trip.activeScenario,
+    reviewQueue: trip.reviewQueue,
+    readinessItems: trip.readinessItems,
+    updateFeed: trip.updateFeed,
+    airportTransport: trip.airportTransport ?? null,
+    hotelArrivalTime: trip.hotelArrivalTime ?? null,
+  };
+}
+
 function defaultTripFromCurrentState(input: {
   reservations: Reservation[];
   tripStage: TripStage;
@@ -1242,6 +1274,9 @@ export default function TravelAssistantPage() {
   const [autopilotActionPending, setAutopilotActionPending] = useState<IncidentAutopilotAction | null>(null);
   const recentAppliedUpdateKeysRef = useRef<Map<string, number>>(new Map());
   const opsFetchInFlightRef = useRef(false);
+  const tripsRef = useRef<ManagedTrip[]>([]);
+  const activeTripIdRef = useRef<string | null>(null);
+  const activeTripRuntimeSnapshotRef = useRef<ManagedTripRuntimeSnapshot | null>(null);
   const sessionHydratedRef = useRef(false);
   const tripsHydratedRef = useRef(false);
   const applyingTripStateRef = useRef(false);
@@ -1649,7 +1684,7 @@ export default function TravelAssistantPage() {
     [setToast],
   );
 
-  const activeTripRuntimeSnapshot = useMemo(
+  const activeTripRuntimeSnapshot = useMemo<ManagedTripRuntimeSnapshot>(
     () => ({
       stage: tripStage,
       reservations,
@@ -1676,20 +1711,36 @@ export default function TravelAssistantPage() {
     ],
   );
 
-  const applyManagedTripToState = useCallback((trip: ManagedTrip): void => {
+  useEffect(() => {
+    tripsRef.current = trips;
+  }, [trips]);
+
+  useEffect(() => {
+    activeTripIdRef.current = activeTripId;
+  }, [activeTripId]);
+
+  useEffect(() => {
+    activeTripRuntimeSnapshotRef.current = activeTripRuntimeSnapshot;
+  }, [activeTripRuntimeSnapshot]);
+
+  const applyManagedTripToState = useCallback((trip: ManagedTrip, options?: { resetHighlight?: boolean }): void => {
     applyingTripStateRef.current = true;
-    setTripStage(trip.stage);
-    setTripStatus(trip.tripStatus);
-    setMinutesToDeparture(trip.minutesToDeparture);
-    setActiveScenario(trip.activeScenario);
-    setReservations(trip.reservations);
-    setReviewQueue(trip.reviewQueue);
-    setReadinessItems(trip.readinessItems);
-    setUpdateFeed(trip.updateFeed);
-    setAirportTransportChoice(trip.airportTransport ?? null);
-    setHotelArrivalTime(trip.hotelArrivalTime ?? null);
-    setHotelArrivalDraft(trip.hotelArrivalTime ?? "");
-    setHighlightedReservationId(null);
+    setTripStage((previous) => (previous === trip.stage ? previous : trip.stage));
+    setTripStatus((previous) => (previous === trip.tripStatus ? previous : trip.tripStatus));
+    setMinutesToDeparture((previous) => (previous === trip.minutesToDeparture ? previous : trip.minutesToDeparture));
+    setActiveScenario((previous) => (previous === trip.activeScenario ? previous : trip.activeScenario));
+    setReservations((previous) => (areSnapshotsEqual(previous, trip.reservations) ? previous : trip.reservations));
+    setReviewQueue((previous) => (areSnapshotsEqual(previous, trip.reviewQueue) ? previous : trip.reviewQueue));
+    setReadinessItems((previous) => (areSnapshotsEqual(previous, trip.readinessItems) ? previous : trip.readinessItems));
+    setUpdateFeed((previous) => (areSnapshotsEqual(previous, trip.updateFeed) ? previous : trip.updateFeed));
+    setAirportTransportChoice((previous) =>
+      previous === (trip.airportTransport ?? null) ? previous : (trip.airportTransport ?? null),
+    );
+    setHotelArrivalTime((previous) => (previous === (trip.hotelArrivalTime ?? null) ? previous : (trip.hotelArrivalTime ?? null)));
+    setHotelArrivalDraft((previous) => (previous === (trip.hotelArrivalTime ?? "") ? previous : (trip.hotelArrivalTime ?? "")));
+    if (options?.resetHighlight) {
+      setHighlightedReservationId(null);
+    }
     queueMicrotask(() => {
       applyingTripStateRef.current = false;
     });
@@ -1707,6 +1758,7 @@ export default function TravelAssistantPage() {
       trips?: unknown[];
       activeTripId?: string | null;
       activeTrip?: unknown;
+      degraded?: boolean;
     };
 
     const parsedTrips = Array.isArray(payload.trips)
@@ -1717,10 +1769,27 @@ export default function TravelAssistantPage() {
     const resolvedActiveTrip =
       payloadActiveTrip ?? parsedTrips.find((trip) => trip.id === resolvedActiveTripId) ?? parsedTrips[0] ?? null;
 
-    setTrips(parsedTrips);
-    setActiveTripId(resolvedActiveTripId);
+    const hasExistingTripState = tripsHydratedRef.current && tripsRef.current.length > 0;
+    const shouldKeepCurrentState =
+      hasExistingTripState &&
+      (payload.degraded === true || parsedTrips.length === 0 || !resolvedActiveTripId || !resolvedActiveTrip);
+    if (shouldKeepCurrentState) {
+      setTripsLoading(false);
+      return tripsRef.current.length;
+    }
+
+    setTrips((previous) => (areSnapshotsEqual(previous, parsedTrips) ? previous : parsedTrips));
+    setActiveTripId((previous) => (previous === resolvedActiveTripId ? previous : resolvedActiveTripId));
     if (resolvedActiveTrip) {
-      applyManagedTripToState(resolvedActiveTrip);
+      const previousRuntimeSnapshot = activeTripRuntimeSnapshotRef.current;
+      const nextRuntimeSnapshot = createRuntimeSnapshotFromManagedTrip(resolvedActiveTrip);
+      const shouldApplyRuntimeSnapshot =
+        resolvedActiveTrip.id !== activeTripIdRef.current ||
+        !previousRuntimeSnapshot ||
+        !areSnapshotsEqual(previousRuntimeSnapshot, nextRuntimeSnapshot);
+      if (shouldApplyRuntimeSnapshot) {
+        applyManagedTripToState(resolvedActiveTrip);
+      }
     }
     tripsHydratedRef.current = true;
     setTripsLoading(false);
@@ -1879,7 +1948,7 @@ export default function TravelAssistantPage() {
             .filter((trip): trip is ManagedTrip => trip !== null);
           setTrips(parsedTrips);
         }
-        applyManagedTripToState(nextActiveTrip);
+        applyManagedTripToState(nextActiveTrip, { resetHighlight: true });
         setToast(`Switched to ${nextActiveTrip.name}.`);
       } catch {
         setToast("Could not switch trips right now.");
@@ -1943,7 +2012,7 @@ export default function TravelAssistantPage() {
         setTrips(parsedTrips);
       }
       setActiveTripId(payload.activeTripId ?? createdTrip.id);
-      applyManagedTripToState(createdTrip);
+      applyManagedTripToState(createdTrip, { resetHighlight: true });
       void refreshGlobalBillingStatus();
       setToast(`Created ${createdTrip.name}.`);
     } catch {
