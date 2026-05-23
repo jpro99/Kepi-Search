@@ -2734,7 +2734,7 @@ export default function TravelAssistantPage() {
   );
   const hasDetectedFlight = tripTabFlightReservations.length > 0 || pendingFlightReservations.length > 0;
   const hasDetectedHotel = tripTabHotelReservations.length > 0 || pendingHotelReservations.length > 0;
-  const emptyStateForwardAddress = emailForwardSetup.forwardAddress?.trim() || "jpro99@trips.kepitravel.com";
+  const emptyStateForwardAddress = emailForwardAddress?.trim() || "jpro99@trips.kepitravel.com";
   const saveHotelArrivalExpectation = useCallback((): void => {
     const trimmed = hotelArrivalDraft.trim();
     if (!trimmed) {
