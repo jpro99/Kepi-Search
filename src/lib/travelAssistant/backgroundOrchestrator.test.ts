@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   RuntimeStateUnavailableError,
@@ -11,6 +10,7 @@ import type {
   TravelUpdateProvider,
   UpdatableReservation,
 } from "@/lib/travelAssistant/travelUpdateTypes";
+import { generateId } from "@/lib/utils/generateId";
 
 const SAMPLE_RESERVATIONS: UpdatableReservation[] = [
   {
@@ -26,8 +26,8 @@ const SAMPLE_RESERVATIONS: UpdatableReservation[] = [
 
 test("background pass uses persisted runtime state and suppresses duplicates", async () => {
   resetTravelUpdateCircuitState();
-  const statePath = `tests/background-pass/runtime/${randomUUID()}`;
-  const auditPath = `tests/background-pass/audit/${randomUUID()}`;
+  const statePath = `tests/background-pass/runtime/${generateId()}`;
+  const auditPath = `tests/background-pass/audit/${generateId()}`;
 
   const provider: TravelUpdateProvider = {
     name: "background-test-provider",
@@ -74,7 +74,7 @@ test("background pass uses persisted runtime state and suppresses duplicates", a
 });
 
 test("background pass fails when runtime state has no reservations", async () => {
-  const statePath = `tests/background-pass/runtime/${randomUUID()}`;
+  const statePath = `tests/background-pass/runtime/${generateId()}`;
   await assert.rejects(
     () => runTravelUpdateBackgroundPass({ runtimeStatePath: statePath }),
     RuntimeStateUnavailableError,

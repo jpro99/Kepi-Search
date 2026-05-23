@@ -1,15 +1,15 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { isAdminUserId, resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
 import { listInviteCodes } from "@/lib/invite/inviteCodeStore";
 import { logger } from "@/lib/logger";
 import { listReferralCodes } from "@/lib/referral/referralStore";
+import { generateId } from "@/lib/utils/generateId";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

@@ -1,9 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import { getTravelVault, saveTravelVault } from "@/lib/vault/vaultStore";
+import { generateId } from "@/lib/utils/generateId";
 
 const LoyaltyEntrySchema = z.object({
   program: z.string().trim().max(120),
@@ -48,7 +48,7 @@ async function authorize(req: Request): Promise<
   | { ok: true; userId: string; headers: Headers; requestId: string }
   | { ok: false; response: NextResponse }
 > {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   if (!userId) {
     return { ok: false, response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };

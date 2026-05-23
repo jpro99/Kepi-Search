@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
+import { generateId } from "@/lib/utils/generateId";
 
 export const PACKING_CATEGORIES = [
   "essentials",
@@ -111,7 +111,7 @@ function flattenItems(categories: Record<PackingCategory, PackingItem[]>): Packi
 
 function createItem(label: string, category: PackingCategory, checked = false, custom = false): PackingItem {
   return {
-    id: randomUUID(),
+    id: generateId(),
     label: label.trim(),
     checked,
     category,

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
@@ -6,6 +5,7 @@ import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import { getLocalTips } from "@/lib/travelAssistant/localIntelligenceService";
 import { getWeatherForecast } from "@/lib/travelAssistant/weatherService";
+import { generateId } from "@/lib/utils/generateId";
 
 const QuerySchema = z.object({
   city: z.string().trim().min(1).max(160),
@@ -19,7 +19,7 @@ const QuerySchema = z.object({
 });
 
 export async function GET(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

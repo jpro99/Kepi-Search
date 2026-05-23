@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   previewTravelUpdateBackgroundPass,
   runTravelUpdateBackgroundPass,
@@ -12,6 +11,7 @@ import {
   releaseTravelBackgroundRunLock,
 } from "@/lib/travelAssistant/backgroundRunStateStore";
 import type { TravelUpdateCheckOptions, TravelUpdateMode } from "@/lib/travelAssistant/updateAdapters";
+import { generateId } from "@/lib/utils/generateId";
 
 const DEFAULT_BACKGROUND_TIMEOUT_MS = 45_000;
 
@@ -50,7 +50,7 @@ export async function runManagedTravelUpdateBackgroundPass({
   lockStaleMs?: number;
   dryRun?: boolean;
 }) {
-  const runId = randomUUID();
+  const runId = generateId();
   const startedAt = nowIso ?? new Date().toISOString();
   const effectiveTimeoutMs = Math.max(250, timeoutMs);
 

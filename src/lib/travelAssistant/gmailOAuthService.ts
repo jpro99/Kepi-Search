@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
 import { google } from "googleapis";
 import { kvStoreDel, kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
+import { generateId } from "@/lib/utils/generateId";
 
 const GMAIL_CONNECT_STATE_KEY = "travel/gmail/connect-state";
 const GMAIL_CONNECTION_KEY = "travel/gmail/connection";
@@ -57,7 +57,7 @@ export async function getGmailConnectionStatus(userId: string): Promise<GmailCon
 }
 
 async function writeConnectState(userId: string, returnTo: string): Promise<string> {
-  const state = randomUUID();
+  const state = generateId();
   const expiresAt = new Date(Date.now() + GMAIL_STATE_TTL_MS).toISOString();
   await kvStoreSet<GmailConnectStateRecord>(
     GMAIL_CONNECT_STATE_KEY,

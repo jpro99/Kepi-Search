@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getUserPlan, requiresConcierge } from "@/lib/billing/planGate";
@@ -11,6 +10,7 @@ import {
   stopProactiveMonitoring,
 } from "@/lib/travelAssistant/proactiveAlertService";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
+import { generateId } from "@/lib/utils/generateId";
 
 const PostBodySchema = z.object({
   tripId: z.string().trim().min(1).max(128),
@@ -41,7 +41,7 @@ async function authorize(req: Request): Promise<
     }
   | { ok: false; response: NextResponse }
 > {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

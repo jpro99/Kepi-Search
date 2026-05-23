@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { createTrip } from "@/lib/travelAssistant/tripStore";
 import {
@@ -7,9 +6,10 @@ import {
   getSharedTrip,
   revokeShareLink,
 } from "@/lib/travelAssistant/tripShareStore";
+import { generateId } from "@/lib/utils/generateId";
 
 test("createShareLink produces token and shared trip payload", async () => {
-  const userId = `trip-share-${randomUUID()}`;
+  const userId = `trip-share-${generateId()}`;
   const trip = await createTrip(
     {
       name: "Summer LA",
@@ -56,7 +56,7 @@ test("createShareLink produces token and shared trip payload", async () => {
 });
 
 test("revokeShareLink invalidates public token", async () => {
-  const userId = `trip-share-revoke-${randomUUID()}`;
+  const userId = `trip-share-revoke-${generateId()}`;
   const trip = await createTrip(
     {
       name: "Trip Revoke",

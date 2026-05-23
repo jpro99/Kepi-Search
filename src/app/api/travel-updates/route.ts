@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isAutomatedTestRuntime } from "@/lib/auth/mockClerkAuth";
@@ -9,6 +8,7 @@ import { runTravelUpdateCheck } from "@/lib/travelAssistant/updateAdapters";
 import { persistTravelUpdateAudit } from "@/lib/travelAssistant/updateAuditStore";
 import { persistTravelRuntimeState } from "@/lib/travelAssistant/updateRuntimeStateStore";
 import type { TravelUpdateEvent } from "@/lib/travelAssistant/travelUpdateTypes";
+import { generateId } from "@/lib/utils/generateId";
 
 const ReservationSchema = z.object({
   id: z.string().min(1),
@@ -49,7 +49,7 @@ function pickDisruptionUpdate(updates: readonly TravelUpdateEvent[]): TravelUpda
 }
 
 export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

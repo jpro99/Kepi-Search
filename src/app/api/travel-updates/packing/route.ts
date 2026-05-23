@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
@@ -15,6 +14,7 @@ import {
   toggleItem,
 } from "@/lib/travelAssistant/packingStore";
 import { getActiveTrip, getTrip } from "@/lib/travelAssistant/tripStore";
+import { generateId } from "@/lib/utils/generateId";
 
 const GenerateBodySchema = z.object({
   tripId: z.string().trim().min(1).optional(),
@@ -51,7 +51,7 @@ async function authorize(req: Request): Promise<
     }
   | { ok: false; response: NextResponse }
 > {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

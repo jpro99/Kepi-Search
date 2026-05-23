@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
@@ -11,6 +10,7 @@ import {
   listDocuments,
 } from "@/lib/travelAssistant/documentVault";
 import { getActiveTrip } from "@/lib/travelAssistant/tripStore";
+import { generateId } from "@/lib/utils/generateId";
 
 const DocumentTypeSchema = z.enum(DOCUMENT_TYPES);
 
@@ -38,7 +38,7 @@ async function authorize(req: Request): Promise<
     }
   | { ok: false; response: NextResponse }
 > {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

@@ -1,16 +1,16 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getStripeClient } from "@/lib/billing/stripeClient";
 import { getSubscriptionRecord } from "@/lib/billing/subscriptionStore";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
 import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
+import { generateId } from "@/lib/utils/generateId";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

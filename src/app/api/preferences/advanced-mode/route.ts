@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
 import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import { kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
+import { generateId } from "@/lib/utils/generateId";
 
 const ADVANCED_MODE_KEY = "advanced-mode";
 
@@ -13,7 +13,7 @@ const AdvancedModeBodySchema = z.object({
 });
 
 export async function GET(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,
@@ -31,7 +31,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { trackServerEvent } from "@/lib/analytics/trackServerEvent";
@@ -6,6 +5,7 @@ import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
 import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import { createShareLink, revokeShareLink } from "@/lib/travelAssistant/tripShareStore";
+import { generateId } from "@/lib/utils/generateId";
 
 const ShareOptionsSchema = z.object({
   expiresInDays: z.number().int().min(1).max(30).default(7),
@@ -32,7 +32,7 @@ async function authorize(req: Request): Promise<
     }
   | { ok: false; response: NextResponse }
 > {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

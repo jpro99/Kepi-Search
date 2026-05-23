@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   BackgroundRunTimeoutError,
@@ -9,6 +8,7 @@ import { BackgroundRunInProgressError, readTravelBackgroundRunState } from "@/li
 import { resetTravelUpdateCircuitState } from "@/lib/travelAssistant/updateAdapters";
 import { persistTravelRuntimeState } from "@/lib/travelAssistant/updateRuntimeStateStore";
 import type { TravelUpdateProvider, UpdatableReservation } from "@/lib/travelAssistant/travelUpdateTypes";
+import { generateId } from "@/lib/utils/generateId";
 
 const SAMPLE_RESERVATIONS: UpdatableReservation[] = [
   {
@@ -28,10 +28,10 @@ function sleep(ms: number): Promise<void> {
 
 test("managed background run prevents overlapping executions", async () => {
   resetTravelUpdateCircuitState();
-  const runtimeStatePath = `tests/background-manager/runtime/${randomUUID()}`;
-  const auditPath = `tests/background-manager/audit/${randomUUID()}`;
-  const statePath = `tests/background-manager/state/${randomUUID()}`;
-  const lockPath = `tests/background-manager/lock/${randomUUID()}`;
+  const runtimeStatePath = `tests/background-manager/runtime/${generateId()}`;
+  const auditPath = `tests/background-manager/audit/${generateId()}`;
+  const statePath = `tests/background-manager/state/${generateId()}`;
+  const lockPath = `tests/background-manager/lock/${generateId()}`;
 
   const slowProvider: TravelUpdateProvider = {
     name: "slow-provider",
@@ -88,10 +88,10 @@ test("managed background run prevents overlapping executions", async () => {
 
 test("managed background run records timeout and clears active state after completion", async () => {
   resetTravelUpdateCircuitState();
-  const runtimeStatePath = `tests/background-manager/runtime/${randomUUID()}`;
-  const auditPath = `tests/background-manager/audit/${randomUUID()}`;
-  const statePath = `tests/background-manager/state/${randomUUID()}`;
-  const lockPath = `tests/background-manager/lock/${randomUUID()}`;
+  const runtimeStatePath = `tests/background-manager/runtime/${generateId()}`;
+  const auditPath = `tests/background-manager/audit/${generateId()}`;
+  const statePath = `tests/background-manager/state/${generateId()}`;
+  const lockPath = `tests/background-manager/lock/${generateId()}`;
 
   const verySlowProvider: TravelUpdateProvider = {
     name: "very-slow-provider",

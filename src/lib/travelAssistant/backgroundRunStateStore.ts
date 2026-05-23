@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   TravelBackgroundLastRun,
   TravelBackgroundRunHeartbeat,
@@ -7,6 +6,7 @@ import type {
 } from "@/lib/travelAssistant/travelUpdateTypes";
 import { kvStoreDel, kvStoreGet, kvStoreSet, kvStoreSetNx } from "@/lib/travelAssistant/kvStore";
 import { logger } from "@/lib/logger";
+import { generateId } from "@/lib/utils/generateId";
 
 interface TravelBackgroundRunStateData extends TravelBackgroundRunStateSnapshot {
   version: 1;
@@ -183,7 +183,7 @@ export async function markTravelBackgroundRunActive({
   timeoutMs: number;
   storagePath?: string;
 }): Promise<{ runId: string; startedAt: string }> {
-  const effectiveRunId = runId ?? randomUUID();
+  const effectiveRunId = runId ?? generateId();
   const effectiveStartedAt = startedAt ?? new Date().toISOString();
   await mutateState(storagePath, (state) => {
     state.activeRun = {

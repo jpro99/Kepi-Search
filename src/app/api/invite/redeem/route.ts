@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { kv } from "@vercel/kv";
@@ -19,6 +18,7 @@ import { CLERK_METADATA_LIFETIME_KEY, CLERK_METADATA_PLAN_KEY } from "@/lib/bill
 import { getInviteCodeRecord, getInviteCodeRedeemedByUser, redeemInviteCode } from "@/lib/invite/inviteCodeStore";
 import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
+import { generateId } from "@/lib/utils/generateId";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -117,7 +117,7 @@ async function persistInviteDerivedSubscription(args: {
 }
 
 export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

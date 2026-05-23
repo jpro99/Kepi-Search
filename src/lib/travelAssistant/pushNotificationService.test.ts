@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   sendDelayAlert,
@@ -9,6 +8,7 @@ import {
   subscribeUser,
   unsubscribeUser,
 } from "@/lib/travelAssistant/pushNotificationService";
+import { generateId } from "@/lib/utils/generateId";
 
 function createSubscription(suffix: string) {
   return {
@@ -21,7 +21,7 @@ function createSubscription(suffix: string) {
 }
 
 test("sendGateChangeAlert dispatches a push notification", async () => {
-  const userId = `push-test-${randomUUID()}`;
+  const userId = `push-test-${generateId()}`;
   const previousPublic = process.env.VAPID_PUBLIC_KEY;
   const previousPrivate = process.env.VAPID_PRIVATE_KEY;
   const previousMailto = process.env.VAPID_MAILTO;
@@ -59,7 +59,7 @@ test("sendGateChangeAlert dispatches a push notification", async () => {
 });
 
 test("sendDelayAlert dispatches a push notification", async () => {
-  const userId = `push-test-${randomUUID()}`;
+  const userId = `push-test-${generateId()}`;
   const previousPublic = process.env.VAPID_PUBLIC_KEY;
   const previousPrivate = process.env.VAPID_PRIVATE_KEY;
   const previousMailto = process.env.VAPID_MAILTO;
@@ -95,7 +95,7 @@ test("sendDelayAlert dispatches a push notification", async () => {
 });
 
 test("sendDepartureSoonAlert dispatches a push notification", async () => {
-  const userId = `push-test-${randomUUID()}`;
+  const userId = `push-test-${generateId()}`;
   const previousPublic = process.env.VAPID_PUBLIC_KEY;
   const previousPrivate = process.env.VAPID_PRIVATE_KEY;
   const previousMailto = process.env.VAPID_MAILTO;

@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { isAdminUserId, resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
 import { getSubscriptionRecord, isSubscriptionActive } from "@/lib/billing/subscriptionStore";
 import { getInviteCodeRecord, getInviteCodeRedeemedByUser } from "@/lib/invite/inviteCodeStore";
 import { logger } from "@/lib/logger";
 import { getRedeemedReferralCode } from "@/lib/referral/referralStore";
+import { generateId } from "@/lib/utils/generateId";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,7 +76,7 @@ async function listClerkUsers(): Promise<Array<Record<string, unknown>>> {
 }
 
 export async function GET(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

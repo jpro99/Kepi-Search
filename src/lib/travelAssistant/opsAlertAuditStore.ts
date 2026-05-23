@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   TravelOpsAlertAuditEntry,
   TravelOpsAlertAuditSnapshot,
@@ -6,6 +5,7 @@ import type {
 } from "@/lib/travelAssistant/travelUpdateTypes";
 import { kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
 import { logger } from "@/lib/logger";
+import { generateId } from "@/lib/utils/generateId";
 
 interface OpsAlertAuditStoreData {
   version: 1;
@@ -86,7 +86,7 @@ export async function appendTravelOpsAlertAuditEntry({
 }): Promise<TravelOpsAlertAuditEntry> {
   const auditKey = resolveOpsAlertAuditKey(storagePath);
   const entry: TravelOpsAlertAuditEntry = {
-    id: randomUUID(),
+    id: generateId(),
     evaluatedAt,
     trigger,
     totalAlerts,

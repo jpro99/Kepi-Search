@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   SessionReadinessItem,
   SessionReservation,
@@ -6,6 +5,7 @@ import type {
 } from "@/lib/travelAssistant/clientSessionState";
 import type { TripFlowStage } from "@/lib/travelAssistant/tripFlowControls";
 import { kvStoreDel, kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
+import { generateId } from "@/lib/utils/generateId";
 
 const TRIPS_KEY = "trips";
 const ACTIVE_TRIP_ID_KEY = "active-trip-id";
@@ -151,7 +151,7 @@ export async function createTrip(input: CreateTripInput, userId?: string): Promi
   const trips = await readTrips(userId);
   const createdAt = new Date().toISOString();
   const trip: TravelTrip = {
-    id: randomUUID(),
+    id: generateId(),
     name: input.name.trim(),
     destination: input.destination.trim(),
     startDate: input.startDate,

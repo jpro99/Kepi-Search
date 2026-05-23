@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isAutomatedTestRuntime } from "@/lib/auth/mockClerkAuth";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import { logger } from "@/lib/logger";
 import { buildTravelOpsSnapshot } from "@/lib/travelAssistant/opsSnapshot";
+import { generateId } from "@/lib/utils/generateId";
 
 const QuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
@@ -25,7 +25,7 @@ async function resolveAuthenticatedUserId(): Promise<string | null> {
 }
 
 export async function GET(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

@@ -1,9 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isAutomatedTestRuntime } from "@/lib/auth/mockClerkAuth";
 import { logger } from "@/lib/logger";
 import { unsubscribeUser } from "@/lib/travelAssistant/pushNotificationService";
+import { generateId } from "@/lib/utils/generateId";
 
 const BodySchema = z.object({}).passthrough();
 
@@ -22,7 +22,7 @@ async function resolveAuthenticatedUserId(): Promise<string | null> {
 }
 
 export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

@@ -1,3 +1,4 @@
+import { generateId } from "@/lib/utils/generateId";
 type PlanType = "free" | "pro" | "concierge";
 
 export type KepiAnalyticsEvent =
@@ -24,7 +25,7 @@ export interface StoredKepiAnalyticsEvent {
 }
 
 export function createAnalyticsEventId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return generateId();
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 

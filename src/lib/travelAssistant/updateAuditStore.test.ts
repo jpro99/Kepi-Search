@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   persistTravelUpdateAudit,
   readTravelUpdateAuditSnapshot,
 } from "@/lib/travelAssistant/updateAuditStore";
 import type { TravelUpdateCheckResult } from "@/lib/travelAssistant/travelUpdateTypes";
+import { generateId } from "@/lib/utils/generateId";
 
 function buildResult(overrides?: Partial<TravelUpdateCheckResult>): TravelUpdateCheckResult {
   return {
@@ -21,7 +21,7 @@ function buildResult(overrides?: Partial<TravelUpdateCheckResult>): TravelUpdate
 }
 
 test("persists and suppresses duplicate update events across checks", async () => {
-  const auditPath = `tests/update-audit/${randomUUID()}`;
+  const auditPath = `tests/update-audit/${generateId()}`;
   const result = buildResult({
     updates: [
       {
@@ -58,7 +58,7 @@ test("persists and suppresses duplicate update events across checks", async () =
 });
 
 test("stores new events when incoming set mixes new and existing updates", async () => {
-  const auditPath = `tests/update-audit/${randomUUID()}`;
+  const auditPath = `tests/update-audit/${generateId()}`;
 
   const firstResult = buildResult({
     updates: [
@@ -115,7 +115,7 @@ test("stores new events when incoming set mixes new and existing updates", async
 });
 
 test("readTravelUpdateAuditSnapshot returns recent runs with conflict metadata", async () => {
-  const auditPath = `tests/update-audit/${randomUUID()}`;
+  const auditPath = `tests/update-audit/${generateId()}`;
   await persistTravelUpdateAudit({
     storagePath: auditPath,
     checkedAt: "2026-06-21T10:00:00.000Z",

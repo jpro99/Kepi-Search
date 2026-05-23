@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isAutomatedTestRuntime } from "@/lib/auth/mockClerkAuth";
@@ -9,6 +8,7 @@ import {
   syncAllReservations,
 } from "@/lib/travelAssistant/calendarSyncService";
 import { readTravelRuntimeState } from "@/lib/travelAssistant/updateRuntimeStateStore";
+import { generateId } from "@/lib/utils/generateId";
 
 const ReservationSchema = z.object({
   id: z.string().min(1),
@@ -45,7 +45,7 @@ async function resolveAuthenticatedUserId(): Promise<string | null> {
 }
 
 export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,
@@ -107,7 +107,7 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

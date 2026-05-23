@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isAutomatedTestRuntime } from "@/lib/auth/mockClerkAuth";
@@ -6,6 +5,7 @@ import { getUserPlan } from "@/lib/billing/planGate";
 import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import { subscribeUser } from "@/lib/travelAssistant/pushNotificationService";
+import { generateId } from "@/lib/utils/generateId";
 
 const WebPushSubscriptionSchema = z.object({
   endpoint: z.string().url(),
@@ -39,7 +39,7 @@ async function resolveAuthenticatedUserId(): Promise<string | null> {
 }
 
 export async function GET(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,
@@ -72,7 +72,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

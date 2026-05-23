@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   finalizeTravelBackgroundRun,
@@ -9,6 +8,7 @@ import { buildTravelOpsSnapshot } from "@/lib/travelAssistant/opsSnapshot";
 import { persistTravelUpdateAudit } from "@/lib/travelAssistant/updateAuditStore";
 import { persistTravelRuntimeState } from "@/lib/travelAssistant/updateRuntimeStateStore";
 import type { TravelUpdateCheckResult } from "@/lib/travelAssistant/travelUpdateTypes";
+import { generateId } from "@/lib/utils/generateId";
 
 function buildResult(overrides?: Partial<TravelUpdateCheckResult>): TravelUpdateCheckResult {
   return {
@@ -32,10 +32,10 @@ function buildResult(overrides?: Partial<TravelUpdateCheckResult>): TravelUpdate
 }
 
 test("buildTravelOpsSnapshot returns green for fresh healthy state", async () => {
-  const runtimeStatePath = `tests/ops-snapshot/runtime/${randomUUID()}`;
-  const auditPath = `tests/ops-snapshot/audit/${randomUUID()}`;
-  const backgroundStatePath = `tests/ops-snapshot/background/${randomUUID()}`;
-  const alertAuditPath = `tests/ops-snapshot/alert/${randomUUID()}`;
+  const runtimeStatePath = `tests/ops-snapshot/runtime/${generateId()}`;
+  const auditPath = `tests/ops-snapshot/audit/${generateId()}`;
+  const backgroundStatePath = `tests/ops-snapshot/background/${generateId()}`;
+  const alertAuditPath = `tests/ops-snapshot/alert/${generateId()}`;
   await persistTravelRuntimeState({
     storagePath: runtimeStatePath,
     mode: "auto",
@@ -96,10 +96,10 @@ test("buildTravelOpsSnapshot returns green for fresh healthy state", async () =>
 });
 
 test("buildTravelOpsSnapshot returns red for stale snapshot and circuit errors", async () => {
-  const runtimeStatePath = `tests/ops-snapshot/runtime/${randomUUID()}`;
-  const auditPath = `tests/ops-snapshot/audit/${randomUUID()}`;
-  const backgroundStatePath = `tests/ops-snapshot/background/${randomUUID()}`;
-  const alertAuditPath = `tests/ops-snapshot/alert/${randomUUID()}`;
+  const runtimeStatePath = `tests/ops-snapshot/runtime/${generateId()}`;
+  const auditPath = `tests/ops-snapshot/audit/${generateId()}`;
+  const backgroundStatePath = `tests/ops-snapshot/background/${generateId()}`;
+  const alertAuditPath = `tests/ops-snapshot/alert/${generateId()}`;
   await persistTravelRuntimeState({
     storagePath: runtimeStatePath,
     mode: "auto",

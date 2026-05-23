@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { trackServerEvent } from "@/lib/analytics/trackServerEvent";
@@ -10,6 +9,7 @@ import {
   setSubscriptionRecord,
 } from "@/lib/billing/subscriptionStore";
 import { logger } from "@/lib/logger";
+import { generateId } from "@/lib/utils/generateId";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -78,7 +78,7 @@ async function handleSubscriptionDeleted(
 export async function POST(req: Request) {
   const stripe = getStripeClient();
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim();
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const webhookLogger = logger.withContext({
     requestId,
     route: "/api/billing/webhook",

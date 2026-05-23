@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   createTrip,
@@ -10,9 +9,10 @@ import {
   setActiveTrip,
   updateTrip,
 } from "@/lib/travelAssistant/tripStore";
+import { generateId } from "@/lib/utils/generateId";
 
 test("tripStore supports create/list/get/update/delete", async () => {
-  const userId = `trip-store-test-${randomUUID()}`;
+  const userId = `trip-store-test-${generateId()}`;
 
   const created = await createTrip(
     {
@@ -58,7 +58,7 @@ test("tripStore supports create/list/get/update/delete", async () => {
 });
 
 test("tripStore setActiveTrip switches active id", async () => {
-  const userId = `trip-store-active-${randomUUID()}`;
+  const userId = `trip-store-active-${generateId()}`;
   const first = await createTrip(
     {
       name: "Trip A",

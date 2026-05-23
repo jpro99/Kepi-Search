@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   finalizeTravelBackgroundRun,
@@ -7,11 +6,12 @@ import {
 } from "@/lib/travelAssistant/backgroundRunStateStore";
 import { runTravelOpsAlertSweep } from "@/lib/travelAssistant/opsAlertingOrchestrator";
 import { persistTravelRuntimeState } from "@/lib/travelAssistant/updateRuntimeStateStore";
+import { generateId } from "@/lib/utils/generateId";
 
 test("runTravelOpsAlertSweep emits alerts for unhealthy worker states", async () => {
-  const runtimeStatePath = `tests/ops-alert/runtime/${randomUUID()}`;
-  const backgroundStatePath = `tests/ops-alert/background/${randomUUID()}`;
-  const alertStatePath = `tests/ops-alert/state/${randomUUID()}`;
+  const runtimeStatePath = `tests/ops-alert/runtime/${generateId()}`;
+  const backgroundStatePath = `tests/ops-alert/background/${generateId()}`;
+  const alertStatePath = `tests/ops-alert/state/${generateId()}`;
   const received: string[] = [];
 
   await persistTravelRuntimeState({
@@ -75,9 +75,9 @@ test("runTravelOpsAlertSweep emits alerts for unhealthy worker states", async ()
 });
 
 test("runTravelOpsAlertSweep suppresses repeat alerts inside cooldown", async () => {
-  const runtimeStatePath = `tests/ops-alert/runtime/${randomUUID()}`;
-  const backgroundStatePath = `tests/ops-alert/background/${randomUUID()}`;
-  const alertStatePath = `tests/ops-alert/state/${randomUUID()}`;
+  const runtimeStatePath = `tests/ops-alert/runtime/${generateId()}`;
+  const backgroundStatePath = `tests/ops-alert/background/${generateId()}`;
+  const alertStatePath = `tests/ops-alert/state/${generateId()}`;
 
   await persistTravelRuntimeState({
     storagePath: runtimeStatePath,

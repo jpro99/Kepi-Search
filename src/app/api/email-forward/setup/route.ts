@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
@@ -9,6 +8,7 @@ import {
   markGmailPromptSeen,
 } from "@/lib/travelAssistant/emailForwardSetupStore";
 import { getGmailConnectionStatus } from "@/lib/travelAssistant/gmailOAuthService";
+import { generateId } from "@/lib/utils/generateId";
 
 const BodySchema = z.object({
   action: z.enum(["create-forward-address", "dismiss-gmail-prompt", "mark-gmail-prompt-seen", "change-forward-handle"]),
@@ -19,7 +19,7 @@ async function authorize(req: Request): Promise<
   | { ok: true; userId: string; headers: Headers }
   | { ok: false; response: NextResponse }
 > {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   if (!userId) {
     return { ok: false, response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };

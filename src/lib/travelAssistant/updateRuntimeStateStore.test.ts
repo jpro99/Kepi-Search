@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   persistTravelRuntimeState,
   readTravelRuntimeState,
 } from "@/lib/travelAssistant/updateRuntimeStateStore";
 import type { UpdatableReservation } from "@/lib/travelAssistant/travelUpdateTypes";
+import { generateId } from "@/lib/utils/generateId";
 
 const SAMPLE_RESERVATIONS: UpdatableReservation[] = [
   {
@@ -20,7 +20,7 @@ const SAMPLE_RESERVATIONS: UpdatableReservation[] = [
 ];
 
 test("persists and reads runtime state snapshot", async () => {
-  const statePath = `tests/runtime-state/${randomUUID()}`;
+  const statePath = `tests/runtime-state/${generateId()}`;
   await persistTravelRuntimeState({
     reservations: SAMPLE_RESERVATIONS,
     mode: "auto",
@@ -35,7 +35,7 @@ test("persists and reads runtime state snapshot", async () => {
 });
 
 test("returns empty defaults when runtime state file missing", async () => {
-  const statePath = `tests/runtime-state/${randomUUID()}`;
+  const statePath = `tests/runtime-state/${generateId()}`;
   const loaded = await readTravelRuntimeState(statePath);
   assert.equal(loaded.mode, "auto");
   assert.equal(loaded.reservations.length, 0);

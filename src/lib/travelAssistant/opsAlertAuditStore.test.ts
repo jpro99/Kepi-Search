@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   appendTravelOpsAlertAuditEntry,
   readTravelOpsAlertAuditSnapshot,
 } from "@/lib/travelAssistant/opsAlertAuditStore";
+import { generateId } from "@/lib/utils/generateId";
 
 test("ops alert audit store persists and reads sweeps", async () => {
-  const path = `tests/ops-alert-audit/${randomUUID()}`;
+  const path = `tests/ops-alert-audit/${generateId()}`;
   await appendTravelOpsAlertAuditEntry({
     evaluatedAt: "2026-06-21T10:00:00.000Z",
     trigger: "test",

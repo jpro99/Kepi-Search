@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
 
+import { generateId } from "@/lib/utils/generateId";
 export type OfflineOutboxStatus = "pending" | "synced" | "failed";
 
 export interface OfflineOutboxEntry {
@@ -80,7 +80,7 @@ export function appendOfflineOutboxEvent(args: {
   }
 
   const entry: OfflineOutboxEntry = {
-    id: randomUUID(),
+    id: generateId(),
     key: args.event.key,
     message: args.event.message,
     fingerprint,

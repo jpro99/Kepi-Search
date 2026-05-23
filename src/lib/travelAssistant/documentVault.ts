@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
+import { generateId } from "@/lib/utils/generateId";
 
 const DOCUMENTS_KEY = "docs";
 
@@ -98,7 +98,7 @@ async function writeDocuments(documents: TravelDocument[], userId?: string): Pro
 export async function addDocument(input: AddDocumentInput, userId?: string): Promise<TravelDocument> {
   const documents = await readDocuments(userId);
   const nextDocument: TravelDocument = {
-    id: randomUUID(),
+    id: generateId(),
     type: input.type,
     name: input.name.trim(),
     tripId: input.tripId.trim(),

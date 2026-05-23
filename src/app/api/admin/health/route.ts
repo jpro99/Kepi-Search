@@ -1,11 +1,11 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { isAdminUserId, resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
 import { buildAdminHealthSnapshot } from "@/lib/admin/adminMetrics";
 import { logger } from "@/lib/logger";
+import { generateId } from "@/lib/utils/generateId";
 
 export async function GET(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

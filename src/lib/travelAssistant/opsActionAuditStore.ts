@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   TravelOpsAction,
   TravelOpsActionAuditEntry,
@@ -7,6 +6,7 @@ import type {
 } from "@/lib/travelAssistant/travelUpdateTypes";
 import { kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
 import { logger } from "@/lib/logger";
+import { generateId } from "@/lib/utils/generateId";
 
 interface StoredOpsActionAuditEntry extends TravelOpsActionAuditEntry {
   statusCode: number;
@@ -133,7 +133,7 @@ export async function appendTravelOpsActionAuditEntry({
 }): Promise<StoredOpsActionAuditEntry> {
   const auditKey = resolveOpsAuditKey(storagePath);
   const entry: StoredOpsActionAuditEntry = {
-    id: randomUUID(),
+    id: generateId(),
     action,
     actor,
     result,

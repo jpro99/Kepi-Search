@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   appendTravelOpsActionAuditEntry,
   findTravelOpsActionReplay,
   readTravelOpsActionAuditSnapshot,
 } from "@/lib/travelAssistant/opsActionAuditStore";
+import { generateId } from "@/lib/utils/generateId";
 
 test("records ops control actions and returns recent snapshots", async () => {
-  const auditPath = `tests/ops-audit/${randomUUID()}`;
+  const auditPath = `tests/ops-audit/${generateId()}`;
   await appendTravelOpsActionAuditEntry({
     action: "reset-circuits",
     actor: "qa-operator",
@@ -32,7 +32,7 @@ test("records ops control actions and returns recent snapshots", async () => {
 });
 
 test("supports idempotency replay lookup by action and key", async () => {
-  const auditPath = `tests/ops-audit/${randomUUID()}`;
+  const auditPath = `tests/ops-audit/${generateId()}`;
   const created = await appendTravelOpsActionAuditEntry({
     action: "run-background-once",
     actor: "qa-operator",

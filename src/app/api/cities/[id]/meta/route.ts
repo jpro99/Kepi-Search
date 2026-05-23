@@ -1,12 +1,12 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getCityCatalog } from "@/data/cities/registry";
 import { logger } from "@/lib/logger";
+import { generateId } from "@/lib/utils/generateId";
 
 type Params = { params: Promise<{ id: string }> };
 
 export async function GET(_request: Request, { params }: Params) {
-  const requestId = _request.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = _request.headers.get("x-request-id")?.trim() || generateId();
   const routeLogger = logger.withContext({ requestId, route: "/api/cities/[id]/meta" });
   const { id: raw } = await params;
   const id = decodeURIComponent(raw);

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getUserPlan } from "@/lib/billing/planGate";
@@ -16,6 +15,7 @@ import {
   setActiveTrip,
   updateTrip,
 } from "@/lib/travelAssistant/tripStore";
+import { generateId } from "@/lib/utils/generateId";
 
 const TripStageSchema = z.enum(["readiness", "pre-departure", "airport", "arrival", "recovery"]);
 const TripStatusSchema = z.enum(["green", "yellow", "red"]);
@@ -89,7 +89,7 @@ async function authorize(req: Request): Promise<
     }
   | { ok: false; response: NextResponse }
 > {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { logger } from "@/lib/logger";
 import {
   setCalendarClientForTests,
   syncReservationToCalendar,
 } from "@/lib/travelAssistant/calendarSyncService";
+import { generateId } from "@/lib/utils/generateId";
 
 function createReservation(overrides?: Partial<{
   id: string;
@@ -19,7 +19,7 @@ function createReservation(overrides?: Partial<{
   notes: string;
 }>) {
   return {
-    id: overrides?.id ?? `reservation-${randomUUID()}`,
+    id: overrides?.id ?? `reservation-${generateId()}`,
     type: overrides?.type ?? "flight",
     title: overrides?.title ?? "AA123 — JFK → LAX",
     confirmationCode: overrides?.confirmationCode ?? "AA12345",
@@ -57,12 +57,12 @@ test("flight reservation creates calendar event with correct emoji and times", a
 
   try {
     const reservation = createReservation({
-      id: `flight-${randomUUID()}`,
+      id: `flight-${generateId()}`,
       type: "flight",
       title: "AA123 — JFK → LAX",
       localTime: "2026-08-10 09:30",
     });
-    const result = await syncReservationToCalendar(`calendar-test-${randomUUID()}`, reservation);
+    const result = await syncReservationToCalendar(`calendar-test-${generateId()}`, reservation);
     assert.equal(result.status, "created");
     assert.equal(inserts.length, 1);
     assert.equal(inserts[0]?.summary, "✈️ Flight AA123 — JFK → LAX");
@@ -76,9 +76,9 @@ test("flight reservation creates calendar event with correct emoji and times", a
 test("duplicate sync updates existing event instead of creating a second event", async () => {
   let insertCalls = 0;
   let patchCalls = 0;
-  const userId = `calendar-duplicate-${randomUUID()}`;
+  const userId = `calendar-duplicate-${generateId()}`;
   const reservation = createReservation({
-    id: `dup-${randomUUID()}`,
+    id: `dup-${generateId()}`,
     type: "train",
     title: "Northeast Regional 171",
   });
@@ -119,9 +119,9 @@ test("duplicate sync updates existing event instead of creating a second event",
 });
 
 test("calendar API failure logs warning without throwing", async () => {
-  const userId = `calendar-failure-${randomUUID()}`;
+  const userId = `calendar-failure-${generateId()}`;
   const reservation = createReservation({
-    id: `fail-${randomUUID()}`,
+    id: `fail-${generateId()}`,
     type: "ride",
   });
   const warningMessages: string[] = [];

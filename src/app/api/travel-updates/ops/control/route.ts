@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isAutomatedTestRuntime } from "@/lib/auth/mockClerkAuth";
@@ -17,6 +16,7 @@ import {
 import { runTravelOpsAlertSweep } from "@/lib/travelAssistant/opsAlertingOrchestrator";
 import { resetTravelUpdateCircuitState } from "@/lib/travelAssistant/updateAdapters";
 import type { TravelOpsActionResult } from "@/lib/travelAssistant/travelUpdateTypes";
+import { generateId } from "@/lib/utils/generateId";
 
 const BodySchema = z.discriminatedUnion("action", [
   z.object({
@@ -75,7 +75,7 @@ async function resolveAuthenticatedUserId(): Promise<string | null> {
 }
 
 export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const actor = resolveActor(req);
   const routeLogger = logger.withContext({

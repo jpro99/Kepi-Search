@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   TravelAuditReadSnapshot,
   TravelAuditTrailEntry,
@@ -8,6 +7,7 @@ import type {
 } from "@/lib/travelAssistant/travelUpdateTypes";
 import { kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
 import { logger } from "@/lib/logger";
+import { generateId } from "@/lib/utils/generateId";
 
 interface StoredUpdateRecord {
   idempotencyKey: string;
@@ -55,7 +55,7 @@ async function loadStore(auditKey: string): Promise<UpdateAuditStoreData> {
       const raw = entry as Partial<TravelAuditTrailEntry>;
       return {
         source: raw.source === "background" ? "background" : "interactive",
-        requestId: typeof raw.requestId === "string" ? raw.requestId : randomUUID(),
+        requestId: typeof raw.requestId === "string" ? raw.requestId : generateId(),
         checkedAt: typeof raw.checkedAt === "string" ? raw.checkedAt : new Date(0).toISOString(),
         mode: raw.mode ?? "auto",
         provider: typeof raw.provider === "string" || raw.provider === null ? raw.provider : null,
@@ -116,7 +116,7 @@ export async function persistTravelUpdateAudit({
   summary: TravelUpdateAuditSummary;
 }> {
   const effectiveCheckedAt = checkedAt ?? new Date().toISOString();
-  const requestId = randomUUID();
+  const requestId = generateId();
   const auditKey = resolveAuditKey(storagePath);
 
   const run = async (): Promise<{

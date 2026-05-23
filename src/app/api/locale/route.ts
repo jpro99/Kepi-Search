@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { DEFAULT_LOCALE, LOCALE_COOKIE_NAME, detectLocaleFromAcceptLanguage, normalizeLocale } from "@/i18n/locales";
@@ -6,6 +5,7 @@ import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
 import { setUserLocalePreference } from "@/lib/i18n/localeStore";
 import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
+import { generateId } from "@/lib/utils/generateId";
 
 const LocaleBodySchema = z.object({
   locale: z.string().trim().min(2).max(16),
@@ -26,7 +26,7 @@ function buildLocaleCookie(locale: "en" | "es") {
 }
 
 export async function GET(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,
@@ -43,7 +43,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

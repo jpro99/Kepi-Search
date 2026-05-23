@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
@@ -7,6 +6,7 @@ import { parseForwardedEmail } from "@/lib/travelAssistant/emailForwardParser";
 import { resolveUserIdByForwardAddress } from "@/lib/travelAssistant/emailForwardSetupStore";
 import { sendPushNotification } from "@/lib/travelAssistant/pushNotificationService";
 import { getActiveTrip, getTrip, updateTrip } from "@/lib/travelAssistant/tripStore";
+import { generateId } from "@/lib/utils/generateId";
 
 const AttachmentSchema = z.object({
   filename: z.string().trim().min(1).max(255).optional(),
@@ -56,7 +56,7 @@ function extractRecipientCandidates(toValue?: string): string[] {
 }
 
 export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const routeLogger = logger.withContext({
     route: "/api/email-forward/receive",
     requestId,
@@ -135,7 +135,7 @@ export async function POST(req: Request) {
   );
   const sourceSubject = parsed.data.subject?.trim() || "Forwarded email";
   const reviewItem = {
-    id: `review-email-${randomUUID()}`,
+    id: `review-email-${generateId()}`,
     reasons:
       parserResult.parserNotes.length > 0
         ? parserResult.parserNotes

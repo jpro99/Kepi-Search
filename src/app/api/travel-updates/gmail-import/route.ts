@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { trackServerEvent } from "@/lib/analytics/trackServerEvent";
@@ -8,6 +7,7 @@ import { enforceRateLimit } from "@/lib/rateLimit";
 import { logger } from "@/lib/logger";
 import { importGmailParsedReservations } from "@/lib/travelAssistant/gmailImportProvider";
 import { getGmailConnectionStatus } from "@/lib/travelAssistant/gmailOAuthService";
+import { generateId } from "@/lib/utils/generateId";
 
 const BodySchema = z.object({
   maxResults: z.number().int().min(1).max(50).default(10),
@@ -42,7 +42,7 @@ async function resolveAuthenticatedUserId(): Promise<string | null> {
 }
 
 export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

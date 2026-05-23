@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
 import { isAdminUserId, resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
@@ -10,6 +9,7 @@ import {
 } from "@/lib/billing/subscriptionStore";
 import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
+import { generateId } from "@/lib/utils/generateId";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 const TARGET_USER_ID = "user_3Ds1bOEqp8x6uOrk7omvcM7gxEm";
 
 export async function GET(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const userId = await resolveAuthenticatedUserId();
   const routeLogger = logger.withContext({
     requestId,

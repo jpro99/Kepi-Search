@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { Feature, Polygon } from "geojson";
@@ -7,6 +6,7 @@ import { logger } from "@/lib/logger";
 import { enrichHitsWithWalking } from "@/lib/search/enrichWithWalking";
 import type { RoutingProvider } from "@/lib/search/types";
 import { searchHotelsInPolygon } from "@/lib/search/scoreAndFilter";
+import { generateId } from "@/lib/utils/generateId";
 
 const PositionSchema = z.tuple([z.number(), z.number()]);
 
@@ -30,7 +30,7 @@ const BodySchema = z.object({
 });
 
 export async function POST(req: Request) {
-  const requestId = req.headers.get("x-request-id")?.trim() || randomUUID();
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
   const routeLogger = logger.withContext({
     requestId,
     route: "/api/search",
