@@ -1,3 +1,5 @@
+import { logger } from "@/lib/logger";
+import { getSafeRedisClient } from "@/lib/redis";
 import { kvStoreDel, kvStoreGet, kvStoreList, kvStoreSet, kvStoreSetNx } from "@/lib/travelAssistant/kvStore";
 
 const EMAIL_HANDLE_SYSTEM_NAMESPACE = "__email-forward-system";
@@ -8,6 +10,7 @@ const GMAIL_PROMPT_SEEN_KEY = "onboarding:gmail-prompt:seen";
 const DEFAULT_FORWARD_DOMAIN = "trips.kepitravel.com";
 const MAX_HANDLE_LENGTH = 20;
 const CUSTOM_HANDLE_CHANGE_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
+const SYSTEM_NAMESPACE_PREFIX = `kepi:${EMAIL_HANDLE_SYSTEM_NAMESPACE}:`;
 
 interface EmailHandleMetaRecord {
   createdAt: string;
@@ -39,6 +42,82 @@ function handleOwnerKey(handle: string): string {
 
 function userHandleMetaKey(userId: string): string {
   return `${USER_HANDLE_META_KEY_PREFIX}:${userId}`;
+}
+
+function toSystemNamespaceKey(key: string): string {
+  const normalized = key.startsWith(":") ? key.slice(1) : key;
+  return normalized.startsWith(SYSTEM_NAMESPACE_PREFIX)
+    ? normalized
+    : `${SYSTEM_NAMESPACE_PREFIX}${normalized}`;
+}
+
+function getEmailForwardSystemRedis() {
+  return getSafeRedisClient("travelAssistant/emailForwardSetupStore");
+}
+
+async function getHandleOwner(handle: string): Promise<string | null> {
+  const redis = getEmailForwardSystemRedis();
+  if (redis) {
+    try {
+      const owner = await redis.get<string>(toSystemNamespaceKey(handleOwnerKey(handle)));
+      return typeof owner === "string" && owner.trim().length > 0 ? owner : null;
+    } catch (error) {
+      logger.warn("Failed to read email handle owner from Redis, falling back to kvStore.", {
+        scope: "travelAssistant/emailForwardSetupStore",
+        handle,
+        error: error instanceof Error ? error.message : "unknown",
+      });
+    }
+  }
+  const owner = await kvStoreGet<string>(handleOwnerKey(handle), { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
+  return typeof owner === "string" && owner.trim().length > 0 ? owner : null;
+}
+
+async function setHandleOwner(handle: string, userId: string): Promise<void> {
+  const redis = getEmailForwardSystemRedis();
+  if (redis) {
+    const namespacedKey = toSystemNamespaceKey(handleOwnerKey(handle));
+    await redis.set(namespacedKey, userId);
+    const persistedOwner = await redis.get<string>(namespacedKey);
+    if (persistedOwner !== userId) {
+      throw new Error(`Unable to persist handle owner mapping for ${handle}.`);
+    }
+    return;
+  }
+  await kvStoreSet(handleOwnerKey(handle), userId, { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
+}
+
+async function setHandleOwnerIfAbsent(handle: string, userId: string): Promise<boolean> {
+  const redis = getEmailForwardSystemRedis();
+  if (redis) {
+    const namespacedKey = toSystemNamespaceKey(handleOwnerKey(handle));
+    const claimResult = await redis.set(namespacedKey, userId, { nx: true });
+    if (claimResult === "OK") {
+      return true;
+    }
+    const existingOwner = await redis.get<string>(namespacedKey);
+    return existingOwner === userId;
+  }
+
+  const ownerClaimed = await kvStoreSetNx(handleOwnerKey(handle), userId, {
+    userId: EMAIL_HANDLE_SYSTEM_NAMESPACE,
+  });
+  if (ownerClaimed) {
+    return true;
+  }
+  const existingOwner = await kvStoreGet<string>(handleOwnerKey(handle), {
+    userId: EMAIL_HANDLE_SYSTEM_NAMESPACE,
+  });
+  return existingOwner === userId;
+}
+
+async function deleteHandleOwner(handle: string): Promise<void> {
+  const redis = getEmailForwardSystemRedis();
+  if (redis) {
+    await redis.del(toSystemNamespaceKey(handleOwnerKey(handle)));
+    return;
+  }
+  await kvStoreDel(handleOwnerKey(handle), { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
 }
 
 function parseUserIdFromUserHandleRecordKey(key: string): string | null {
@@ -132,15 +211,11 @@ async function claimHandleForUser(userId: string, baseHandleInput: string): Prom
   const baseHandle = sanitizeHandle(baseHandleInput) || "traveler";
   for (let suffixNumber = 1; suffixNumber <= 2000; suffixNumber += 1) {
     const candidate = withSuffix(baseHandle, suffixNumber);
-    const ownerClaimed = await kvStoreSetNx(handleOwnerKey(candidate), userId, {
-      userId: EMAIL_HANDLE_SYSTEM_NAMESPACE,
-    });
+    const ownerClaimed = await setHandleOwnerIfAbsent(candidate, userId);
     if (ownerClaimed) {
       return candidate;
     }
-    const existingOwner = await kvStoreGet<string>(handleOwnerKey(candidate), {
-      userId: EMAIL_HANDLE_SYSTEM_NAMESPACE,
-    });
+    const existingOwner = await getHandleOwner(candidate);
     if (existingOwner === userId) {
       return candidate;
     }
@@ -168,9 +243,9 @@ async function ensureForwardHandle(userId: string): Promise<string> {
   if (typeof existing === "string" && existing.trim().length > 0) {
     const sanitized = sanitizeHandle(existing);
     if (sanitized.length > 0) {
-      const owner = await kvStoreGet<string>(handleOwnerKey(sanitized), { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
+      const owner = await getHandleOwner(sanitized);
       if (!owner || owner === userId) {
-        await kvStoreSet(handleOwnerKey(sanitized), userId, { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
+        await setHandleOwner(sanitized, userId);
         await kvStoreSet(userHandleKey(userId), sanitized, { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
         await ensureUserHandleMeta(userId);
         return sanitized;
@@ -181,8 +256,7 @@ async function ensureForwardHandle(userId: string): Promise<string> {
   const localPart = await resolvePrimaryEmailLocalPart(userId);
   const baseHandle = sanitizeAutoUsernamePart(localPart ?? "") || "traveler";
   const claimed = await claimHandleForUser(userId, baseHandle);
-  // Force-write the reverse lookup key so webhook resolution works even if previous data was partial.
-  await kvStoreSet(handleOwnerKey(claimed), userId, { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
+  await setHandleOwner(claimed, userId);
   await kvStoreSet(userHandleKey(userId), claimed, { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
   await ensureUserHandleMeta(userId, { lastCustomChangeAt: null });
   return claimed;
@@ -238,26 +312,21 @@ export async function changeForwardHandle(userId: string, requestedHandleRaw: st
   }
 
   if (requestedHandle !== currentHandle) {
-    const existingOwner = await kvStoreGet<string>(handleOwnerKey(requestedHandle), {
-      userId: EMAIL_HANDLE_SYSTEM_NAMESPACE,
-    });
+    const existingOwner = await getHandleOwner(requestedHandle);
     if (existingOwner && existingOwner !== userId) {
       throw new Error("That forwarding handle is already taken.");
     }
     if (!existingOwner) {
-      const claimed = await kvStoreSetNx(handleOwnerKey(requestedHandle), userId, {
-        userId: EMAIL_HANDLE_SYSTEM_NAMESPACE,
-      });
+      const claimed = await setHandleOwnerIfAbsent(requestedHandle, userId);
       if (!claimed) {
         throw new Error("That forwarding handle is already taken.");
       }
     }
+    await setHandleOwner(requestedHandle, userId);
     await kvStoreSet(userHandleKey(userId), requestedHandle, { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
-    const currentOwner = await kvStoreGet<string>(handleOwnerKey(currentHandle), {
-      userId: EMAIL_HANDLE_SYSTEM_NAMESPACE,
-    });
+    const currentOwner = await getHandleOwner(currentHandle);
     if (currentOwner === userId) {
-      await kvStoreDel(handleOwnerKey(currentHandle), { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
+      await deleteHandleOwner(currentHandle);
     }
     await ensureUserHandleMeta(userId, { lastCustomChangeAt: new Date().toISOString() });
   } else {
@@ -301,7 +370,7 @@ async function repairHandleOwnerMapping(handle: string): Promise<string | null> 
     if (!userId) {
       continue;
     }
-    await kvStoreSet(handleOwnerKey(handle), userId, { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
+    await setHandleOwner(handle, userId);
     return userId;
   }
   return null;
@@ -312,8 +381,8 @@ export async function resolveUserIdByForwardAddress(addressLike: string): Promis
   if (!handle) {
     return null;
   }
-  const userId = await kvStoreGet<string>(handleOwnerKey(handle), { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
-  if (typeof userId === "string" && userId.trim().length > 0) {
+  const userId = await getHandleOwner(handle);
+  if (userId) {
     return userId;
   }
   return await repairHandleOwnerMapping(handle);
