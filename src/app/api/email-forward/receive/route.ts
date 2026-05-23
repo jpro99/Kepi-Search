@@ -212,6 +212,37 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
     const defaultAssignees = Array.from(
       new Set(targetTrip.reservations.flatMap((reservation) => reservation.assignedTo)),
     );
+    const parsedReservation = {
+      id: `res-email-${generateId()}`,
+      type: parserResult.draft.type,
+      title: parserResult.draft.title,
+      provider: parserResult.draft.provider,
+      localTime: parserResult.draft.localTime,
+      timezone: parserResult.draft.timezone || "Etc/UTC",
+      location: parserResult.draft.location,
+      confirmationCode: parserResult.draft.confirmationCode,
+      assignedTo: parserResult.draft.assignedTo.length > 0 ? parserResult.draft.assignedTo : defaultAssignees,
+      stage: targetTrip.stage,
+      critical:
+        parserResult.draft.type === "flight" ||
+        parserResult.draft.type === "train" ||
+        parserResult.draft.type === "ride",
+      confidence: confidenceToDraftValue(parserResult.confidenceScore),
+      notes: parserResult.draft.notes,
+      source: "imported" as const,
+    };
+    const hasMatchingReservation = targetTrip.reservations.some((reservation) => {
+      return (
+        reservation.type === parsedReservation.type &&
+        reservation.title === parsedReservation.title &&
+        reservation.provider === parsedReservation.provider &&
+        reservation.localTime === parsedReservation.localTime &&
+        reservation.confirmationCode === parsedReservation.confirmationCode
+      );
+    });
+    const nextReservations = hasMatchingReservation
+      ? targetTrip.reservations
+      : [parsedReservation, ...targetTrip.reservations];
     const sourceSubject = parsed.data.subject?.trim() || "Forwarded email";
     const reviewItem = {
       id: `review-email-${generateId()}`,
@@ -255,7 +286,14 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
     };
 
     const nextQueue = [reviewItem, ...(targetTrip.reviewQueue ?? [])];
-    const updated = await updateTrip(targetTrip.id, { reviewQueue: nextQueue }, targetUserId);
+    const updated = await updateTrip(
+      targetTrip.id,
+      {
+        reservations: nextReservations,
+        reviewQueue: nextQueue,
+      },
+      targetUserId,
+    );
     if (!updated) {
       console.error("[email-forward-webhook] Trip update failed.", {
         requestId,

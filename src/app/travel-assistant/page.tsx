@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useClerk, useUser } from "@clerk/nextjs";
-import { cache, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cache, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type TouchEvent as ReactTouchEvent } from "react";
 import {
   enforceStatusFloor,
   evaluateTravelStatusGovernance,
@@ -1249,6 +1249,7 @@ export default function TravelAssistantPage() {
   const drawerCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastFocusedElementBeforeDrawerRef = useRef<HTMLElement | null>(null);
   const readinessChecklistSectionRef = useRef<HTMLElement | null>(null);
+  const reservationsPullStartYRef = useRef<number | null>(null);
   const toastPolicyRef = useRef<{
     tone: GuidanceTone;
     lastMessage: string | null;
@@ -1307,6 +1308,7 @@ export default function TravelAssistantPage() {
   const [showAdvancedShortcut] = useState(false);
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [manualReservationModalOpen, setManualReservationModalOpen] = useState(false);
+  const [reservationsRefreshing, setReservationsRefreshing] = useState(false);
 
   const viewerDisplayName = useMemo(
     () => resolveViewerName(user?.firstName, user?.primaryEmailAddress?.emailAddress),
@@ -1795,6 +1797,20 @@ export default function TravelAssistantPage() {
       cancelled = true;
     };
   }, [ensureDefaultTripIfMissing, refreshTripsFromServer, setToast]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (tripsLoading) {
+        return;
+      }
+      void refreshTripsFromServer().catch(() => {
+        // Background polling should fail silently and retry on next interval.
+      });
+    }, 30_000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [refreshTripsFromServer, tripsLoading]);
 
   useEffect(() => {
     if (!tripsHydratedRef.current) return;
@@ -4385,6 +4401,58 @@ export default function TravelAssistantPage() {
     window.history.replaceState({}, "", nextUrl);
   }, []);
 
+  const handleReservationsRefresh = useCallback(async (): Promise<void> => {
+    if (reservationsRefreshing) {
+      return;
+    }
+    setReservationsRefreshing(true);
+    try {
+      await refreshTripsFromServer();
+      setToast("Reservations refreshed.");
+    } catch {
+      setToast("Unable to refresh reservations right now.");
+    } finally {
+      setReservationsRefreshing(false);
+    }
+  }, [refreshTripsFromServer, reservationsRefreshing, setToast]);
+
+  const handleReservationsTouchStart = useCallback(
+    (event: ReactTouchEvent<HTMLElement>): void => {
+      if (consumerTab !== "reservations") {
+        return;
+      }
+      if (window.scrollY > 4) {
+        reservationsPullStartYRef.current = null;
+        return;
+      }
+      reservationsPullStartYRef.current = event.touches[0]?.clientY ?? null;
+    },
+    [consumerTab],
+  );
+
+  const handleReservationsTouchEnd = useCallback(
+    (event: ReactTouchEvent<HTMLElement>): void => {
+      if (consumerTab !== "reservations") {
+        return;
+      }
+      const startY = reservationsPullStartYRef.current;
+      reservationsPullStartYRef.current = null;
+      if (startY === null || reservationsRefreshing) {
+        return;
+      }
+      if (window.scrollY > 4) {
+        return;
+      }
+      const endY = event.changedTouches[0]?.clientY ?? startY;
+      const pullDistance = endY - startY;
+      if (pullDistance < 70) {
+        return;
+      }
+      void handleReservationsRefresh();
+    },
+    [consumerTab, handleReservationsRefresh, reservationsRefreshing],
+  );
+
   const openReadinessChecklistInMoreTab = useCallback((): void => {
     setPendingMoreScrollTarget("readiness-checklist");
     navigateToConsumerTab("more");
@@ -4804,7 +4872,25 @@ export default function TravelAssistantPage() {
               ) : null}
             </section>
           ) : consumerTab === "reservations" ? (
-            <section className="space-y-3">
+            <section
+              className="space-y-3"
+              onTouchStart={handleReservationsTouchStart}
+              onTouchEnd={handleReservationsTouchEnd}
+            >
+              <div className="rounded-2xl border border-cyan-200 bg-cyan-50/80 px-4 py-3 text-xs text-cyan-900 dark:border-cyan-500/40 dark:bg-cyan-500/10 dark:text-cyan-100">
+                <div className="flex items-center justify-between gap-2">
+                  <p>Pull down from the top of this tab to refresh reservations.</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleReservationsRefresh();
+                    }}
+                    className="rounded-lg border border-cyan-300 bg-white px-3 py-1.5 font-semibold text-cyan-900 transition hover:bg-cyan-100 dark:border-cyan-500/50 dark:bg-slate-900 dark:text-cyan-100 dark:hover:bg-slate-800"
+                  >
+                    {reservationsRefreshing ? "Refreshing..." : "Refresh"}
+                  </button>
+                </div>
+              </div>
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">All reservations</h2>
                 <button
