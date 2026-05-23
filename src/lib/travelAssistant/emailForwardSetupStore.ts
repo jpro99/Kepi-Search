@@ -1,4 +1,4 @@
-import { kvStoreDel, kvStoreGet, kvStoreSet, kvStoreSetNx } from "@/lib/travelAssistant/kvStore";
+import { kvStoreDel, kvStoreGet, kvStoreList, kvStoreSet, kvStoreSetNx } from "@/lib/travelAssistant/kvStore";
 
 const EMAIL_HANDLE_SYSTEM_NAMESPACE = "__email-forward-system";
 const USER_HANDLE_KEY_PREFIX = "email-handle:user";
@@ -39,6 +39,15 @@ function handleOwnerKey(handle: string): string {
 
 function userHandleMetaKey(userId: string): string {
   return `${USER_HANDLE_META_KEY_PREFIX}:${userId}`;
+}
+
+function parseUserIdFromUserHandleRecordKey(key: string): string | null {
+  const prefix = `kepi:${EMAIL_HANDLE_SYSTEM_NAMESPACE}:${USER_HANDLE_KEY_PREFIX}:`;
+  if (!key.startsWith(prefix)) {
+    return null;
+  }
+  const userId = key.slice(prefix.length).trim();
+  return userId.length > 0 ? userId : null;
 }
 
 function composeForwardAddress(handle: string): string {
@@ -172,6 +181,8 @@ async function ensureForwardHandle(userId: string): Promise<string> {
   const localPart = await resolvePrimaryEmailLocalPart(userId);
   const baseHandle = sanitizeAutoUsernamePart(localPart ?? "") || "traveler";
   const claimed = await claimHandleForUser(userId, baseHandle);
+  // Force-write the reverse lookup key so webhook resolution works even if previous data was partial.
+  await kvStoreSet(handleOwnerKey(claimed), userId, { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
   await kvStoreSet(userHandleKey(userId), claimed, { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
   await ensureUserHandleMeta(userId, { lastCustomChangeAt: null });
   return claimed;
@@ -277,13 +288,35 @@ export function extractHandleFromForwardAddress(addressLike: string): string | n
   return handle.length > 0 ? handle : null;
 }
 
+async function repairHandleOwnerMapping(handle: string): Promise<string | null> {
+  const records = await kvStoreList<string>(`${USER_HANDLE_KEY_PREFIX}:`, {
+    userId: EMAIL_HANDLE_SYSTEM_NAMESPACE,
+    limit: 5000,
+  });
+  for (const record of records) {
+    if (sanitizeHandle(record.value ?? "") !== handle) {
+      continue;
+    }
+    const userId = parseUserIdFromUserHandleRecordKey(record.key);
+    if (!userId) {
+      continue;
+    }
+    await kvStoreSet(handleOwnerKey(handle), userId, { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
+    return userId;
+  }
+  return null;
+}
+
 export async function resolveUserIdByForwardAddress(addressLike: string): Promise<string | null> {
   const handle = extractHandleFromForwardAddress(addressLike);
   if (!handle) {
     return null;
   }
   const userId = await kvStoreGet<string>(handleOwnerKey(handle), { userId: EMAIL_HANDLE_SYSTEM_NAMESPACE });
-  return typeof userId === "string" && userId.trim().length > 0 ? userId : null;
+  if (typeof userId === "string" && userId.trim().length > 0) {
+    return userId;
+  }
+  return await repairHandleOwnerMapping(handle);
 }
 
 export async function markGmailPromptSeen(userId: string): Promise<void> {
