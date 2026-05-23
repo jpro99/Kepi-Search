@@ -49,7 +49,10 @@ interface AnalyticsEventRecord {
 }
 
 const KV_CONFIGURED = Boolean(process.env.KV_REST_API_URL?.trim() && process.env.KV_REST_API_TOKEN?.trim());
-const usageRedis = getSafeRedisClient("admin/adminMetrics");
+
+function getUsageRedis() {
+  return getSafeRedisClient("admin/adminMetrics");
+}
 
 function extractUserIdFromKepiKey(key: string): string | null {
   const parts = key.split(":");
@@ -333,6 +336,7 @@ async function collectRecentAlerts(limit = 20): Promise<AdminRecentAlertEntry[]>
 }
 
 async function collectApiUsageStats(): Promise<AdminStatsResponse["apiUsage"]> {
+  const usageRedis = getUsageRedis();
   if (!usageRedis) {
     return {
       endpointRateLimitHits: [],

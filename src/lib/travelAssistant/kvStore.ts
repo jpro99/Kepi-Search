@@ -1,5 +1,5 @@
 import { kv } from "@vercel/kv";
-import { getSafeRedisClient } from "@/lib/redis";
+import { getSafeRedisClient, hasRedisEnvConfig } from "@/lib/redis";
 import { getKvUserContextUserId } from "@/lib/travelAssistant/kvUserContext";
 import { logger } from "@/lib/logger";
 
@@ -12,14 +12,16 @@ let startupValidationLogged = false;
 const KV_REQUIRED_ENV_KEYS = ["KV_REST_API_URL", "KV_REST_API_TOKEN"] as const;
 const UPSTASH_REQUIRED_ENV_KEYS = ["UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"] as const;
 
-const upstashRedis = getSafeRedisClient("travelAssistant/kvStore");
-
 function isKvConfigured(): boolean {
   return Boolean(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
 }
 
+function getUpstashRedis() {
+  return getSafeRedisClient("travelAssistant/kvStore");
+}
+
 function hasAnyRedisConfig(): boolean {
-  return isKvConfigured() || Boolean(upstashRedis);
+  return isKvConfigured() || hasRedisEnvConfig();
 }
 
 function missingKvEnvKeys(): string[] {
@@ -89,7 +91,7 @@ export function getKvIntegrationHealth(): {
   missingEnvKeys: string[];
 } {
   const configured = hasAnyRedisConfig();
-  const mode: "vercel-kv" | "upstash-redis" | "memory-fallback" = upstashRedis
+  const mode: "vercel-kv" | "upstash-redis" | "memory-fallback" = getUpstashRedis()
     ? "upstash-redis"
     : isKvConfigured()
       ? "vercel-kv"
@@ -105,6 +107,7 @@ export async function kvStoreGet<T>(
   key: string,
   options?: { userId?: string },
 ): Promise<T | null> {
+  const upstashRedis = getUpstashRedis();
   const userNamespace = await resolveUserNamespace(options?.userId);
   const namespacedKey = toNamespacedKey(key, userNamespace);
   if (!hasAnyRedisConfig()) {
@@ -135,6 +138,7 @@ export async function kvStoreSet<T>(
   value: T,
   options?: { userId?: string },
 ): Promise<void> {
+  const upstashRedis = getUpstashRedis();
   const userNamespace = await resolveUserNamespace(options?.userId);
   const namespacedKey = toNamespacedKey(key, userNamespace);
   if (!hasAnyRedisConfig()) {
@@ -163,6 +167,7 @@ export async function kvStoreSetNx<T>(
   value: T,
   options?: { userId?: string },
 ): Promise<boolean> {
+  const upstashRedis = getUpstashRedis();
   const userNamespace = await resolveUserNamespace(options?.userId);
   const namespacedKey = toNamespacedKey(key, userNamespace);
   if (!hasAnyRedisConfig()) {
@@ -191,6 +196,7 @@ export async function kvStoreSetNx<T>(
 }
 
 export async function kvStoreDel(key: string, options?: { userId?: string }): Promise<void> {
+  const upstashRedis = getUpstashRedis();
   const userNamespace = await resolveUserNamespace(options?.userId);
   const namespacedKey = toNamespacedKey(key, userNamespace);
   if (!hasAnyRedisConfig()) {
@@ -218,6 +224,7 @@ export async function kvStoreList<T>(
   keyPrefix: string,
   options?: { limit?: number; userId?: string },
 ): Promise<Array<{ key: string; value: T | null }>> {
+  const upstashRedis = getUpstashRedis();
   const userNamespace = await resolveUserNamespace(options?.userId);
   const namespacedPrefix = toNamespacedKey(keyPrefix, userNamespace);
   const matchPattern = `${namespacedPrefix}*`;

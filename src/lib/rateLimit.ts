@@ -55,51 +55,65 @@ type MemoryRateLimitEntry = {
 
 const memoryRateLimitStore = new Map<string, MemoryRateLimitEntry>();
 
-const upstashRedis = getSafeRedisClient("rateLimit");
-const upstashLimiterByPolicy: Partial<Record<RateLimitPolicyName, Ratelimit>> = upstashRedis
-  ? {
-      "travel-updates-general": new Ratelimit({
-        redis: upstashRedis,
-        limiter: Ratelimit.slidingWindow(
-          RATE_LIMIT_POLICIES["travel-updates-general"].limit,
-          `${RATE_LIMIT_POLICIES["travel-updates-general"].windowSeconds} s`,
-        ),
-        prefix: RATE_LIMIT_POLICIES["travel-updates-general"].prefix,
-      }),
-      "travel-updates-gmail-import": new Ratelimit({
-        redis: upstashRedis,
-        limiter: Ratelimit.slidingWindow(
-          RATE_LIMIT_POLICIES["travel-updates-gmail-import"].limit,
-          `${RATE_LIMIT_POLICIES["travel-updates-gmail-import"].windowSeconds} s`,
-        ),
-        prefix: RATE_LIMIT_POLICIES["travel-updates-gmail-import"].prefix,
-      }),
-      "push-subscribe": new Ratelimit({
-        redis: upstashRedis,
-        limiter: Ratelimit.slidingWindow(
-          RATE_LIMIT_POLICIES["push-subscribe"].limit,
-          `${RATE_LIMIT_POLICIES["push-subscribe"].windowSeconds} s`,
-        ),
-        prefix: RATE_LIMIT_POLICIES["push-subscribe"].prefix,
-      }),
-      "ai-suggestions": new Ratelimit({
-        redis: upstashRedis,
-        limiter: Ratelimit.slidingWindow(
-          RATE_LIMIT_POLICIES["ai-suggestions"].limit,
-          `${RATE_LIMIT_POLICIES["ai-suggestions"].windowSeconds} s`,
-        ),
-        prefix: RATE_LIMIT_POLICIES["ai-suggestions"].prefix,
-      }),
-      "support-chat": new Ratelimit({
-        redis: upstashRedis,
-        limiter: Ratelimit.slidingWindow(
-          RATE_LIMIT_POLICIES["support-chat"].limit,
-          `${RATE_LIMIT_POLICIES["support-chat"].windowSeconds} s`,
-        ),
-        prefix: RATE_LIMIT_POLICIES["support-chat"].prefix,
-      }),
-    }
-  : {};
+let cachedLimiterByPolicy: Partial<Record<RateLimitPolicyName, Ratelimit>> | null = null;
+
+function getUpstashRedis() {
+  return getSafeRedisClient("rateLimit");
+}
+
+function getUpstashLimiterByPolicy(): Partial<Record<RateLimitPolicyName, Ratelimit>> {
+  if (cachedLimiterByPolicy) {
+    return cachedLimiterByPolicy;
+  }
+  const upstashRedis = getUpstashRedis();
+  if (!upstashRedis) {
+    cachedLimiterByPolicy = {};
+    return cachedLimiterByPolicy;
+  }
+  cachedLimiterByPolicy = {
+    "travel-updates-general": new Ratelimit({
+      redis: upstashRedis,
+      limiter: Ratelimit.slidingWindow(
+        RATE_LIMIT_POLICIES["travel-updates-general"].limit,
+        `${RATE_LIMIT_POLICIES["travel-updates-general"].windowSeconds} s`,
+      ),
+      prefix: RATE_LIMIT_POLICIES["travel-updates-general"].prefix,
+    }),
+    "travel-updates-gmail-import": new Ratelimit({
+      redis: upstashRedis,
+      limiter: Ratelimit.slidingWindow(
+        RATE_LIMIT_POLICIES["travel-updates-gmail-import"].limit,
+        `${RATE_LIMIT_POLICIES["travel-updates-gmail-import"].windowSeconds} s`,
+      ),
+      prefix: RATE_LIMIT_POLICIES["travel-updates-gmail-import"].prefix,
+    }),
+    "push-subscribe": new Ratelimit({
+      redis: upstashRedis,
+      limiter: Ratelimit.slidingWindow(
+        RATE_LIMIT_POLICIES["push-subscribe"].limit,
+        `${RATE_LIMIT_POLICIES["push-subscribe"].windowSeconds} s`,
+      ),
+      prefix: RATE_LIMIT_POLICIES["push-subscribe"].prefix,
+    }),
+    "ai-suggestions": new Ratelimit({
+      redis: upstashRedis,
+      limiter: Ratelimit.slidingWindow(
+        RATE_LIMIT_POLICIES["ai-suggestions"].limit,
+        `${RATE_LIMIT_POLICIES["ai-suggestions"].windowSeconds} s`,
+      ),
+      prefix: RATE_LIMIT_POLICIES["ai-suggestions"].prefix,
+    }),
+    "support-chat": new Ratelimit({
+      redis: upstashRedis,
+      limiter: Ratelimit.slidingWindow(
+        RATE_LIMIT_POLICIES["support-chat"].limit,
+        `${RATE_LIMIT_POLICIES["support-chat"].windowSeconds} s`,
+      ),
+      prefix: RATE_LIMIT_POLICIES["support-chat"].prefix,
+    }),
+  };
+  return cachedLimiterByPolicy;
+}
 
 function createRateLimitHeaders(limit: number, remaining: number, resetAtMs: number): Headers {
   const headers = new Headers();
@@ -159,6 +173,7 @@ async function recordApiUsage(options: {
   rateLimitHit: boolean;
   requestId: string;
 }): Promise<void> {
+  const upstashRedis = getUpstashRedis();
   if (!upstashRedis) {
     return;
   }
@@ -197,7 +212,7 @@ export async function enforceRateLimit(options: {
     };
   }
 
-  const limiter = upstashLimiterByPolicy[options.policyName];
+  const limiter = getUpstashLimiterByPolicy()[options.policyName];
   if (!limiter) {
     const fallbackResult = applyMemoryRateLimit(options.policyName, options.identifier);
     await recordApiUsage({
