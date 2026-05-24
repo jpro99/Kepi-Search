@@ -307,17 +307,26 @@ export function ReviewQueue({
                 </p>
               ) : null}
 
-              {item.imageBasedEmail ? (
-                <p className="mt-2 rounded-md border border-red-500/60 bg-red-500/10 px-2 py-1 text-xs text-red-700 dark:text-red-200">
-                  Image-based email — please fill in the details below
-                </p>
-              ) : null}
-
-              <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-700 dark:text-amber-200">
-                {item.reasons.map((reason) => (
-                  <li key={reason}>{reason}</li>
-                ))}
-              </ul>
+              {(() => {
+                const visibleReasons = item.imageBasedEmail
+                  ? item.reasons.filter(
+                      (reason) =>
+                        !/image-based email/iu.test(reason) &&
+                        !/forward a text version/iu.test(reason) &&
+                        !/please add this reservation manually/iu.test(reason),
+                    )
+                  : item.reasons;
+                if (visibleReasons.length === 0) {
+                  return null;
+                }
+                return (
+                  <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-amber-700 dark:text-amber-200">
+                    {visibleReasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                );
+              })()}
 
               {status === "needs-user-input" ? (
                 <div className="mt-3 rounded-lg border border-red-500/70 bg-red-500/10 p-3">

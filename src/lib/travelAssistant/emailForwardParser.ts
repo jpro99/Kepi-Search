@@ -570,9 +570,6 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
   const { parsedText, imageBasedEmail } = chooseBodyText(text, html);
   const pdfAttached = hasPdfAttachment(input.attachments);
 
-  if (imageBasedEmail) {
-    parserNotes.push("Image-based email — please fill in the details below");
-  }
   if (pdfAttached) {
     parserNotes.push("This email has a PDF attachment that may contain your confirmation details");
     parserNotes.push("Check the attached PDF for your confirmation code");

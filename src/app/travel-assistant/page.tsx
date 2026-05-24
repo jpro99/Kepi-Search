@@ -4050,7 +4050,11 @@ export default function TravelAssistantPage() {
   };
 
   const handleLookupReviewFlight = useCallback(async (): Promise<void> => {
-    if (!activeDrawer || activeDrawer.kind !== "review" || drawerDraft.type !== "flight") {
+    const looksLikeFlightDraft =
+      drawerDraft.type === "flight" ||
+      /\bflight\b/iu.test(`${drawerDraft.title} ${drawerDraft.provider}`) ||
+      /\b[A-Z]{2,3}\s?\d{1,4}[A-Z]?\b/u.test(drawerDraft.title);
+    if (!activeDrawer || activeDrawer.kind !== "review" || !looksLikeFlightDraft) {
       return;
     }
     const flightNumber = drawerDraft.flightNumber?.trim() ?? "";
@@ -4099,6 +4103,7 @@ export default function TravelAssistantPage() {
 
       setDrawerDraft((prev) => ({
         ...prev,
+        type: "flight",
         flightNumber: payload.flightNumber?.trim() || flightNumber,
         flightAirline: payload.airline?.trim() || flightAirline,
         flightDate: nextFlightDate,
@@ -4853,7 +4858,10 @@ export default function TravelAssistantPage() {
               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
             />
           </label>
-          {activeDrawer.kind === "review" && drawerDraft.type === "flight" ? (
+          {activeDrawer.kind === "review" &&
+          (drawerDraft.type === "flight" ||
+            /\bflight\b/iu.test(`${drawerDraft.title} ${drawerDraft.provider}`) ||
+            /\b[A-Z]{2,3}\s?\d{1,4}[A-Z]?\b/u.test(drawerDraft.title)) ? (
             <section className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 p-3">
               <p className="text-xs font-semibold text-cyan-100">Flight lookup</p>
               <div className="mt-2 grid gap-3 md:grid-cols-3">
