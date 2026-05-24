@@ -219,6 +219,12 @@ interface DrawerState {
   id: string;
 }
 
+interface PendingDeleteConfirmation {
+  kind: "reservation" | "review";
+  id: string;
+  source: "reservation-card" | "review-card" | "review-drawer";
+}
+
 interface ExportRow {
   owner: string;
   itemType: string;
@@ -1230,6 +1236,7 @@ function normalizeCoordinates(members: FamilyMember[]): Array<{ member: FamilyMe
 }
 
 const TRIP_API_ROUTE = "/api/trips";
+const SWIPE_DELETE_REVEAL_PX = 92;
 const EMAIL_HANDLE_COOKIE_NAME = "kepi-email-handle";
 const EMAIL_FORWARD_DOMAIN = "trips.kepitravel.com";
 const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
@@ -1506,6 +1513,12 @@ export default function TravelAssistantPage() {
     lastMessage: null,
     lastShownAtMs: 0,
   });
+  const swipeGestureRef = useRef<{
+    kind: "reservation" | "review";
+    id: string;
+    startX: number;
+    startingOffset: number;
+  } | null>(null);
 
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(INITIAL_FAMILY);
   const [reservations, setReservations] = useState<Reservation[]>(INITIAL_RESERVATIONS);
@@ -1566,6 +1579,9 @@ export default function TravelAssistantPage() {
   const [flightStatusCheckByReservationId, setFlightStatusCheckByReservationId] = useState<
     Record<string, FlightStatusCheckResult>
   >({});
+  const [pendingDeleteConfirmation, setPendingDeleteConfirmation] = useState<PendingDeleteConfirmation | null>(null);
+  const [swipeOffsetByReservationId, setSwipeOffsetByReservationId] = useState<Record<string, number>>({});
+  const [swipeOffsetByReviewId, setSwipeOffsetByReviewId] = useState<Record<string, number>>({});
   const [showAdvancedShortcut] = useState(false);
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [manualReservationModalOpen, setManualReservationModalOpen] = useState(false);
@@ -4399,6 +4415,93 @@ export default function TravelAssistantPage() {
     }
   }, [activeDrawer, drawerDraft, setToast]);
 
+  const persistReviewQueueToTrip = useCallback(
+    (nextQueue: ReviewItem[], context: { reviewId: string; source: string }): void => {
+      const targetTripId = activeTripId ?? trips[0]?.id ?? null;
+      if (!targetTripId) {
+        console.log("[travel-assistant] Review delete persistence skipped: no target trip id.", {
+          reviewId: context.reviewId,
+          source: context.source,
+          activeTripId,
+          tripIds: trips.map((trip) => trip.id),
+        });
+        return;
+      }
+      console.log("[travel-assistant] Review delete API call sent.", {
+        reviewId: context.reviewId,
+        source: context.source,
+        targetTripId,
+        nextQueueLength: nextQueue.length,
+      });
+      void fetch(TRIP_API_ROUTE, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update",
+          id: targetTripId,
+          patch: {
+            reviewQueue: nextQueue,
+          },
+        }),
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            let payload: unknown = null;
+            let rawErrorBody = "";
+            try {
+              payload = await response.json();
+            } catch {
+              payload = null;
+              try {
+                rawErrorBody = await response.text();
+              } catch {
+                rawErrorBody = "";
+              }
+            }
+            const parsedErrorMessage = extractApiErrorMessage(payload);
+            const responseErrorMessage = parsedErrorMessage || rawErrorBody.trim() || `Request failed with ${response.status}`;
+            console.log("[travel-assistant] Review delete API failed.", {
+              reviewId: context.reviewId,
+              source: context.source,
+              targetTripId,
+              status: response.status,
+              payload,
+              rawErrorBody: rawErrorBody || null,
+              responseErrorMessage,
+            });
+            setToast(`Review delete failed: ${responseErrorMessage}`);
+            return;
+          }
+          const payload = (await response.json()) as { trip?: ManagedTrip; trips?: unknown[]; activeTripId?: string | null };
+          console.log("[travel-assistant] Review delete API response received.", {
+            reviewId: context.reviewId,
+            source: context.source,
+            targetTripId,
+            persistedTripId: payload.trip?.id ?? null,
+            activeTripId: payload.activeTripId ?? null,
+          });
+          if (Array.isArray(payload.trips)) {
+            const parsedTrips = payload.trips
+              .map((trip) => normalizeManagedTrip(trip))
+              .filter((trip): trip is ManagedTrip => trip !== null);
+            setTrips(parsedTrips);
+          } else if (payload.trip) {
+            setTrips((previous) => previous.map((trip) => (trip.id === payload.trip?.id ? payload.trip : trip)));
+          }
+        })
+        .catch((error) => {
+          console.log("[travel-assistant] Review delete API threw.", {
+            reviewId: context.reviewId,
+            source: context.source,
+            targetTripId,
+            error: error instanceof Error ? error.message : "unknown",
+          });
+          setToast("Network error while deleting review item.");
+        });
+    },
+    [activeTripId, setToast, trips],
+  );
+
   const handleDeleteReservation = useCallback(
     (reservationId: string): void => {
       console.log("[travel-assistant] Delete click received.", {
@@ -4542,6 +4645,101 @@ export default function TravelAssistantPage() {
     },
     [activeTripId, pushUndoSnapshot, queueMutation, reservations, setToast, trips],
   );
+
+  const requestDeleteConfirmation = useCallback((target: PendingDeleteConfirmation): void => {
+    console.log("[travel-assistant] Delete confirmation requested.", target);
+    if (target.kind === "reservation") {
+      setSwipeOffsetByReservationId((previous) => ({ ...previous, [target.id]: 0 }));
+    } else {
+      setSwipeOffsetByReviewId((previous) => ({ ...previous, [target.id]: 0 }));
+    }
+    setPendingDeleteConfirmation(target);
+  }, []);
+
+  const handleCardTouchStart = useCallback(
+    (kind: "reservation" | "review", id: string, event: React.TouchEvent<HTMLDivElement>): void => {
+      const startX = event.touches[0]?.clientX;
+      if (typeof startX !== "number") {
+        return;
+      }
+      const startingOffset =
+        kind === "reservation" ? swipeOffsetByReservationId[id] ?? 0 : swipeOffsetByReviewId[id] ?? 0;
+      swipeGestureRef.current = {
+        kind,
+        id,
+        startX,
+        startingOffset,
+      };
+      if (kind === "reservation") {
+        setSwipeOffsetByReviewId({});
+      } else {
+        setSwipeOffsetByReservationId({});
+      }
+      console.log("[travel-assistant] Swipe start.", {
+        kind,
+        id,
+        startingOffset,
+      });
+    },
+    [swipeOffsetByReservationId, swipeOffsetByReviewId],
+  );
+
+  const handleCardTouchMove = useCallback((event: React.TouchEvent<HTMLDivElement>): void => {
+    const gesture = swipeGestureRef.current;
+    if (!gesture) {
+      return;
+    }
+    const touchX = event.touches[0]?.clientX;
+    if (typeof touchX !== "number") {
+      return;
+    }
+    const deltaX = gesture.startX - touchX;
+    const nextOffset = Math.max(0, Math.min(SWIPE_DELETE_REVEAL_PX, gesture.startingOffset + deltaX));
+    if (nextOffset > 0) {
+      event.preventDefault();
+    }
+    if (gesture.kind === "reservation") {
+      setSwipeOffsetByReservationId((previous) => ({
+        ...previous,
+        [gesture.id]: nextOffset,
+      }));
+    } else {
+      setSwipeOffsetByReviewId((previous) => ({
+        ...previous,
+        [gesture.id]: nextOffset,
+      }));
+    }
+  }, []);
+
+  const handleCardTouchEnd = useCallback((): void => {
+    const gesture = swipeGestureRef.current;
+    if (!gesture) {
+      return;
+    }
+    const currentOffset =
+      gesture.kind === "reservation"
+        ? swipeOffsetByReservationId[gesture.id] ?? 0
+        : swipeOffsetByReviewId[gesture.id] ?? 0;
+    const finalOffset = currentOffset >= SWIPE_DELETE_REVEAL_PX * 0.5 ? SWIPE_DELETE_REVEAL_PX : 0;
+    if (gesture.kind === "reservation") {
+      setSwipeOffsetByReservationId((previous) => ({
+        ...previous,
+        [gesture.id]: finalOffset,
+      }));
+    } else {
+      setSwipeOffsetByReviewId((previous) => ({
+        ...previous,
+        [gesture.id]: finalOffset,
+      }));
+    }
+    console.log("[travel-assistant] Swipe end.", {
+      kind: gesture.kind,
+      id: gesture.id,
+      currentOffset,
+      finalOffset,
+    });
+    swipeGestureRef.current = null;
+  }, [swipeOffsetByReservationId, swipeOffsetByReviewId]);
 
   const handleCheckFlightStatus = useCallback(
     async (reservationId: string): Promise<void> => {
@@ -4899,11 +5097,53 @@ export default function TravelAssistantPage() {
     acceptReviewWithDraft(reviewId, nextDraft);
   };
 
-  const handleRejectReview = (reviewId: string): void => {
-    pushUndoSnapshot("Review item rejected");
-    setReviewQueue((prev) => prev.filter((item) => item.id !== reviewId));
-    queueMutation("Review item archived.");
-  };
+  const handleRejectReview = useCallback(
+    (reviewId: string, options?: { source?: "review-card" | "review-drawer" | "skip-review" }): void => {
+      const source = options?.source ?? "review-card";
+      console.log("[travel-assistant] Review delete requested.", {
+        reviewId,
+        source,
+      });
+      if (!reviewQueue.some((item) => item.id === reviewId)) {
+        console.log("[travel-assistant] Review delete aborted: item not found.", {
+          reviewId,
+          source,
+          availableReviewIds: reviewQueue.map((item) => item.id),
+        });
+        setToast("Review item not found.");
+        return;
+      }
+      pushUndoSnapshot("Review item rejected");
+      const nextQueue = reviewQueue.filter((item) => item.id !== reviewId);
+      setReviewQueue(nextQueue);
+      const targetTripId = activeTripId ?? trips[0]?.id ?? null;
+      if (targetTripId) {
+        setTrips((previous) =>
+          previous.map((trip) =>
+            trip.id === targetTripId
+              ? {
+                  ...trip,
+                  reviewQueue: nextQueue,
+                }
+              : trip,
+          ),
+        );
+      }
+      console.log("[travel-assistant] Review delete UI updated.", {
+        reviewId,
+        source,
+        targetTripId,
+        beforeCount: reviewQueue.length,
+        afterCount: nextQueue.length,
+      });
+      persistReviewQueueToTrip(nextQueue, { reviewId, source });
+      queueMutation("Review item archived.");
+      if (activeDrawer?.kind === "review" && activeDrawer.id === reviewId) {
+        closeDrawer();
+      }
+    },
+    [activeDrawer, activeTripId, closeDrawer, persistReviewQueueToTrip, pushUndoSnapshot, queueMutation, reviewQueue, setToast, trips],
+  );
 
   const handleSkipReviewAndAdvance = (reviewId: string): void => {
     const currentIndex = reviewQueue.findIndex((item) => item.id === reviewId);
@@ -4916,13 +5156,36 @@ export default function TravelAssistantPage() {
       reviewQueue[currentIndex - 1] ??
       null;
 
-    handleRejectReview(reviewId);
+    handleRejectReview(reviewId, { source: "skip-review" });
     if (nextReview) {
       openDrawer("review", nextReview.id);
       return;
     }
     closeDrawer();
   };
+
+  const handleConfirmPendingDelete = useCallback((): void => {
+    if (!pendingDeleteConfirmation) {
+      return;
+    }
+    console.log("[travel-assistant] Delete confirmation accepted.", pendingDeleteConfirmation);
+    if (pendingDeleteConfirmation.kind === "reservation") {
+      handleDeleteReservation(pendingDeleteConfirmation.id);
+    } else {
+      handleRejectReview(pendingDeleteConfirmation.id, {
+        source: pendingDeleteConfirmation.source === "review-drawer" ? "review-drawer" : "review-card",
+      });
+    }
+    setPendingDeleteConfirmation(null);
+  }, [handleDeleteReservation, handleRejectReview, pendingDeleteConfirmation]);
+
+  const handleCloseDeleteConfirmation = useCallback((): void => {
+    if (!pendingDeleteConfirmation) {
+      return;
+    }
+    console.log("[travel-assistant] Delete confirmation cancelled.", pendingDeleteConfirmation);
+    setPendingDeleteConfirmation(null);
+  }, [pendingDeleteConfirmation]);
 
   const handleReparseReview = (reviewId: string): void => {
     pushUndoSnapshot("Review item re-parsed");
@@ -5694,6 +5957,53 @@ export default function TravelAssistantPage() {
               Skip review
             </button>
           ) : null}
+          {activeDrawer.kind === "review" ? (
+            <button
+              type="button"
+              onClick={() => {
+                console.log("[travel-assistant] Review drawer delete button clicked.", {
+                  reviewId: activeDrawer.id,
+                });
+                requestDeleteConfirmation({
+                  kind: "review",
+                  id: activeDrawer.id,
+                  source: "review-drawer",
+                });
+              }}
+              className="rounded-lg bg-rose-500 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-400"
+            >
+              Delete review item
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  const deleteConfirmationDialog = pendingDeleteConfirmation ? (
+    <div className="fixed inset-0 z-[170] flex items-center justify-center bg-slate-950/70 px-4">
+      <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900 p-4 text-slate-100 shadow-2xl">
+        <h2 className="text-base font-semibold">Delete this reservation? This cannot be undone.</h2>
+        <p className="mt-2 text-sm text-slate-300">
+          {pendingDeleteConfirmation.kind === "review"
+            ? "This will permanently remove the pending review item."
+            : "This will permanently remove the saved reservation."}
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={handleCloseDeleteConfirmation}
+            className="rounded-lg bg-slate-700 px-3 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-600"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleConfirmPendingDelete}
+            className="rounded-lg bg-rose-500 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-400"
+          >
+            Delete
+          </button>
         </div>
       </div>
     </div>
@@ -5946,23 +6256,57 @@ export default function TravelAssistantPage() {
                 <section className="space-y-3">
                   <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Awaiting your review</h2>
                   <div className="grid gap-3 sm:grid-cols-2">
-                    {forwardedReviewItems.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => openDrawer("review", item.id)}
-                        className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-amber-500/40 dark:bg-amber-500/15"
-                      >
-                        <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">Pending review</p>
-                        <p className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
-                          {item.draft.type === "flight" ? getReservationRouteLabel({ ...item.draft, id: item.id, source: "imported" }) : getFriendlyReservationTitle({ ...item.draft, id: item.id, source: "imported" })}
-                        </p>
-                        <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">{item.draft.provider}</p>
-                        <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                          {formatConsumerReservationDate(item.draft.localTime)} • {formatConsumerReservationTime(item.draft.localTime)}
-                        </p>
-                      </button>
-                    ))}
+                    {forwardedReviewItems.map((item) => {
+                      const reviewSwipeOffset = swipeOffsetByReviewId[item.id] ?? 0;
+                      return (
+                        <div key={item.id} className="relative overflow-hidden rounded-2xl">
+                          <div className="absolute inset-y-0 right-0 flex w-[92px] items-stretch">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                console.log("[travel-assistant] Swipe delete review button clicked.", {
+                                  reviewId: item.id,
+                                });
+                                requestDeleteConfirmation({
+                                  kind: "review",
+                                  id: item.id,
+                                  source: "review-card",
+                                });
+                              }}
+                              className="w-full bg-rose-600 px-3 text-sm font-semibold text-white hover:bg-rose-500"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                          <div
+                            className="relative z-10 transition-transform duration-200 ease-out"
+                            style={{ transform: `translateX(-${reviewSwipeOffset}px)` }}
+                            onTouchStart={(event) => handleCardTouchStart("review", item.id, event)}
+                            onTouchMove={handleCardTouchMove}
+                            onTouchEnd={handleCardTouchEnd}
+                            onTouchCancel={handleCardTouchEnd}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => openDrawer("review", item.id)}
+                              className="w-full rounded-2xl border border-amber-200 bg-amber-50 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-amber-500/40 dark:bg-amber-500/15"
+                            >
+                              <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">Pending review</p>
+                              <p className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                                {item.draft.type === "flight"
+                                  ? getReservationRouteLabel({ ...item.draft, id: item.id, source: "imported" })
+                                  : getFriendlyReservationTitle({ ...item.draft, id: item.id, source: "imported" })}
+                              </p>
+                              <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">{item.draft.provider}</p>
+                              <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                                {formatConsumerReservationDate(item.draft.localTime)} •{" "}
+                                {formatConsumerReservationTime(item.draft.localTime)}
+                              </p>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </section>
               ) : null}
@@ -6229,17 +6573,44 @@ export default function TravelAssistantPage() {
                           ? "bg-rose-500/20 text-rose-100 ring-rose-300/60"
                           : "bg-emerald-500/20 text-emerald-100 ring-emerald-300/60";
                     const hotelData = reservation.type === "hotel" ? resolveHotelCardData(reservation) : null;
+                    const reservationSwipeOffset = swipeOffsetByReservationId[reservation.id] ?? 0;
                     return (
-                      <article
-                        key={reservation.id}
-                        className={`overflow-hidden rounded-2xl border shadow-sm ${
-                          reservation.type === "flight"
-                            ? "border-slate-700 bg-slate-950 text-slate-100"
-                            : reservation.type === "hotel"
-                              ? "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50"
-                            : "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
-                        }`}
-                      >
+                      <div key={reservation.id} className="relative overflow-hidden rounded-2xl">
+                        <div className="absolute inset-y-0 right-0 flex w-[92px] items-stretch">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              console.log("[travel-assistant] Swipe delete button clicked.", {
+                                reservationId: reservation.id,
+                              });
+                              requestDeleteConfirmation({
+                                kind: "reservation",
+                                id: reservation.id,
+                                source: "reservation-card",
+                              });
+                            }}
+                            className="w-full bg-rose-600 px-3 text-sm font-semibold text-white hover:bg-rose-500"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                        <div
+                          className="relative z-10 transition-transform duration-200 ease-out"
+                          style={{ transform: `translateX(-${reservationSwipeOffset}px)` }}
+                          onTouchStart={(event) => handleCardTouchStart("reservation", reservation.id, event)}
+                          onTouchMove={handleCardTouchMove}
+                          onTouchEnd={handleCardTouchEnd}
+                          onTouchCancel={handleCardTouchEnd}
+                        >
+                          <article
+                            className={`overflow-hidden rounded-2xl border shadow-sm ${
+                              reservation.type === "flight"
+                                ? "border-slate-700 bg-slate-950 text-slate-100"
+                                : reservation.type === "hotel"
+                                  ? "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50"
+                                : "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
+                            }`}
+                          >
                         <button
                           type="button"
                           onClick={() =>
@@ -6391,7 +6762,11 @@ export default function TravelAssistantPage() {
                               console.log("[travel-assistant] Delete button clicked.", {
                                 reservationId: reservation.id,
                               });
-                              handleDeleteReservation(reservation.id);
+                              requestDeleteConfirmation({
+                                kind: "reservation",
+                                id: reservation.id,
+                                source: "reservation-card",
+                              });
                             }}
                             className="rounded-lg bg-rose-500 px-3 py-1.5 font-semibold text-white transition hover:bg-rose-400"
                           >
@@ -6522,6 +6897,8 @@ export default function TravelAssistantPage() {
                           </div>
                         ) : null}
                       </article>
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
@@ -6683,6 +7060,7 @@ export default function TravelAssistantPage() {
           {toast ?? ""}
         </div>
         {activeDrawerPanel}
+        {deleteConfirmationDialog}
         {toast ? (
           <div
             role="status"
@@ -7534,6 +7912,7 @@ export default function TravelAssistantPage() {
       <div aria-live="polite" aria-atomic="true" className="sr-only">
         {toast ?? ""}
       </div>
+      {deleteConfirmationDialog}
 
       {toast ? (
         <div
