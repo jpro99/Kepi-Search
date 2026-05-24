@@ -8,7 +8,6 @@ import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import {
   createTrip,
-  deleteReservationFromTrip,
   deleteTrip,
   getActiveTrip,
   getTrip,
@@ -439,31 +438,43 @@ export async function DELETE(req: Request) {
       payload: parsed.data,
     });
     if ("action" in parsed.data && parsed.data.action === "delete-reservation") {
-      const result = await deleteReservationFromTrip(
-        {
-          reservationId: parsed.data.reservationId,
-          tripId: parsed.data.tripId,
-        },
-        auth.userId,
-      );
-      if (!result.removed || !result.trip) {
+      const tripsBeforeDelete = await listTrips(auth.userId);
+      const targetTrip = parsed.data.tripId
+        ? tripsBeforeDelete.find((trip) => trip.id === parsed.data.tripId) ?? null
+        : tripsBeforeDelete.find((trip) =>
+            trip.reservations.some((reservation) => reservation.id === parsed.data.reservationId),
+          ) ?? null;
+      if (!targetTrip) {
         return NextResponse.json(
           { error: "Reservation not found in trip." },
           { status: 404, headers: auth.headers },
         );
       }
+      const nextReservations = targetTrip.reservations.filter(
+        (reservation) => reservation.id !== parsed.data.reservationId,
+      );
+      if (nextReservations.length === targetTrip.reservations.length) {
+        return NextResponse.json(
+          { error: "Reservation not found in trip." },
+          { status: 404, headers: auth.headers },
+        );
+      }
+      const updatedTrip = await updateTrip(targetTrip.id, { reservations: nextReservations }, auth.userId);
+      if (!updatedTrip) {
+        return NextResponse.json({ error: "Trip not found" }, { status: 404, headers: auth.headers });
+      }
       const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
       console.log("[/api/trips] DELETE reservation response sent.", {
         userId: auth.userId,
-        tripId: result.trip.id,
-        beforeCount: result.beforeCount,
-        afterCount: result.afterCount,
+        tripId: updatedTrip.id,
+        beforeCount: targetTrip.reservations.length,
+        afterCount: updatedTrip.reservations.length,
       });
       return NextResponse.json(
         {
           ok: true,
           action: "delete-reservation",
-          trip: result.trip,
+          trip: updatedTrip,
           trips,
           activeTripId: activeTrip?.id ?? null,
           activeTrip,

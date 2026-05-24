@@ -3383,19 +3383,27 @@ export default function TravelAssistantPage() {
 
     setIsProviderCheckRunning(true);
     try {
+      const travelUpdateRequestBody = {
+        mode: updateMode,
+        reservations: providerEligibleReservations,
+        nowIso: new Date(nowMs).toISOString(),
+      };
+      if (providerEligibleReservations.some((reservation) => reservation.type === "flight")) {
+        console.info("[travel-assistant] flight status lookup request", travelUpdateRequestBody);
+      }
       const response = await fetch("/api/travel-updates", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: updateMode,
-          reservations: providerEligibleReservations,
-          nowIso: new Date(nowMs).toISOString(),
-        }),
+        body: JSON.stringify(travelUpdateRequestBody),
       });
       if (!response.ok) {
         throw new Error(`Transport updates API returned ${response.status}`);
       }
       const result = (await response.json()) as TravelUpdateCheckResult;
+      if (providerEligibleReservations.some((reservation) => reservation.type === "flight")) {
+        console.info("[travel-assistant] flight status lookup response", result);
+      }
       setLastProviderCheckAt(new Date().toISOString());
       setLastProviderAttempts(result.attempts);
       setProviderCircuitOpen(result.circuitOpen);
@@ -4319,8 +4327,15 @@ export default function TravelAssistantPage() {
         airline: flightAirline,
         flightDate,
       });
+      console.info("[travel-assistant] review flight lookup request", {
+        action: "flight-lookup",
+        flightNumber,
+        airline: flightAirline,
+        flightDate,
+      });
       const response = await fetch(`/api/travel-updates?${params.toString()}`, {
         method: "GET",
+        credentials: "include",
         cache: "no-store",
       });
       const payload = (await response.json()) as {
@@ -4334,6 +4349,10 @@ export default function TravelAssistantPage() {
         arrivalTime?: string;
         flightStatus?: string;
       };
+      console.info("[travel-assistant] review flight lookup response", {
+        status: response.status,
+        payload,
+      });
       if (!response.ok || payload.error) {
         throw new Error(payload.error ?? `Flight lookup failed (${response.status})`);
       }
@@ -4429,6 +4448,7 @@ export default function TravelAssistantPage() {
         });
         void fetch(TRIP_API_ROUTE, {
           method: "DELETE",
+          credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             action: "delete-reservation",
@@ -4624,8 +4644,15 @@ export default function TravelAssistantPage() {
           airline: lookupInput.airline,
           flightDate: lookupInput.flightDate,
         });
+        console.info("[travel-assistant] card flight lookup request", {
+          action: "flight-lookup",
+          flightNumber: lookupInput.flightNumber,
+          airline: lookupInput.airline,
+          flightDate: lookupInput.flightDate,
+        });
         const response = await fetch(`/api/travel-updates?${params.toString()}`, {
           method: "GET",
+          credentials: "include",
           cache: "no-store",
         });
         const payload = (await response.json()) as {
@@ -4645,6 +4672,10 @@ export default function TravelAssistantPage() {
           onTime?: boolean | null;
           flightStatus?: string;
         };
+        console.info("[travel-assistant] card flight lookup response", {
+          status: response.status,
+          payload,
+        });
         if (!response.ok || payload.error) {
           throw new Error(payload.error ?? `Flight lookup failed (${response.status})`);
         }
@@ -5628,6 +5659,18 @@ export default function TravelAssistantPage() {
           >
             Save changes
           </button>
+          {activeDrawer.kind === "reservation" ? (
+            <button
+              type="button"
+              onClick={() => {
+                handleDeleteReservation(activeDrawer.id);
+                closeDrawer();
+              }}
+              className="rounded-lg bg-red-500 px-3 py-2 text-sm font-semibold text-white hover:bg-red-400"
+            >
+              Delete reservation
+            </button>
+          ) : null}
           {activeDrawer.kind === "review" ? (
             <button
               type="button"

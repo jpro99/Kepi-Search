@@ -198,6 +198,15 @@ export async function GET(req: Request) {
   lookupUrl.searchParams.set("flight_iata", parsed.data.flightNumber);
   lookupUrl.searchParams.set("flight_date", parsed.data.flightDate);
   lookupUrl.searchParams.set("limit", "10");
+  routeLogger.info("Flight lookup request.", {
+    requestQuery: parsed.data,
+    providerRequest: {
+      endpoint: AVIATIONSTACK_BASE_URL,
+      flight_iata: parsed.data.flightNumber,
+      flight_date: parsed.data.flightDate,
+      limit: "10",
+    },
+  });
 
   try {
     const response = await fetch(lookupUrl, { method: "GET", cache: "no-store" });
@@ -225,51 +234,53 @@ export async function GET(req: Request) {
       );
     }
 
-    return NextResponse.json(
-      {
-        flightNumber: bestMatch.flight.iata ?? parsed.data.flightNumber,
-        airline: bestMatch.airline.name ?? parsed.data.airline,
-        flightDate: parsed.data.flightDate,
-        departureAirport: bestMatch.departure.iata ?? bestMatch.departure.airport ?? "",
-        arrivalAirport: bestMatch.arrival.iata ?? bestMatch.arrival.airport ?? "",
-        departureTime: bestMatch.departure.estimated ?? bestMatch.departure.scheduled ?? "",
-        arrivalTime: bestMatch.arrival.estimated ?? bestMatch.arrival.scheduled ?? "",
-        departureTerminal: bestMatch.departure.terminal ?? "",
-        departureGate: bestMatch.departure.gate ?? "",
-        arrivalTerminal: bestMatch.arrival.terminal ?? "",
-        arrivalGate: bestMatch.arrival.gate ?? "",
-        delayMinutes:
+    const responseBody = {
+      flightNumber: bestMatch.flight.iata ?? parsed.data.flightNumber,
+      airline: bestMatch.airline.name ?? parsed.data.airline,
+      flightDate: parsed.data.flightDate,
+      departureAirport: bestMatch.departure.iata ?? bestMatch.departure.airport ?? "",
+      arrivalAirport: bestMatch.arrival.iata ?? bestMatch.arrival.airport ?? "",
+      departureTime: bestMatch.departure.estimated ?? bestMatch.departure.scheduled ?? "",
+      arrivalTime: bestMatch.arrival.estimated ?? bestMatch.arrival.scheduled ?? "",
+      departureTerminal: bestMatch.departure.terminal ?? "",
+      departureGate: bestMatch.departure.gate ?? "",
+      arrivalTerminal: bestMatch.arrival.terminal ?? "",
+      arrivalGate: bestMatch.arrival.gate ?? "",
+      delayMinutes:
+        typeof bestMatch.departure.delay === "number"
+          ? Math.max(0, Math.round(bestMatch.departure.delay))
+          : typeof bestMatch.arrival.delay === "number"
+            ? Math.max(0, Math.round(bestMatch.arrival.delay))
+            : null,
+      onTime: (() => {
+        const status = (bestMatch.flight_status ?? "").trim().toLowerCase();
+        const delay =
           typeof bestMatch.departure.delay === "number"
-            ? Math.max(0, Math.round(bestMatch.departure.delay))
+            ? bestMatch.departure.delay
             : typeof bestMatch.arrival.delay === "number"
-              ? Math.max(0, Math.round(bestMatch.arrival.delay))
-              : null,
-        onTime: (() => {
-          const status = (bestMatch.flight_status ?? "").trim().toLowerCase();
-          const delay =
-            typeof bestMatch.departure.delay === "number"
-              ? bestMatch.departure.delay
-              : typeof bestMatch.arrival.delay === "number"
-                ? bestMatch.arrival.delay
-                : null;
-          if (typeof delay === "number") {
-            return delay <= 0;
-          }
-          if (status.includes("delay")) {
-            return false;
-          }
-          if (status === "scheduled" || status === "active" || status === "on-time" || status === "on time") {
-            return true;
-          }
-          if (status === "cancelled" || status === "canceled" || status === "diverted") {
-            return false;
-          }
-          return null;
-        })(),
-        flightStatus: bestMatch.flight_status ?? "unknown",
-      },
-      { headers: rateLimit.headers },
-    );
+              ? bestMatch.arrival.delay
+              : null;
+        if (typeof delay === "number") {
+          return delay <= 0;
+        }
+        if (status.includes("delay")) {
+          return false;
+        }
+        if (status === "scheduled" || status === "active" || status === "on-time" || status === "on time") {
+          return true;
+        }
+        if (status === "cancelled" || status === "canceled" || status === "diverted") {
+          return false;
+        }
+        return null;
+      })(),
+      flightStatus: bestMatch.flight_status ?? "unknown",
+    };
+    routeLogger.info("Flight lookup response.", {
+      responseBody,
+    });
+
+    return NextResponse.json(responseBody, { headers: rateLimit.headers });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown flight lookup error.";
     routeLogger.warn("Flight lookup failed.", { error: message });
@@ -324,6 +335,12 @@ export async function POST(req: Request) {
   }
 
   const effectiveNowIso = parsed.data.nowIso ?? new Date().toISOString();
+  const hasFlightLookup = parsed.data.reservations.some((reservation) => reservation.type === "flight");
+  if (hasFlightLookup) {
+    routeLogger.info("Travel update flight lookup request.", {
+      requestBody: parsed.data,
+    });
+  }
   await persistTravelRuntimeState({
     reservations: parsed.data.reservations,
     mode: parsed.data.mode,
@@ -367,9 +384,16 @@ export async function POST(req: Request) {
     });
   }
 
-  return NextResponse.json({
+  const responseBody = {
     ...result,
     updates: audit.freshUpdates,
     audit: audit.summary,
-  });
+  };
+  if (hasFlightLookup) {
+    routeLogger.info("Travel update flight lookup response.", {
+      responseBody,
+    });
+  }
+
+  return NextResponse.json(responseBody);
 }
