@@ -139,6 +139,12 @@ interface ReservationDraft {
   flightDepartureTime?: string;
   flightArrivalTime?: string;
   flightStatus?: string;
+  flightDepartureGate?: string;
+  flightDepartureTerminal?: string;
+  flightArrivalGate?: string;
+  flightArrivalTerminal?: string;
+  flightDelayMinutes?: number;
+  flightOnTime?: boolean;
 }
 
 interface Reservation extends ReservationDraft {
@@ -273,6 +279,16 @@ interface UpdateFeedItem {
   detail: string;
   provider: string;
   appliedAt: string;
+}
+
+interface FlightStatusCheckResult {
+  flightStatus: string;
+  delayMinutes: number | null;
+  departureGate: string;
+  onTime: boolean | null;
+  checkedAt: string;
+  busy: boolean;
+  error: string | null;
 }
 
 interface ManagedTrip {
@@ -749,6 +765,25 @@ function getFlightNumberLabel(reservation: Reservation): string {
     return providerMatch.replace(/\s+/gu, " ");
   }
   return "Flight # pending";
+}
+
+function extractFlightLookupInput(reservation: Reservation): {
+  flightNumber: string;
+  airline: string;
+  flightDate: string;
+} | null {
+  const inferredFlightNumber =
+    reservation.flightNumber?.trim() ||
+    reservation.title.match(/\b([A-Z0-9]{2,3}\s?\d{1,4}[A-Z]?)\b/u)?.[1] ||
+    reservation.provider.match(/\b([A-Z0-9]{2,3}\s?\d{1,4}[A-Z]?)\b/u)?.[1] ||
+    "";
+  const flightNumber = inferredFlightNumber.replace(/\s+/gu, "").toUpperCase();
+  const airline = reservation.flightAirline?.trim() || reservation.provider.trim();
+  const flightDate = reservation.flightDate?.trim() || extractDateFromReservationLocalTime(reservation.localTime) || "";
+  if (!flightNumber || !airline || !flightDate) {
+    return null;
+  }
+  return { flightNumber, airline, flightDate };
 }
 
 function getReservationRouteLabel(reservation: Reservation): string {
@@ -1332,6 +1367,9 @@ export default function TravelAssistantPage() {
   const [isAdminUser, setIsAdminUser] = useState(false);
   const [consumerAvatarMenuOpen, setConsumerAvatarMenuOpen] = useState(false);
   const [expandedConsumerReservationId, setExpandedConsumerReservationId] = useState<string | null>(null);
+  const [flightStatusCheckByReservationId, setFlightStatusCheckByReservationId] = useState<
+    Record<string, FlightStatusCheckResult>
+  >({});
   const [showAdvancedShortcut] = useState(false);
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [manualReservationModalOpen, setManualReservationModalOpen] = useState(false);
@@ -2198,6 +2236,10 @@ export default function TravelAssistantPage() {
 
   const unresolvedReviewCount = reviewQueue.length;
   const unresolvedReadinessCount = readinessItems.filter((item) => item.required && !item.complete).length;
+  const flightStatusCheckMapByReservationId = useMemo(
+    () => new Map(Object.entries(flightStatusCheckByReservationId)),
+    [flightStatusCheckByReservationId],
+  );
   const assignmentTravelerOptions = useMemo(() => {
     const travelerIds = new Set<string>();
     const collectAssignees = (assignees: string[] | undefined): void => {
@@ -4142,6 +4184,185 @@ export default function TravelAssistantPage() {
     }
   }, [activeDrawer, drawerDraft, setToast]);
 
+  const handleDeleteReservation = useCallback(
+    (reservationId: string): void => {
+      const reservation = reservations.find((item) => item.id === reservationId);
+      if (!reservation) {
+        setToast("Reservation not found.");
+        return;
+      }
+      const reservationLabel = reservation.title || reservation.provider || "this reservation";
+      if (typeof window !== "undefined") {
+        const shouldDelete = window.confirm(`Delete ${reservationLabel}?`);
+        if (!shouldDelete) {
+          return;
+        }
+      }
+      pushUndoSnapshot("Reservation deleted");
+      setReservations((prev) => prev.filter((item) => item.id !== reservationId));
+      setExpandedConsumerReservationId((prev) => (prev === reservationId ? null : prev));
+      setHighlightedReservationId((prev) => (prev === reservationId ? null : prev));
+      setFlightStatusCheckByReservationId((prev) => {
+        if (!(reservationId in prev)) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[reservationId];
+        return next;
+      });
+      queueMutation("Reservation deleted.", {
+        key: "reservation-delete",
+        reservationId,
+      });
+    },
+    [pushUndoSnapshot, queueMutation, reservations, setToast],
+  );
+
+  const handleCheckFlightStatus = useCallback(
+    async (reservationId: string): Promise<void> => {
+      const reservation = reservations.find((item) => item.id === reservationId);
+      if (!reservation) {
+        setToast("Reservation not found.");
+        return;
+      }
+      if (reservation.type !== "flight") {
+        setToast("Status lookup is available for flight reservations only.");
+        return;
+      }
+
+      const lookupInput = extractFlightLookupInput(reservation);
+      if (!lookupInput) {
+        const errorMessage = "Add flight number, airline, and date before checking status.";
+        setFlightStatusCheckByReservationId((prev) => ({
+          ...prev,
+          [reservationId]: {
+            flightStatus: prev[reservationId]?.flightStatus ?? reservation.flightStatus ?? "",
+            delayMinutes: prev[reservationId]?.delayMinutes ?? reservation.flightDelayMinutes ?? null,
+            departureGate: prev[reservationId]?.departureGate ?? reservation.flightDepartureGate ?? "",
+            onTime: prev[reservationId]?.onTime ?? reservation.flightOnTime ?? null,
+            checkedAt: new Date().toISOString(),
+            busy: false,
+            error: errorMessage,
+          },
+        }));
+        setToast(errorMessage);
+        return;
+      }
+
+      setFlightStatusCheckByReservationId((prev) => ({
+        ...prev,
+        [reservationId]: {
+          flightStatus: prev[reservationId]?.flightStatus ?? reservation.flightStatus ?? "",
+          delayMinutes: prev[reservationId]?.delayMinutes ?? reservation.flightDelayMinutes ?? null,
+          departureGate: prev[reservationId]?.departureGate ?? reservation.flightDepartureGate ?? "",
+          onTime: prev[reservationId]?.onTime ?? reservation.flightOnTime ?? null,
+          checkedAt: new Date().toISOString(),
+          busy: true,
+          error: null,
+        },
+      }));
+
+      try {
+        const params = new URLSearchParams({
+          action: "flight-lookup",
+          flightNumber: lookupInput.flightNumber,
+          airline: lookupInput.airline,
+          flightDate: lookupInput.flightDate,
+        });
+        const response = await fetch(`/api/travel-updates?${params.toString()}`, {
+          method: "GET",
+          cache: "no-store",
+        });
+        const payload = (await response.json()) as {
+          error?: string;
+          flightNumber?: string;
+          airline?: string;
+          flightDate?: string;
+          departureAirport?: string;
+          arrivalAirport?: string;
+          departureTime?: string;
+          arrivalTime?: string;
+          departureTerminal?: string;
+          departureGate?: string;
+          arrivalTerminal?: string;
+          arrivalGate?: string;
+          delayMinutes?: number | null;
+          onTime?: boolean | null;
+          flightStatus?: string;
+        };
+        if (!response.ok || payload.error) {
+          throw new Error(payload.error ?? `Flight lookup failed (${response.status})`);
+        }
+
+        const nextStatus = payload.flightStatus?.trim() || reservation.flightStatus || "unknown";
+        const nextDepartureGate = payload.departureGate?.trim() ?? "";
+        const nextDelayMinutes =
+          typeof payload.delayMinutes === "number" && Number.isFinite(payload.delayMinutes)
+            ? payload.delayMinutes
+            : null;
+        const nextOnTime = typeof payload.onTime === "boolean" ? payload.onTime : null;
+
+        setFlightStatusCheckByReservationId((prev) => ({
+          ...prev,
+          [reservationId]: {
+            flightStatus: nextStatus,
+            delayMinutes: nextDelayMinutes,
+            departureGate: nextDepartureGate,
+            onTime: nextOnTime,
+            checkedAt: new Date().toISOString(),
+            busy: false,
+            error: null,
+          },
+        }));
+
+        setReservations((prev) =>
+          prev.map((item) =>
+            item.id === reservationId
+              ? {
+                  ...item,
+                  flightNumber: payload.flightNumber?.trim() || lookupInput.flightNumber,
+                  flightAirline: payload.airline?.trim() || lookupInput.airline,
+                  flightDate: payload.flightDate?.trim() || lookupInput.flightDate,
+                  flightDepartureAirport: payload.departureAirport?.trim() || item.flightDepartureAirport || "",
+                  flightArrivalAirport: payload.arrivalAirport?.trim() || item.flightArrivalAirport || "",
+                  flightDepartureTime: payload.departureTime?.trim() || item.flightDepartureTime || "",
+                  flightArrivalTime: payload.arrivalTime?.trim() || item.flightArrivalTime || "",
+                  flightStatus: nextStatus,
+                  flightDepartureGate: nextDepartureGate || item.flightDepartureGate || "",
+                  flightDepartureTerminal: payload.departureTerminal?.trim() || item.flightDepartureTerminal || "",
+                  flightArrivalGate: payload.arrivalGate?.trim() || item.flightArrivalGate || "",
+                  flightArrivalTerminal: payload.arrivalTerminal?.trim() || item.flightArrivalTerminal || "",
+                  flightDelayMinutes: nextDelayMinutes ?? item.flightDelayMinutes,
+                  flightOnTime: nextOnTime ?? item.flightOnTime,
+                }
+              : item,
+          ),
+        );
+        queueMutation("Flight status refreshed.", {
+          key: "flight-status-check",
+          reservationId,
+          fingerprint: `flight-status:${reservationId}:${Date.now()}`,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to check flight status.";
+        setFlightStatusCheckByReservationId((prev) => ({
+          ...prev,
+          [reservationId]: {
+            flightStatus: prev[reservationId]?.flightStatus ?? reservation.flightStatus ?? "",
+            delayMinutes: prev[reservationId]?.delayMinutes ?? reservation.flightDelayMinutes ?? null,
+            departureGate: prev[reservationId]?.departureGate ?? reservation.flightDepartureGate ?? "",
+            onTime: prev[reservationId]?.onTime ?? reservation.flightOnTime ?? null,
+            checkedAt: new Date().toISOString(),
+            busy: false,
+            error: message,
+          },
+        }));
+        setToast(message);
+      }
+    },
+    [queueMutation, reservations, setToast],
+  );
+
   const normalizeDuplicateValue = (value: string): string => value.trim().toLowerCase();
 
   const isDuplicateReservation = (reservation: Reservation, draft: ReservationDraft): boolean => {
@@ -4740,6 +4961,34 @@ export default function TravelAssistantPage() {
   const getConsumerReservationStatus = useCallback(
     (reservation: Reservation): { label: string; className: string } => {
       if (reservation.type === "flight") {
+        const checkedStatus = flightStatusCheckByReservationId[reservation.id];
+        if (checkedStatus?.busy) {
+          return {
+            label: "Checking...",
+            className: "bg-cyan-500/15 text-cyan-700 ring-1 ring-cyan-500/30 dark:text-cyan-100",
+          };
+        }
+        if (checkedStatus && !checkedStatus.error) {
+          const delayed =
+            checkedStatus.onTime === false ||
+            (typeof checkedStatus.delayMinutes === "number" && checkedStatus.delayMinutes > 0) ||
+            /\b(delay|cancel)\b/iu.test(checkedStatus.flightStatus);
+          if (delayed) {
+            return {
+              label:
+                typeof checkedStatus.delayMinutes === "number" && checkedStatus.delayMinutes > 0
+                  ? `Delayed ${checkedStatus.delayMinutes}m`
+                  : "Delayed",
+              className: "bg-amber-500/15 text-amber-700 ring-1 ring-amber-500/30 dark:text-amber-200",
+            };
+          }
+          if (checkedStatus.onTime === true) {
+            return {
+              label: "On time",
+              className: "bg-emerald-500/15 text-emerald-700 ring-1 ring-emerald-500/30 dark:text-emerald-200",
+            };
+          }
+        }
         const flightStatus = flightLiveStatusByReservationId.get(reservation.id);
         if (flightStatus === "delayed") {
           return {
@@ -4769,7 +5018,7 @@ export default function TravelAssistantPage() {
         className: "bg-slate-900/10 text-slate-700 ring-1 ring-slate-400/30 dark:text-slate-200",
       };
     },
-    [flightLiveStatusByReservationId],
+    [flightLiveStatusByReservationId, flightStatusCheckByReservationId],
   );
 
   const activeDrawerPanel = activeDrawer ? (
@@ -5192,20 +5441,22 @@ export default function TravelAssistantPage() {
                           className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
                         >
                           <div className="flex items-start justify-between gap-2">
-                            <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                            <p className="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
                               {reservation.provider || "Airline pending"} • {getFlightNumberLabel(reservation)}
                             </p>
-                            <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${statusMeta.className}`}>
+                            <span
+                              className={`max-w-24 rounded-full px-2 py-1 text-center text-[11px] font-semibold leading-tight ${statusMeta.className}`}
+                            >
                               {statusMeta.label}
                             </span>
                           </div>
-                          <p className="mt-2 text-base font-semibold text-slate-900 dark:text-slate-100">
+                          <p className="mt-2 break-words text-base font-semibold text-slate-900 dark:text-slate-100">
                             {getReservationRouteLabel(reservation)}
                           </p>
-                          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                          <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">
                             {formatConsumerReservationDate(reservation.localTime)} • {formatConsumerReservationTime(reservation.localTime)}
                           </p>
-                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          <p className="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
                             Confirmation: {reservation.confirmationCode || "Not set"}
                           </p>
                         </button>
@@ -5230,14 +5481,16 @@ export default function TravelAssistantPage() {
                         onClick={() => openDrawer("reservation", reservation.id)}
                         className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
                       >
-                        <p className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                        <p className="break-words text-base font-semibold text-slate-900 dark:text-slate-100">
                           {reservation.provider || getFriendlyReservationTitle(reservation)}
                         </p>
-                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                        <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">
                           Check-in {formatConsumerReservationDate(reservation.localTime)} • {formatConsumerReservationTime(reservation.localTime)}
                         </p>
-                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{reservation.location || "Location pending"}</p>
-                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">
+                          {reservation.location || "Location pending"}
+                        </p>
+                        <p className="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
                           Confirmation: {reservation.confirmationCode || "Not set"}
                         </p>
                       </button>
@@ -5384,7 +5637,10 @@ export default function TravelAssistantPage() {
                   }}
                   className="w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900 shadow-sm transition hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-100 dark:hover:bg-amber-500/20"
                 >
-                  {reviewQueue.length} reservation{reviewQueue.length === 1 ? "" : "s"} are waiting in your review queue — tap to review now
+                  <span className="block break-words">
+                    {reviewQueue.length} reservation{reviewQueue.length === 1 ? "" : "s"} are waiting in your review queue — tap to
+                    review now
+                  </span>
                 </button>
               ) : null}
 
@@ -5393,7 +5649,7 @@ export default function TravelAssistantPage() {
                   <p className="text-xl font-semibold text-slate-900 dark:text-slate-100">No reservations yet</p>
                   <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-500/40 dark:bg-emerald-500/10">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <code className="text-sm font-semibold text-emerald-900 dark:text-emerald-100">
+                      <code className="break-all text-sm font-semibold text-emerald-900 dark:text-emerald-100">
                         {emptyStateForwardAddress}
                       </code>
                       <button
@@ -5423,6 +5679,7 @@ export default function TravelAssistantPage() {
                   {consumerReservationsSorted.map((reservation) => {
                     const expanded = expandedConsumerReservationId === reservation.id;
                     const statusMeta = getConsumerReservationStatus(reservation);
+                    const flightStatusCheck = flightStatusCheckByReservationId[reservation.id] ?? null;
                     return (
                       <article
                         key={reservation.id}
@@ -5439,46 +5696,103 @@ export default function TravelAssistantPage() {
                         >
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                              <p className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
                                 {getReservationEmoji(reservation.type)} {getFriendlyReservationTitle(reservation)}
                               </p>
-                              <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                              <p className="mt-1 truncate text-xs text-slate-600 dark:text-slate-300">
                                 {formatConsumerReservationDate(reservation.localTime)} •{" "}
                                 {formatConsumerReservationTime(reservation.localTime)}
                               </p>
                             </div>
-                            <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${statusMeta.className}`}>
+                            <span
+                              className={`max-w-24 rounded-full px-2 py-1 text-center text-[11px] font-semibold leading-tight ${statusMeta.className}`}
+                            >
                               {statusMeta.label}
                             </span>
                           </div>
                         </button>
                         {expanded ? (
                           <div className="border-t border-slate-200 px-4 py-3 text-sm text-slate-700 dark:border-slate-800 dark:text-slate-200">
-                            <p>
+                            <p className="break-words">
                               <span className="font-semibold">Provider:</span> {reservation.provider || "Not set"}
                             </p>
-                            <p className="mt-1">
+                            <p className="mt-1 break-words">
                               <span className="font-semibold">Location:</span> {reservation.location || "Not set"}
                             </p>
-                            <p className="mt-1">
+                            <p className="mt-1 break-words">
                               <span className="font-semibold">Timezone:</span> {reservation.timezone || "Not set"}
                             </p>
-                            <p className="mt-1">
+                            <p className="mt-1 break-words">
                               <span className="font-semibold">Confirmation:</span>{" "}
                               {reservation.confirmationCode || "Not set"}
                             </p>
+                            {reservation.type === "flight" && flightStatusCheck ? (
+                              <div className="mt-2 rounded-lg border border-slate-200 bg-slate-100 p-2 text-xs dark:border-slate-700 dark:bg-slate-950/60">
+                                {flightStatusCheck.error ? (
+                                  <p className="break-words text-rose-700 dark:text-rose-300">
+                                    Status error: {flightStatusCheck.error}
+                                  </p>
+                                ) : (
+                                  <>
+                                    <p className="break-words">
+                                      <span className="font-semibold">Status:</span>{" "}
+                                      {flightStatusCheck.flightStatus || "Unknown"}
+                                    </p>
+                                    <p className="break-words">
+                                      <span className="font-semibold">Gate:</span>{" "}
+                                      {flightStatusCheck.departureGate || "Not available"}
+                                    </p>
+                                    <p className="break-words">
+                                      <span className="font-semibold">Delay:</span>{" "}
+                                      {typeof flightStatusCheck.delayMinutes === "number"
+                                        ? `${flightStatusCheck.delayMinutes} min`
+                                        : "No delay data"}
+                                    </p>
+                                    <p className="break-words">
+                                      <span className="font-semibold">On time:</span>{" "}
+                                      {flightStatusCheck.onTime === null
+                                        ? "Unknown"
+                                        : flightStatusCheck.onTime
+                                          ? "Yes"
+                                          : "No"}
+                                    </p>
+                                  </>
+                                )}
+                              </div>
+                            ) : null}
                             {reservation.notes ? (
-                              <p className="mt-1">
+                              <p className="mt-1 break-words">
                                 <span className="font-semibold">Notes:</span> {reservation.notes}
                               </p>
                             ) : null}
-                            <button
-                              type="button"
-                              onClick={() => openDrawer("reservation", reservation.id)}
-                              className="mt-3 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-slate-200"
-                            >
-                              Open full details
-                            </button>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {reservation.type === "flight" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    void handleCheckFlightStatus(reservation.id);
+                                  }}
+                                  disabled={flightStatusCheck?.busy === true}
+                                  className="rounded-lg bg-cyan-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {flightStatusCheck?.busy ? "Checking..." : "Check status"}
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                onClick={() => openDrawer("reservation", reservation.id)}
+                                className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-slate-200"
+                              >
+                                Open full details
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteReservation(reservation.id)}
+                                className="rounded-lg bg-rose-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-rose-400"
+                              >
+                                Delete
+                              </button>
+                            </div>
                           </div>
                         ) : null}
                       </article>
@@ -6264,6 +6578,11 @@ export default function TravelAssistantPage() {
                         setToast("Clipboard unavailable.");
                       }
                     }}
+                    onDeleteReservation={handleDeleteReservation}
+                    onCheckFlightStatus={(reservationId) => {
+                      void handleCheckFlightStatus(reservationId);
+                    }}
+                    flightStatusCheckByReservationId={flightStatusCheckMapByReservationId}
                   />
                 </article>
 

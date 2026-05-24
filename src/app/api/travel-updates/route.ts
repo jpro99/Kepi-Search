@@ -45,12 +45,18 @@ const FlightLookupItemSchema = z.object({
     airport: z.string().trim().min(1).nullable().optional(),
     scheduled: z.string().trim().min(1).nullable().optional(),
     estimated: z.string().trim().min(1).nullable().optional(),
+    terminal: z.string().trim().min(1).nullable().optional(),
+    gate: z.string().trim().min(1).nullable().optional(),
+    delay: z.number().finite().nullable().optional(),
   }),
   arrival: z.object({
     iata: z.string().trim().min(1).nullable().optional(),
     airport: z.string().trim().min(1).nullable().optional(),
     scheduled: z.string().trim().min(1).nullable().optional(),
     estimated: z.string().trim().min(1).nullable().optional(),
+    terminal: z.string().trim().min(1).nullable().optional(),
+    gate: z.string().trim().min(1).nullable().optional(),
+    delay: z.number().finite().nullable().optional(),
   }),
   flight_status: z.string().trim().min(1).optional(),
 });
@@ -228,6 +234,38 @@ export async function GET(req: Request) {
         arrivalAirport: bestMatch.arrival.iata ?? bestMatch.arrival.airport ?? "",
         departureTime: bestMatch.departure.estimated ?? bestMatch.departure.scheduled ?? "",
         arrivalTime: bestMatch.arrival.estimated ?? bestMatch.arrival.scheduled ?? "",
+        departureTerminal: bestMatch.departure.terminal ?? "",
+        departureGate: bestMatch.departure.gate ?? "",
+        arrivalTerminal: bestMatch.arrival.terminal ?? "",
+        arrivalGate: bestMatch.arrival.gate ?? "",
+        delayMinutes:
+          typeof bestMatch.departure.delay === "number"
+            ? Math.max(0, Math.round(bestMatch.departure.delay))
+            : typeof bestMatch.arrival.delay === "number"
+              ? Math.max(0, Math.round(bestMatch.arrival.delay))
+              : null,
+        onTime: (() => {
+          const status = (bestMatch.flight_status ?? "").trim().toLowerCase();
+          const delay =
+            typeof bestMatch.departure.delay === "number"
+              ? bestMatch.departure.delay
+              : typeof bestMatch.arrival.delay === "number"
+                ? bestMatch.arrival.delay
+                : null;
+          if (typeof delay === "number") {
+            return delay <= 0;
+          }
+          if (status.includes("delay")) {
+            return false;
+          }
+          if (status === "scheduled" || status === "active" || status === "on-time" || status === "on time") {
+            return true;
+          }
+          if (status === "cancelled" || status === "canceled" || status === "diverted") {
+            return false;
+          }
+          return null;
+        })(),
         flightStatus: bestMatch.flight_status ?? "unknown",
       },
       { headers: rateLimit.headers },

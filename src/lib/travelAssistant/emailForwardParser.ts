@@ -29,6 +29,19 @@ const TIMEZONE_ABBREVIATION_MAP: Record<string, string> = {
   PST: "America/Los_Angeles",
   PDT: "America/Los_Angeles",
 };
+const IANA_TIMEZONE_REGION_PREFIXES = new Set([
+  "Africa",
+  "America",
+  "Antarctica",
+  "Arctic",
+  "Asia",
+  "Atlantic",
+  "Australia",
+  "Etc",
+  "Europe",
+  "Indian",
+  "Pacific",
+]);
 
 const RESERVATION_TYPE_KEYWORDS: Array<{ type: ForwardedReservationType; pattern: RegExp; confidence: number }> = [
   { type: "flight", pattern: /\b(flight|airline|boarding|terminal|gate)\b/iu, confidence: 0.78 },
@@ -231,9 +244,23 @@ function resolveTimezone(text: string): string {
   if (abbrMatch) {
     return TIMEZONE_ABBREVIATION_MAP[abbrMatch[1]] ?? "Etc/UTC";
   }
-  const ianaMatch = text.match(/\b([A-Za-z]+\/[A-Za-z_]+)\b/u);
-  if (ianaMatch) {
-    return ianaMatch[1];
+
+  const ianaMatches = [...text.matchAll(/\b([A-Za-z_]+(?:\/[A-Za-z_+-]+)+)\b/gu)];
+  for (const match of ianaMatches) {
+    const candidate = match[1]?.trim();
+    if (!candidate) {
+      continue;
+    }
+    const region = candidate.split("/")[0] ?? "";
+    if (!IANA_TIMEZONE_REGION_PREFIXES.has(region)) {
+      continue;
+    }
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: candidate });
+      return candidate;
+    } catch {
+      continue;
+    }
   }
   return "Etc/UTC";
 }

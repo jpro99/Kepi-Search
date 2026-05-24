@@ -39,6 +39,20 @@ interface ReservationListProps {
   onOpenReservationDrawer: (reservationId: string) => void;
   onCopyCallScript: (script: string) => void;
   onCopyConfirmationCode: (code: string) => Promise<void>;
+  onDeleteReservation: (reservationId: string) => void;
+  onCheckFlightStatus: (reservationId: string) => void;
+  flightStatusCheckByReservationId: Map<
+    string,
+    {
+      flightStatus: string;
+      delayMinutes: number | null;
+      departureGate: string;
+      onTime: boolean | null;
+      checkedAt: string;
+      busy: boolean;
+      error: string | null;
+    }
+  >;
 }
 
 export function ReservationList({
@@ -56,6 +70,9 @@ export function ReservationList({
   onOpenReservationDrawer,
   onCopyCallScript,
   onCopyConfirmationCode,
+  onDeleteReservation,
+  onCheckFlightStatus,
+  flightStatusCheckByReservationId,
 }: ReservationListProps) {
   const [expandedReservationIds, setExpandedReservationIds] = useState<Record<string, boolean>>({});
 
@@ -131,6 +148,7 @@ export function ReservationList({
         {visibleReservations.map((reservation) => {
           const expanded = expandedReservationIds[reservation.id] === true;
           const statusBadge = getStatusBadge(reservation);
+          const flightStatusCheck = flightStatusCheckByReservationId.get(reservation.id);
           return (
             <div
               key={reservation.id}
@@ -150,12 +168,14 @@ export function ReservationList({
                       <p className="truncate text-sm font-semibold">
                         {reservation.type === "flight" ? getFlightNumber(reservation) : reservation.title}
                       </p>
-                      <p className="text-xs text-slate-600 dark:text-slate-400">
+                      <p className="truncate text-xs text-slate-600 dark:text-slate-400">
                         {reservation.provider} • {reservation.localTime}
                       </p>
                     </div>
                   </div>
-                  <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${statusBadge.className}`}>
+                  <span
+                    className={`shrink-0 rounded-full px-2.5 py-1 text-center text-[11px] font-semibold leading-tight ring-1 ${statusBadge.className}`}
+                  >
                     {statusBadge.label}
                   </span>
                 </div>
@@ -163,25 +183,25 @@ export function ReservationList({
               {expanded ? (
                 <div className="border-t border-slate-200 px-4 pb-4 pt-3 text-sm dark:border-slate-800">
                   <div className="grid gap-2 text-xs text-slate-700 dark:text-slate-300">
-                    <p>
+                    <p className="break-words">
                       <span className="font-semibold">Type:</span> {reservationTypeLabelByType[reservation.type]}
                     </p>
-                    <p>
+                    <p className="break-words">
                       <span className="font-semibold">Where:</span> {reservation.location}
                     </p>
-                    <p>
+                    <p className="break-words">
                       <span className="font-semibold">Time zone:</span> {reservation.timezone}
                     </p>
-                    <p>
+                    <p className="break-words">
                       <span className="font-semibold">People:</span>{" "}
                       {reservation.assignedTo
                         .map((memberId) => familyMembers.find((member) => member.id === memberId)?.name ?? memberId)
                         .join(", ")}
                     </p>
-                    <p>
+                    <p className="break-words">
                       <span className="font-semibold">Confirmation:</span> {reservation.confirmationCode}
                     </p>
-                    <p>
+                    <p className="break-words">
                       <span className="font-semibold">Saved:</span>{" "}
                       {(() => {
                         const reservationPending = pendingOutboxByReservationId.get(reservation.id) ?? 0;
@@ -194,8 +214,44 @@ export function ReservationList({
                         return "Saved";
                       })()}
                     </p>
+                    {reservation.type === "flight" && flightStatusCheck ? (
+                      <div className="rounded-md border border-slate-200 bg-slate-100/70 p-2 dark:border-slate-700 dark:bg-slate-900">
+                        {flightStatusCheck.error ? (
+                          <p className="break-words text-rose-700 dark:text-rose-300">Status error: {flightStatusCheck.error}</p>
+                        ) : (
+                          <>
+                            <p className="break-words">
+                              <span className="font-semibold">Flight status:</span> {flightStatusCheck.flightStatus || "Unknown"}
+                            </p>
+                            <p className="break-words">
+                              <span className="font-semibold">Gate:</span> {flightStatusCheck.departureGate || "Not available"}
+                            </p>
+                            <p className="break-words">
+                              <span className="font-semibold">Delay:</span>{" "}
+                              {typeof flightStatusCheck.delayMinutes === "number"
+                                ? `${flightStatusCheck.delayMinutes} min`
+                                : "No delay data"}
+                            </p>
+                            <p className="break-words">
+                              <span className="font-semibold">On time:</span>{" "}
+                              {flightStatusCheck.onTime === null ? "Unknown" : flightStatusCheck.onTime ? "Yes" : "No"}
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    ) : null}
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    {reservation.type === "flight" ? (
+                      <button
+                        type="button"
+                        onClick={() => onCheckFlightStatus(reservation.id)}
+                        disabled={flightStatusCheck?.busy === true}
+                        className="rounded-md bg-cyan-200 px-2 py-1 ring-1 ring-cyan-300 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-cyan-500/20 dark:ring-cyan-400/40 dark:hover:bg-cyan-500/30"
+                      >
+                        {flightStatusCheck?.busy ? "Checking..." : "Check status"}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => onOpenReservationDrawer(reservation.id)}
@@ -222,6 +278,13 @@ export function ReservationList({
                       className="rounded-md bg-slate-200 px-2 py-1 ring-1 ring-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:ring-slate-700 dark:hover:bg-slate-700"
                     >
                       Copy code
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDeleteReservation(reservation.id)}
+                      className="rounded-md bg-rose-100 px-2 py-1 text-rose-800 ring-1 ring-rose-300 hover:bg-rose-200 dark:bg-rose-500/20 dark:text-rose-100 dark:ring-rose-400/40 dark:hover:bg-rose-500/30"
+                    >
+                      Delete
                     </button>
                   </div>
                 </div>
