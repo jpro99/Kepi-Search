@@ -4618,7 +4618,7 @@ export default function TravelAssistantPage() {
   );
 
   const activeDrawerPanel = activeDrawer ? (
-    <div className="fixed inset-0 z-[60] flex items-end justify-end bg-slate-950/80 p-3 md:p-6">
+    <div className="fixed inset-0 z-[140] flex items-end justify-end bg-slate-950/80 p-3 md:p-6">
       <div
         ref={drawerContainerRef}
         role="dialog"
@@ -4753,8 +4753,8 @@ export default function TravelAssistantPage() {
             <button
               type="button"
               onClick={() => {
-                saveDrawer();
-                handleAcceptReview(activeDrawer.id);
+                acceptReviewWithDraft(activeDrawer.id, drawerDraft);
+                closeDrawer();
               }}
               className="rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
             >
