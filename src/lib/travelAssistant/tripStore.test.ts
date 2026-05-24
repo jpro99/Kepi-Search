@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createTrip,
+  deleteReservationFromTrip,
   deleteTrip,
   getActiveTrip,
   getTrip,
@@ -83,4 +84,50 @@ test("tripStore setActiveTrip switches active id", async () => {
   assert.equal((await getActiveTrip(userId))?.id, first.id);
   await setActiveTrip(second.id, userId);
   assert.equal((await getActiveTrip(userId))?.id, second.id);
+});
+
+test("tripStore deletes reservation by reservation id", async () => {
+  const userId = `trip-store-reservation-delete-${generateId()}`;
+  const reservationId = `res-${generateId()}`;
+  const created = await createTrip(
+    {
+      name: "Trip With Reservation",
+      destination: "Chicago",
+      startDate: "2026-10-01",
+      endDate: "2026-10-03",
+      stage: "airport",
+      reservations: [
+        {
+          id: reservationId,
+          type: "flight",
+          title: "United 142",
+          provider: "United",
+          localTime: "2026-10-01T08:00:00Z",
+          timezone: "Etc/UTC",
+          location: "SFO -> ORD",
+          confirmationCode: "UNIT42",
+          assignedTo: [],
+          stage: "airport",
+          critical: true,
+          confidence: "high",
+          notes: "Window seat",
+          source: "manual",
+        },
+      ],
+    },
+    userId,
+  );
+
+  const deleted = await deleteReservationFromTrip(
+    {
+      tripId: created.id,
+      reservationId,
+    },
+    userId,
+  );
+  assert.equal(deleted.removed, true);
+  assert.equal(deleted.beforeCount, 1);
+  assert.equal(deleted.afterCount, 0);
+  assert.equal(deleted.trip?.id, created.id);
+  assert.equal(deleted.trip?.reservations.length ?? -1, 0);
 });

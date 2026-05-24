@@ -8,6 +8,7 @@ import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import {
   createTrip,
+  deleteReservationFromTrip,
   deleteTrip,
   getActiveTrip,
   getTrip,
@@ -86,9 +87,20 @@ const PutBodySchema = z.discriminatedUnion("action", [
   }),
 ]);
 
-const DeleteBodySchema = z.object({
-  id: z.string().trim().min(1),
-});
+const DeleteBodySchema = z.union([
+  z.object({
+    id: z.string().trim().min(1),
+  }),
+  z.object({
+    action: z.literal("delete-trip"),
+    id: z.string().trim().min(1),
+  }),
+  z.object({
+    action: z.literal("delete-reservation"),
+    reservationId: z.string().trim().min(1),
+    tripId: z.string().trim().min(1).optional(),
+  }),
+]);
 
 async function authorize(req: Request): Promise<
   | {
@@ -411,6 +423,10 @@ export async function DELETE(req: Request) {
   }
   const parsed = DeleteBodySchema.safeParse(body);
   if (!parsed.success) {
+    console.log("[/api/trips] DELETE validation failed.", {
+      body,
+      issues: parsed.error.issues,
+    });
     return NextResponse.json(
       { error: "Validation failed", details: parsed.error.flatten() },
       { status: 422, headers: auth.headers },
@@ -418,14 +434,59 @@ export async function DELETE(req: Request) {
   }
 
   try {
-    const removed = await deleteTrip(parsed.data.id, auth.userId);
+    console.log("[/api/trips] DELETE handler received.", {
+      userId: auth.userId,
+      payload: parsed.data,
+    });
+    if ("action" in parsed.data && parsed.data.action === "delete-reservation") {
+      const result = await deleteReservationFromTrip(
+        {
+          reservationId: parsed.data.reservationId,
+          tripId: parsed.data.tripId,
+        },
+        auth.userId,
+      );
+      if (!result.removed || !result.trip) {
+        return NextResponse.json(
+          { error: "Reservation not found in trip." },
+          { status: 404, headers: auth.headers },
+        );
+      }
+      const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
+      console.log("[/api/trips] DELETE reservation response sent.", {
+        userId: auth.userId,
+        tripId: result.trip.id,
+        beforeCount: result.beforeCount,
+        afterCount: result.afterCount,
+      });
+      return NextResponse.json(
+        {
+          ok: true,
+          action: "delete-reservation",
+          trip: result.trip,
+          trips,
+          activeTripId: activeTrip?.id ?? null,
+          activeTrip,
+          removedReservationId: parsed.data.reservationId,
+        },
+        { headers: auth.headers },
+      );
+    }
+
+    const tripId = parsed.data.id;
+    const removed = await deleteTrip(tripId, auth.userId);
     if (!removed) {
       return NextResponse.json({ error: "Trip not found" }, { status: 404, headers: auth.headers });
     }
     const [trips, activeTrip] = await Promise.all([listTrips(auth.userId), getActiveTrip(auth.userId)]);
+    console.log("[/api/trips] DELETE trip response sent.", {
+      userId: auth.userId,
+      tripId,
+    });
     return NextResponse.json(
       {
         ok: true,
+        action: "delete-trip",
         trips,
         activeTripId: activeTrip?.id ?? null,
         activeTrip,

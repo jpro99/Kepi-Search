@@ -791,6 +791,39 @@ function getFlightNumberLabel(reservation: Reservation): string {
   return "Flight # pending";
 }
 
+function resolveFlightAirports(reservation: Reservation): { departureAirport: string; arrivalAirport: string } {
+  const departureAirport = reservation.flightDepartureAirport?.trim() ?? "";
+  const arrivalAirport = reservation.flightArrivalAirport?.trim() ?? "";
+  if (departureAirport || arrivalAirport) {
+    return {
+      departureAirport: departureAirport || "DEP",
+      arrivalAirport: arrivalAirport || "ARR",
+    };
+  }
+  const route = reservation.location.split(/->|→/u).map((part) => part.trim());
+  return {
+    departureAirport: route[0] || "DEP",
+    arrivalAirport: route[1] || "ARR",
+  };
+}
+
+function formatBoardingPassClock(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    return "--:--";
+  }
+  const parsed = Date.parse(normalized);
+  if (!Number.isNaN(parsed)) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).format(new Date(parsed));
+  }
+  const timeMatch = normalized.match(/\b\d{1,2}:\d{2}(?:\s?[AP]M)?\b/iu)?.[0];
+  return timeMatch ?? "--:--";
+}
+
 function extractFlightLookupInput(reservation: Reservation): {
   flightNumber: string;
   airline: string;
@@ -4302,20 +4335,34 @@ export default function TravelAssistantPage() {
       setReservations(nextReservations);
       const targetTripId = activeTripId ?? trips[0]?.id ?? null;
       if (targetTripId) {
-        console.log("[travel-assistant] Delete persistence request starting.", {
+        setTrips((previous) =>
+          previous.map((trip) =>
+            trip.id === targetTripId
+              ? {
+                  ...trip,
+                  reservations: trip.reservations.filter((item) => item.id !== reservationId),
+                }
+              : trip,
+          ),
+        );
+      }
+      console.log("[travel-assistant] Delete UI updated immediately.", {
+        reservationId,
+        targetTripId,
+      });
+      if (targetTripId) {
+        console.log("[travel-assistant] Delete API call sent.", {
           reservationId,
           targetTripId,
           reservationCount: nextReservations.length,
         });
         void fetch(TRIP_API_ROUTE, {
-          method: "PUT",
+          method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            action: "update",
-            id: targetTripId,
-            patch: {
-              reservations: nextReservations,
-            },
+            action: "delete-reservation",
+            tripId: targetTripId,
+            reservationId,
           }),
         })
           .then(async (response) => {
@@ -4332,15 +4379,32 @@ export default function TravelAssistantPage() {
                 status: response.status,
                 payload,
               });
+              setToast("Failed to persist delete. Please refresh and retry.");
               return;
             }
-            const payload = (await response.json()) as { trip?: { id?: string }; activeTripId?: string | null };
-            console.log("[travel-assistant] Delete persistence request succeeded.", {
+            const payload = (await response.json()) as {
+              action?: string;
+              trip?: ManagedTrip;
+              trips?: unknown[];
+              activeTripId?: string | null;
+              removedReservationId?: string;
+            };
+            console.log("[travel-assistant] Delete API response received.", {
               reservationId,
               targetTripId,
+              action: payload.action ?? null,
               persistedTripId: payload.trip?.id ?? null,
+              removedReservationId: payload.removedReservationId ?? null,
               activeTripId: payload.activeTripId ?? null,
             });
+            if (Array.isArray(payload.trips)) {
+              const parsedTrips = payload.trips
+                .map((trip) => normalizeManagedTrip(trip))
+                .filter((trip): trip is ManagedTrip => trip !== null);
+              setTrips(parsedTrips);
+            } else if (payload.trip) {
+              setTrips((previous) => previous.map((trip) => (trip.id === payload.trip?.id ? payload.trip : trip)));
+            }
           })
           .catch((error) => {
             console.log("[travel-assistant] Delete persistence request threw.", {
@@ -4348,7 +4412,7 @@ export default function TravelAssistantPage() {
               targetTripId,
               error: error instanceof Error ? error.message : "unknown",
             });
-            // Persist fallback is handled by existing autosave effect.
+            setToast("Network error while deleting reservation.");
           });
       } else {
         console.log("[travel-assistant] Delete persistence skipped: no target trip id resolved.", {
@@ -6014,10 +6078,40 @@ export default function TravelAssistantPage() {
                           typeof inlineFlightStatus.delayMinutes === "number" ||
                           typeof inlineFlightStatus.onTime === "boolean",
                       );
+                    const flightAirports = reservation.type === "flight" ? resolveFlightAirports(reservation) : null;
+                    const flightCode = reservation.type === "flight" ? getFlightNumberLabel(reservation) : "";
+                    const airlineLabel =
+                      reservation.type === "flight"
+                        ? reservation.flightAirline?.trim() || reservation.provider.trim() || "Airline"
+                        : "";
+                    const departureTimeLabel =
+                      reservation.type === "flight"
+                        ? formatBoardingPassClock(reservation.flightDepartureTime ?? reservation.localTime)
+                        : "";
+                    const arrivalTimeLabel =
+                      reservation.type === "flight"
+                        ? formatBoardingPassClock(reservation.flightArrivalTime ?? reservation.localTime)
+                        : "";
+                    const flightStatusLabel =
+                      reservation.type === "flight"
+                        ? (inlineFlightStatus?.flightStatus || "On time").replace(/_/gu, " ")
+                        : "";
+                    const flightStatusToneClass =
+                      reservation.type !== "flight"
+                        ? ""
+                        : inlineFlightStatus?.error ||
+                            inlineFlightStatus?.onTime === false ||
+                            (typeof inlineFlightStatus?.delayMinutes === "number" && inlineFlightStatus.delayMinutes > 0)
+                          ? "bg-rose-500/20 text-rose-100 ring-rose-300/60"
+                          : "bg-emerald-500/20 text-emerald-100 ring-emerald-300/60";
                     return (
                       <article
                         key={reservation.id}
-                        className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"
+                        className={`overflow-hidden rounded-2xl border shadow-sm ${
+                          reservation.type === "flight"
+                            ? "border-slate-700 bg-slate-950 text-slate-100"
+                            : "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
+                        }`}
                       >
                         <button
                           type="button"
@@ -6028,24 +6122,80 @@ export default function TravelAssistantPage() {
                           }
                           className="w-full px-4 py-3 text-left"
                         >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
-                                {getReservationEmoji(reservation.type)} {getFriendlyReservationTitle(reservation)}
-                              </p>
-                              <p className="mt-1 truncate text-xs text-slate-600 dark:text-slate-300">
-                                {formatConsumerReservationDate(reservation.localTime)} •{" "}
-                                {formatConsumerReservationTime(reservation.localTime)}
-                              </p>
+                          {reservation.type === "flight" && flightAirports ? (
+                            <div className="rounded-2xl border border-slate-700 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-4 shadow-[0_12px_40px_-24px_rgba(0,0,0,0.9)]">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate text-lg font-semibold tracking-wide text-white">{airlineLabel}</p>
+                                  <p className="mt-1 text-xs font-medium uppercase tracking-[0.2em] text-slate-300">
+                                    Boarding pass
+                                  </p>
+                                </div>
+                                <span
+                                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ring-1 ${flightStatusToneClass}`}
+                                >
+                                  {flightStatusLabel}
+                                </span>
+                              </div>
+                              <div className="mt-4 flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="text-3xl font-bold tracking-tight text-white">{flightAirports.departureAirport}</p>
+                                  <p className="text-xs font-medium text-slate-300">{departureTimeLabel}</p>
+                                </div>
+                                <div className="flex flex-col items-center text-slate-300">
+                                  <span className="text-xl leading-none">→</span>
+                                  <span className="mt-1 text-[11px] uppercase tracking-[0.14em]">{flightCode}</span>
+                                </div>
+                                <div className="min-w-0 text-right">
+                                  <p className="text-3xl font-bold tracking-tight text-white">{flightAirports.arrivalAirport}</p>
+                                  <p className="text-xs font-medium text-slate-300">{arrivalTimeLabel}</p>
+                                </div>
+                              </div>
+                              <div className="mt-4 grid grid-cols-3 gap-2 rounded-xl border border-slate-700 bg-slate-900/70 p-2 text-xs">
+                                <p className="truncate">
+                                  <span className="block text-[10px] uppercase tracking-[0.14em] text-slate-400">Flight</span>
+                                  <span className="font-semibold text-slate-100">{flightCode}</span>
+                                </p>
+                                <p className="truncate">
+                                  <span className="block text-[10px] uppercase tracking-[0.14em] text-slate-400">Gate</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {inlineFlightStatus?.departureGate || reservation.flightDepartureGate || "--"}
+                                  </span>
+                                </p>
+                                <p className="truncate text-right">
+                                  <span className="block text-[10px] uppercase tracking-[0.14em] text-slate-400">Terminal</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {inlineFlightStatus?.departureTerminal || reservation.flightDepartureTerminal || "--"}
+                                  </span>
+                                </p>
+                              </div>
                             </div>
-                            <span
-                              className={`max-w-24 rounded-full px-2 py-1 text-center text-[11px] font-semibold leading-tight ${statusMeta.className}`}
-                            >
-                              <span className="block truncate">{statusMeta.label}</span>
-                            </span>
-                          </div>
+                          ) : (
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
+                                  {getReservationEmoji(reservation.type)} {getFriendlyReservationTitle(reservation)}
+                                </p>
+                                <p className="mt-1 truncate text-xs text-slate-600 dark:text-slate-300">
+                                  {formatConsumerReservationDate(reservation.localTime)} •{" "}
+                                  {formatConsumerReservationTime(reservation.localTime)}
+                                </p>
+                              </div>
+                              <span
+                                className={`max-w-24 rounded-full px-2 py-1 text-center text-[11px] font-semibold leading-tight ${statusMeta.className}`}
+                              >
+                                <span className="block truncate">{statusMeta.label}</span>
+                              </span>
+                            </div>
+                          )}
                         </button>
-                        <div className="flex flex-wrap gap-2 border-t border-slate-200 px-4 py-2 text-xs dark:border-slate-800">
+                        <div
+                          className={`flex flex-wrap gap-2 border-t px-4 py-2 text-xs ${
+                            reservation.type === "flight"
+                              ? "border-slate-700 bg-slate-950/90"
+                              : "border-slate-200 dark:border-slate-800"
+                          }`}
+                        >
                           {reservation.type === "flight" ? (
                             <button
                               type="button"
@@ -6075,7 +6225,13 @@ export default function TravelAssistantPage() {
                           </button>
                         </div>
                         {hasInlineFlightStatus && inlineFlightStatus ? (
-                          <div className="border-t border-slate-200 px-4 py-2 text-xs text-slate-700 dark:border-slate-800 dark:text-slate-200">
+                          <div
+                            className={`border-t px-4 py-2 text-xs ${
+                              reservation.type === "flight"
+                                ? "border-slate-700 bg-slate-950 text-slate-200"
+                                : "border-slate-200 text-slate-700 dark:border-slate-800 dark:text-slate-200"
+                            }`}
+                          >
                             {inlineFlightStatus.error ? (
                               <p className="break-words text-rose-700 dark:text-rose-300">
                                 Status error: {inlineFlightStatus.error}
@@ -6113,7 +6269,13 @@ export default function TravelAssistantPage() {
                           </div>
                         ) : null}
                         {expanded ? (
-                          <div className="border-t border-slate-200 px-4 py-3 text-sm text-slate-700 dark:border-slate-800 dark:text-slate-200">
+                          <div
+                            className={`border-t px-4 py-3 text-sm ${
+                              reservation.type === "flight"
+                                ? "border-slate-700 bg-slate-950 text-slate-200"
+                                : "border-slate-200 text-slate-700 dark:border-slate-800 dark:text-slate-200"
+                            }`}
+                          >
                             <p className="break-words">
                               <span className="font-semibold">Provider:</span> {reservation.provider || "Not set"}
                             </p>

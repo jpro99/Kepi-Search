@@ -63,6 +63,18 @@ export interface CreateTripInput {
 
 export type UpdateTripInput = Partial<Omit<TravelTrip, "id" | "createdAt">>;
 
+export interface DeleteReservationFromTripInput {
+  reservationId: string;
+  tripId?: string;
+}
+
+export interface DeleteReservationFromTripResult {
+  removed: boolean;
+  trip: TravelTrip | null;
+  beforeCount: number;
+  afterCount: number;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -297,6 +309,101 @@ export async function deleteTrip(id: string, userId?: string): Promise<boolean> 
     }
   }
   return true;
+}
+
+export async function deleteReservationFromTrip(
+  input: DeleteReservationFromTripInput,
+  userId?: string,
+): Promise<DeleteReservationFromTripResult> {
+  const reservationId = input.reservationId.trim();
+  const preferredTripId = input.tripId?.trim() || null;
+  console.log("[tripStore] deleteReservationFromTrip called.", {
+    userId: userId ?? "anonymous",
+    reservationId,
+    preferredTripId,
+  });
+  const trips = await readTrips(userId);
+  console.log("[tripStore] deleteReservationFromTrip redis read complete.", {
+    userId: userId ?? "anonymous",
+    tripCount: trips.length,
+    tripIds: trips.map((trip) => trip.id),
+  });
+
+  if (!reservationId) {
+    return {
+      removed: false,
+      trip: null,
+      beforeCount: 0,
+      afterCount: 0,
+    };
+  }
+
+  const targetTripIndex = preferredTripId
+    ? trips.findIndex((trip) => trip.id === preferredTripId)
+    : trips.findIndex((trip) => trip.reservations.some((reservation) => reservation.id === reservationId));
+  if (targetTripIndex < 0) {
+    console.log("[tripStore] deleteReservationFromTrip aborted: trip not found.", {
+      userId: userId ?? "anonymous",
+      reservationId,
+      preferredTripId,
+    });
+    return {
+      removed: false,
+      trip: null,
+      beforeCount: 0,
+      afterCount: 0,
+    };
+  }
+
+  const targetTrip = trips[targetTripIndex];
+  if (!targetTrip) {
+    return {
+      removed: false,
+      trip: null,
+      beforeCount: 0,
+      afterCount: 0,
+    };
+  }
+  const nextReservations = targetTrip.reservations.filter((reservation) => reservation.id !== reservationId);
+  if (nextReservations.length === targetTrip.reservations.length) {
+    console.log("[tripStore] deleteReservationFromTrip aborted: reservation missing in target trip.", {
+      userId: userId ?? "anonymous",
+      reservationId,
+      tripId: targetTrip.id,
+      reservationIds: targetTrip.reservations.map((reservation) => reservation.id),
+    });
+    return {
+      removed: false,
+      trip: targetTrip,
+      beforeCount: targetTrip.reservations.length,
+      afterCount: targetTrip.reservations.length,
+    };
+  }
+
+  const updatedTrip: TravelTrip = {
+    ...targetTrip,
+    reservations: nextReservations,
+  };
+  const nextTrips = [...trips];
+  nextTrips[targetTripIndex] = updatedTrip;
+  console.log("[tripStore] deleteReservationFromTrip redis write starting.", {
+    userId: userId ?? "anonymous",
+    tripId: updatedTrip.id,
+    beforeCount: targetTrip.reservations.length,
+    afterCount: updatedTrip.reservations.length,
+  });
+  await writeTrips(nextTrips, userId);
+  console.log("[tripStore] deleteReservationFromTrip redis write complete.", {
+    userId: userId ?? "anonymous",
+    tripId: updatedTrip.id,
+    reservationId,
+  });
+  return {
+    removed: true,
+    trip: updatedTrip,
+    beforeCount: targetTrip.reservations.length,
+    afterCount: updatedTrip.reservations.length,
+  };
 }
 
 export async function setActiveTrip(id: string, userId?: string): Promise<TravelTrip | null> {
