@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { isAutomatedTestRuntime } from "@/lib/auth/mockClerkAuth";
 import { sendDisruptionAlert } from "@/lib/email/emailService";
@@ -72,6 +73,9 @@ const FlightLookupEnvelopeSchema = z.object({
 });
 
 const AVIATIONSTACK_BASE_URL = "https://api.aviationstack.com/v1/flights";
+const TICKET_SCAN_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+type ScannedReservationType = "flight" | "hotel" | "train" | "ride" | "dinner";
 
 async function resolveAuthenticatedUserId(): Promise<string | null> {
   const isTestEnv = isAutomatedTestRuntime();
@@ -141,6 +145,89 @@ function chooseLookupResult(
     return leftMs - rightMs;
   });
   return ranked[0] ?? null;
+}
+
+function normalizeScannedReservationType(rawType: unknown): ScannedReservationType {
+  if (typeof rawType !== "string") {
+    return "ride";
+  }
+  const normalized = rawType.trim().toLowerCase();
+  if (normalized === "flight" || normalized === "hotel" || normalized === "train" || normalized === "ride") {
+    return normalized;
+  }
+  if (normalized === "restaurant" || normalized === "meal" || normalized === "dining" || normalized === "dinner") {
+    return "dinner";
+  }
+  if (normalized === "car" || normalized === "rental" || normalized === "taxi" || normalized === "transfer") {
+    return "ride";
+  }
+  return "ride";
+}
+
+function normalizeScannedDate(rawDate: string): string {
+  const trimmed = rawDate.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(trimmed);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  }
+  const slashMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/u.exec(trimmed);
+  if (slashMatch) {
+    const month = Number.parseInt(slashMatch[1] ?? "", 10);
+    const day = Number.parseInt(slashMatch[2] ?? "", 10);
+    const yearRaw = slashMatch[3] ?? "";
+    const year = Number.parseInt(yearRaw.length === 2 ? `20${yearRaw}` : yearRaw, 10);
+    if (!Number.isNaN(month) && !Number.isNaN(day) && !Number.isNaN(year)) {
+      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+  }
+  const parsed = Date.parse(trimmed);
+  if (Number.isNaN(parsed)) {
+    return "";
+  }
+  const date = new Date(parsed);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
+function normalizeScannedTime(rawTime: string): string {
+  const trimmed = rawTime.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const twelveHourMatch = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/iu.exec(trimmed);
+  if (twelveHourMatch) {
+    let hour = Number.parseInt(twelveHourMatch[1] ?? "", 10);
+    const minute = Number.parseInt(twelveHourMatch[2] ?? "", 10);
+    const meridiem = (twelveHourMatch[3] ?? "").toUpperCase();
+    if (Number.isNaN(hour) || Number.isNaN(minute)) {
+      return "";
+    }
+    if (meridiem === "PM" && hour < 12) hour += 12;
+    if (meridiem === "AM" && hour === 12) hour = 0;
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }
+  const twentyFourHourMatch = /^(\d{1,2}):(\d{2})$/u.exec(trimmed);
+  if (twentyFourHourMatch) {
+    const hour = Number.parseInt(twentyFourHourMatch[1] ?? "", 10);
+    const minute = Number.parseInt(twentyFourHourMatch[2] ?? "", 10);
+    if (Number.isNaN(hour) || Number.isNaN(minute)) {
+      return "";
+    }
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }
+  return "";
+}
+
+function defaultStageForScannedType(type: ScannedReservationType): "airport" | "arrival" | "readiness" {
+  if (type === "flight" || type === "train") {
+    return "airport";
+  }
+  if (type === "hotel" || type === "ride") {
+    return "arrival";
+  }
+  return "readiness";
 }
 
 export async function GET(req: Request) {
@@ -313,6 +400,165 @@ export async function POST(req: Request) {
       { error: "Too many requests. Please retry shortly." },
       { status: 429, headers: rateLimit.headers },
     );
+  }
+
+  const url = new URL(req.url);
+  if (url.searchParams.get("action") === "ticket-scan") {
+    const anthropicApiKey = process.env.ANTHROPIC_API_KEY?.trim();
+    if (!anthropicApiKey) {
+      return NextResponse.json(
+        { error: "Ticket scan unavailable: ANTHROPIC_API_KEY is missing." },
+        { status: 503, headers: rateLimit.headers },
+      );
+    }
+
+    let formData: FormData;
+    try {
+      formData = await req.formData();
+    } catch {
+      return NextResponse.json({ error: "Invalid multipart form data." }, { status: 400, headers: rateLimit.headers });
+    }
+
+    const image = formData.get("image");
+    if (!(image instanceof File)) {
+      return NextResponse.json({ error: "Image file is required." }, { status: 400, headers: rateLimit.headers });
+    }
+    if (!image.type.startsWith("image/")) {
+      return NextResponse.json({ error: "Uploaded file must be an image." }, { status: 422, headers: rateLimit.headers });
+    }
+    if (image.size <= 0 || image.size > TICKET_SCAN_MAX_IMAGE_BYTES) {
+      return NextResponse.json(
+        { error: "Image is too large. Upload an image up to 8MB." },
+        { status: 413, headers: rateLimit.headers },
+      );
+    }
+
+    routeLogger.info("Ticket scan request started.", {
+      fileName: image.name,
+      mimeType: image.type,
+      sizeBytes: image.size,
+    });
+
+    try {
+      const imageBase64 = Buffer.from(await image.arrayBuffer()).toString("base64");
+      const client = new Anthropic({ apiKey: anthropicApiKey });
+      const scanResponse = await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 900,
+        temperature: 0,
+        system: [
+          "You extract reservation details from ticket images.",
+          "Input images may be airline boarding passes, Japanese rail tickets, hotel confirmations, or restaurant reservations.",
+          "Read multilingual text including Japanese when present.",
+          "Return strict JSON only.",
+          "Use this exact shape:",
+          '{ "reservation": { "type": "", "provider": "", "title": "", "date": "", "time": "", "timezone": "", "confirmationCode": "", "location": "", "flightOrTrainNumber": "", "roomType": "", "checkOutDate": "", "notes": "" } }',
+          "type must be one of: flight, hotel, train, ride, dinner.",
+          "Use ISO-like date YYYY-MM-DD when possible and 24-hour time HH:mm when possible.",
+        ].join(" "),
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: image.type,
+                  data: imageBase64,
+                },
+              },
+              {
+                type: "text",
+                text: "Extract reservation fields from this ticket image.",
+              },
+            ],
+          },
+        ],
+      });
+
+      const modelText = scanResponse.content
+        .filter((block): block is Extract<(typeof scanResponse.content)[number], { type: "text" }> => block.type === "text")
+        .map((block) => block.text)
+        .join("\n")
+        .trim();
+      const jsonStart = modelText.indexOf("{");
+      const jsonEnd = modelText.lastIndexOf("}");
+      if (jsonStart < 0 || jsonEnd < jsonStart) {
+        throw new Error("Ticket scan model returned an invalid response.");
+      }
+      const parsed = JSON.parse(modelText.slice(jsonStart, jsonEnd + 1)) as unknown;
+      const root = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+      const reservationNode =
+        root.reservation && typeof root.reservation === "object" && !Array.isArray(root.reservation)
+          ? (root.reservation as Record<string, unknown>)
+          : root;
+
+      const scannedType = normalizeScannedReservationType(reservationNode.type);
+      const provider = typeof reservationNode.provider === "string" ? reservationNode.provider.trim() : "";
+      const title = typeof reservationNode.title === "string" ? reservationNode.title.trim() : "";
+      const date = normalizeScannedDate(typeof reservationNode.date === "string" ? reservationNode.date : "");
+      const time = normalizeScannedTime(typeof reservationNode.time === "string" ? reservationNode.time : "");
+      const timezone =
+        typeof reservationNode.timezone === "string" && reservationNode.timezone.trim().length > 0
+          ? reservationNode.timezone.trim()
+          : "Etc/UTC";
+      const confirmationCode =
+        typeof reservationNode.confirmationCode === "string" ? reservationNode.confirmationCode.trim() : "";
+      const location = typeof reservationNode.location === "string" ? reservationNode.location.trim() : "";
+      const numberValue =
+        typeof reservationNode.flightOrTrainNumber === "string"
+          ? reservationNode.flightOrTrainNumber.trim()
+          : typeof reservationNode.flightNumber === "string"
+            ? reservationNode.flightNumber.trim()
+            : typeof reservationNode.trainNumber === "string"
+              ? reservationNode.trainNumber.trim()
+              : "";
+      const localTime =
+        typeof reservationNode.localTime === "string" && reservationNode.localTime.trim().length > 0
+          ? reservationNode.localTime.trim()
+          : date && time
+            ? `${date} ${time}`
+            : date
+              ? `${date} 12:00`
+              : "";
+      const notes = typeof reservationNode.notes === "string" ? reservationNode.notes.trim() : "";
+      const roomType = typeof reservationNode.roomType === "string" ? reservationNode.roomType.trim() : "";
+      const checkOutDate = normalizeScannedDate(
+        typeof reservationNode.checkOutDate === "string" ? reservationNode.checkOutDate : "",
+      );
+
+      const draft = {
+        type: scannedType,
+        title: title || `${provider || "Scanned"} reservation`,
+        provider: provider || "Scanned ticket",
+        localTime,
+        timezone,
+        location,
+        confirmationCode,
+        assignedTo: [] as string[],
+        stage: defaultStageForScannedType(scannedType),
+        critical: scannedType === "flight" || scannedType === "train" || scannedType === "ride",
+        confidence: "medium" as const,
+        notes,
+        flightNumber: scannedType === "flight" ? numberValue : "",
+        flightAirline: scannedType === "flight" ? provider : "",
+        flightDate: scannedType === "flight" ? date : "",
+        checkOutDate: scannedType === "hotel" ? checkOutDate : "",
+        roomType: scannedType === "hotel" ? roomType : "",
+      };
+      routeLogger.info("Ticket scan extraction complete.", {
+        extractedType: draft.type,
+        extractedProvider: draft.provider,
+        extractedLocalTime: draft.localTime,
+        extractedNumber: numberValue || null,
+      });
+      return NextResponse.json({ draft }, { headers: rateLimit.headers });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown ticket scan error.";
+      routeLogger.warn("Ticket scan failed.", { error: message });
+      return NextResponse.json({ error: `Ticket scan failed: ${message}` }, { status: 502, headers: rateLimit.headers });
+    }
   }
 
   let payload: unknown;

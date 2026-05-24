@@ -541,29 +541,16 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
       html: parserHtml,
       attachments: parserAttachments,
     });
-    const parserDraftRecord =
-      parserResult?.draft && typeof parserResult.draft === "object"
-        ? (parserResult.draft as Record<string, unknown>)
-        : {};
-    const parserType =
-      parserDraftRecord.type === "flight" ||
-      parserDraftRecord.type === "hotel" ||
-      parserDraftRecord.type === "train" ||
-      parserDraftRecord.type === "ride"
-        ? parserDraftRecord.type
-        : "ride";
-    const parserTitle = typeof parserDraftRecord.title === "string" ? parserDraftRecord.title : "";
-    const parserProvider = typeof parserDraftRecord.provider === "string" ? parserDraftRecord.provider : "";
-    const parserLocalTime = typeof parserDraftRecord.localTime === "string" ? parserDraftRecord.localTime : "";
-    const parserTimezone = typeof parserDraftRecord.timezone === "string" ? parserDraftRecord.timezone : "Etc/UTC";
-    const parserLocation = typeof parserDraftRecord.location === "string" ? parserDraftRecord.location : "";
-    const parserConfirmationCode =
-      typeof parserDraftRecord.confirmationCode === "string" ? parserDraftRecord.confirmationCode : "";
-    const parserNotesText = typeof parserDraftRecord.notes === "string" ? parserDraftRecord.notes : "";
-    const parserAssignedToRaw = parserDraftRecord.assignedTo;
-    const parserAssignedTo = Array.isArray(parserAssignedToRaw)
-      ? parserAssignedToRaw.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    const parserDraftRecordCandidates = Array.isArray((parserResult as { drafts?: unknown }).drafts)
+      ? (parserResult as { drafts?: unknown }).drafts
       : [];
+    const parserDraftRecords = (
+      parserDraftRecordCandidates.length > 0 ? parserDraftRecordCandidates : [parserResult?.draft ?? {}]
+    ).flatMap((candidate) =>
+      candidate && typeof candidate === "object" && !Array.isArray(candidate)
+        ? [(candidate as Record<string, unknown>)]
+        : [],
+    );
     const parserNotes = Array.isArray(parserResult?.parserNotes)
       ? parserResult.parserNotes.filter((note): note is string => typeof note === "string" && note.trim().length > 0)
       : [];
@@ -586,62 +573,40 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
     const defaultAssignees = Array.from(
       new Set(targetTrip.reservations.flatMap((reservation) => reservation.assignedTo)),
     );
-    const parsedReservation = {
-      id: `res-email-${generateId()}`,
-      type: parserType,
-      title: parserTitle,
-      provider: parserProvider,
-      localTime: parserLocalTime,
-      timezone: parserTimezone || "Etc/UTC",
-      location: parserLocation,
-      confirmationCode: parserConfirmationCode,
-      assignedTo: parserAssignedTo.length > 0 ? parserAssignedTo : defaultAssignees,
-      stage: targetTrip.stage,
-      critical: parserType === "flight" || parserType === "train" || parserType === "ride",
-      confidence: confidenceToDraftValue(parserConfidenceScore),
-      notes: parserNotesText,
-      source: "imported" as const,
-    };
-    const hasMatchingReservation = targetTrip.reservations.some((reservation) =>
-      isDuplicateReservation(reservation, parsedReservation),
-    );
-    const hasMatchingQueuedDraft = isDuplicateAgainstReviewQueue(targetTrip.reviewQueue, parsedReservation);
-    if (hasMatchingReservation || hasMatchingQueuedDraft) {
-      routeLogger.info("Duplicate forwarded reservation dropped before review queue.", {
-        userId: targetUserId,
-        tripId: targetTrip.id,
-        confirmationCode: parserConfirmationCode || null,
-        provider: parserProvider || null,
-        localTime: parserLocalTime || null,
-        matchedExistingReservation: hasMatchingReservation,
-        matchedQueuedDraft: hasMatchingQueuedDraft,
-      });
-      return {
-        ok: true,
-        status: 200,
-        message: "Duplicate reservation dropped.",
-        userId: targetUserId,
-        tripId: targetTrip.id,
-      };
-    }
-    const nextReservations = hasMatchingReservation
-      ? targetTrip.reservations
-      : [parsedReservation, ...targetTrip.reservations];
+    let nextReservations = [...targetTrip.reservations];
+    let nextQueue = [...(targetTrip.reviewQueue ?? [])];
+    let acceptedDraftCount = 0;
+    let duplicateDraftCount = 0;
     const sourceSubject = parsed.data.subject?.trim() || "Forwarded email";
-    const reviewItem = {
-      id: `review-email-${generateId()}`,
-      reasons:
-        parserNotes.length > 0
-          ? parserNotes
-          : ["Forwarded email parsed and queued for confirmation."],
-      impact:
-        parserParsingStatus === "needs-user-input"
-          ? "We need your help with this one"
-          : parserParsingStatus === "needs-review"
-            ? "A few fields need review before publish."
-            : "Ready for quick confirmation.",
-      sourceEmailSubject: sourceSubject,
-      draft: {
+    for (const parserDraftRecord of parserDraftRecords) {
+      const parserType =
+        parserDraftRecord.type === "flight" ||
+        parserDraftRecord.type === "hotel" ||
+        parserDraftRecord.type === "train" ||
+        parserDraftRecord.type === "ride"
+          ? parserDraftRecord.type
+          : "ride";
+      const parserTitle = typeof parserDraftRecord.title === "string" ? parserDraftRecord.title : "";
+      const parserProvider = typeof parserDraftRecord.provider === "string" ? parserDraftRecord.provider : "";
+      const parserLocalTime = typeof parserDraftRecord.localTime === "string" ? parserDraftRecord.localTime : "";
+      const parserTimezone = typeof parserDraftRecord.timezone === "string" ? parserDraftRecord.timezone : "Etc/UTC";
+      const parserLocation = typeof parserDraftRecord.location === "string" ? parserDraftRecord.location : "";
+      const parserConfirmationCode =
+        typeof parserDraftRecord.confirmationCode === "string" ? parserDraftRecord.confirmationCode : "";
+      const parserNotesText = typeof parserDraftRecord.notes === "string" ? parserDraftRecord.notes : "";
+      const parserAssignedToRaw = parserDraftRecord.assignedTo;
+      const parserAssignedTo = Array.isArray(parserAssignedToRaw)
+        ? parserAssignedToRaw.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        : [];
+      const parserFlightNumber =
+        typeof parserDraftRecord.flightNumber === "string"
+          ? parserDraftRecord.flightNumber
+          : typeof parserDraftRecord.flight_number === "string"
+            ? parserDraftRecord.flight_number
+            : "";
+
+      const parsedReservation = {
+        id: `res-email-${generateId()}`,
         type: parserType,
         title: parserTitle,
         provider: parserProvider,
@@ -649,24 +614,90 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
         timezone: parserTimezone || "Etc/UTC",
         location: parserLocation,
         confirmationCode: parserConfirmationCode,
-        assignedTo: defaultAssignees,
+        assignedTo: parserAssignedTo.length > 0 ? parserAssignedTo : defaultAssignees,
         stage: targetTrip.stage,
         critical: parserType === "flight" || parserType === "train" || parserType === "ride",
         confidence: confidenceToDraftValue(parserConfidenceScore),
         notes: parserNotesText,
-      },
-      sourceChannel: "email-forward",
-      parseConfidenceScore: parserConfidenceScore,
-      parsingStatus: parserParsingStatus,
-      missingFields: parserMissingFields,
-      originalEmailText: parserOriginalEmailText,
-      hasPdfAttachment: parserHasPdfAttachment,
-      imageBasedEmail: parserImageBasedEmail,
-      reviewStatus: parserParsingStatus === "needs-user-input" ? "incomplete" : "pending",
-      parserNotes,
-    };
+        source: "imported" as const,
+        flightNumber: parserType === "flight" ? parserFlightNumber : "",
+        flightAirline: parserType === "flight" ? parserProvider : "",
+        flightDate: parserType === "flight" ? parserLocalTime.slice(0, 10) : "",
+      };
 
-    const nextQueue = [reviewItem, ...(targetTrip.reviewQueue ?? [])];
+      const hasMatchingReservation = nextReservations.some((reservation) =>
+        isDuplicateReservation(reservation, parsedReservation),
+      );
+      const hasMatchingQueuedDraft = isDuplicateAgainstReviewQueue(nextQueue, parsedReservation);
+      if (hasMatchingReservation || hasMatchingQueuedDraft) {
+        duplicateDraftCount += 1;
+        routeLogger.info("Duplicate forwarded reservation dropped before review queue.", {
+          userId: targetUserId,
+          tripId: targetTrip.id,
+          confirmationCode: parserConfirmationCode || null,
+          provider: parserProvider || null,
+          localTime: parserLocalTime || null,
+          matchedExistingReservation: hasMatchingReservation,
+          matchedQueuedDraft: hasMatchingQueuedDraft,
+        });
+        continue;
+      }
+
+      nextReservations = [parsedReservation, ...nextReservations];
+      const reviewItem = {
+        id: `review-email-${generateId()}`,
+        reasons:
+          parserNotes.length > 0
+            ? parserNotes
+            : ["Forwarded email parsed and queued for confirmation."],
+        impact:
+          parserParsingStatus === "needs-user-input"
+            ? "We need your help with this one"
+            : parserParsingStatus === "needs-review"
+              ? "A few fields need review before publish."
+              : "Ready for quick confirmation.",
+        sourceEmailSubject: sourceSubject,
+        draft: {
+          type: parserType,
+          title: parserTitle,
+          provider: parserProvider,
+          localTime: parserLocalTime,
+          timezone: parserTimezone || "Etc/UTC",
+          location: parserLocation,
+          confirmationCode: parserConfirmationCode,
+          assignedTo: defaultAssignees,
+          stage: targetTrip.stage,
+          critical: parserType === "flight" || parserType === "train" || parserType === "ride",
+          confidence: confidenceToDraftValue(parserConfidenceScore),
+          notes: parserNotesText,
+          flightNumber: parserType === "flight" ? parserFlightNumber : "",
+          flightAirline: parserType === "flight" ? parserProvider : "",
+          flightDate: parserType === "flight" ? parserLocalTime.slice(0, 10) : "",
+        },
+        sourceChannel: "email-forward" as const,
+        parseConfidenceScore: parserConfidenceScore,
+        parsingStatus: parserParsingStatus,
+        missingFields: parserMissingFields,
+        originalEmailText: parserOriginalEmailText,
+        hasPdfAttachment: parserHasPdfAttachment,
+        imageBasedEmail: parserImageBasedEmail,
+        reviewStatus: parserParsingStatus === "needs-user-input" ? "incomplete" : "pending",
+        parserNotes,
+      };
+      nextQueue = [reviewItem, ...nextQueue];
+      acceptedDraftCount += 1;
+    }
+
+    if (acceptedDraftCount === 0) {
+      return {
+        ok: true,
+        status: 200,
+        message: duplicateDraftCount > 0 ? "Duplicate reservation dropped." : "No reservation extracted from email.",
+        userId: targetUserId,
+        tripId: targetTrip.id,
+      };
+    }
+
     const updated = await updateTrip(
       targetTrip.id,
       {
@@ -693,6 +724,8 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
     routeLogger.info("Forwarded email parsed into review queue.", {
       userId: targetUserId,
       tripId: targetTrip.id,
+      acceptedDraftCount,
+      duplicateDraftCount,
       score: parserConfidenceScore,
       status: parserParsingStatus,
       usedAiFallback: parserUsedAiFallback,

@@ -139,6 +139,7 @@ export interface ForwardedReservationDraft {
 
 export interface ForwardedEmailParseResult {
   draft: ForwardedReservationDraft;
+  drafts: ForwardedReservationDraft[];
   confidenceScore: number;
   confidenceLevel: ForwardedConfidenceLevel;
   parsingStatus: ForwardedParsingStatus;
@@ -287,22 +288,7 @@ function resolveTimezone(text: string): string {
   return "Etc/UTC";
 }
 
-function parseAiResponse(text: string): CandidateMap {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < start) {
-    return {};
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return {};
-  }
-  if (!parsed || typeof parsed !== "object") {
-    return {};
-  }
-  const candidate = parsed as Record<string, unknown>;
+function parseAiCandidate(candidate: Record<string, unknown>): CandidateMap {
   const output: CandidateMap = {};
   const setIfPresent = (field: ForwardedReservationField, value: unknown, confidence = 0.78): void => {
     if (typeof value !== "string") {
@@ -329,7 +315,7 @@ function parseAiResponse(text: string): CandidateMap {
       };
     }
   }
-  setIfPresent("title", candidate.title, 0.8);
+  setIfPresent("title", candidate.title, 0.9);
   setIfPresent("provider", candidate.provider, 0.76);
   setIfPresent("confirmationCode", candidate.confirmationCode, 0.8);
   setIfPresent("localTime", candidate.localTime, 0.74);
@@ -344,6 +330,57 @@ function parseAiResponse(text: string): CandidateMap {
   setIfPresent("location", candidate.location, 0.76);
   setIfPresent("notes", candidate.notes, 0.68);
   return output;
+}
+
+function hasExtractableCandidateData(candidate: CandidateMap): boolean {
+  return Object.values(candidate).some((value) => Boolean(value?.value?.trim()));
+}
+
+function parseAiResponse(text: string): CandidateMap[] {
+  const objectStart = text.indexOf("{");
+  const arrayStart = text.indexOf("[");
+  const jsonStart =
+    objectStart < 0
+      ? arrayStart
+      : arrayStart < 0
+        ? objectStart
+        : Math.min(objectStart, arrayStart);
+  const jsonEnd = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
+  if (jsonStart < 0 || jsonEnd < jsonStart) {
+    return [];
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(jsonStart, jsonEnd + 1));
+  } catch {
+    return [];
+  }
+
+  if (!parsed) {
+    return [];
+  }
+
+  if (Array.isArray(parsed)) {
+    return parsed
+      .map((entry) => (entry && typeof entry === "object" ? parseAiCandidate(entry as Record<string, unknown>) : {}))
+      .filter(hasExtractableCandidateData);
+  }
+  if (typeof parsed !== "object") {
+    return [];
+  }
+
+  const payload = parsed as Record<string, unknown>;
+  const reservationsPayload = Array.isArray(payload.reservations) ? payload.reservations : [];
+  const reservationCandidates = reservationsPayload
+    .map((entry) => (entry && typeof entry === "object" ? parseAiCandidate(entry as Record<string, unknown>) : {}))
+    .filter(hasExtractableCandidateData);
+  if (reservationCandidates.length > 0) {
+    return reservationCandidates;
+  }
+
+  const singleCandidate = parseAiCandidate(payload);
+  return hasExtractableCandidateData(singleCandidate) ? [singleCandidate] : [];
 }
 
 function mergeCandidates(base: CandidateMap, incoming: CandidateMap): CandidateMap {
@@ -540,7 +577,7 @@ function buildRegexCandidates(input: {
   return candidates;
 }
 
-async function runAiFallback(rawEmailText: string): Promise<CandidateMap> {
+async function runAiFallback(rawEmailText: string): Promise<CandidateMap[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
     logger.warn("AI fallback skipped: ANTHROPIC_API_KEY is missing.", {
@@ -548,13 +585,18 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap> {
       rawEmailText,
       rawEmailTextLength: rawEmailText.length,
     });
-    return {};
+    return [];
   }
 
   const aiPrompt = [
-    "Extract flight/hotel/train/car reservation details from this email and return as JSON.",
-    "Use keys exactly: type, title, provider, confirmationCode, localTime, timezone, location, notes.",
-    "If unknown, return empty string for that key.",
+    "Extract every travel reservation found in this email.",
+    "Return strict JSON only with this shape:",
+    '{ "reservations": [ { "type": "", "title": "", "provider": "", "confirmationCode": "", "localTime": "", "timezone": "", "location": "", "notes": "" } ] }',
+    "If there are multiple flights in one email, include one reservations[] object per flight.",
+    "Use type values only: flight, hotel, train, ride.",
+    "Use localTime in 'YYYY-MM-DD HH:mm' when possible.",
+    "If any field is unknown, return an empty string for that field.",
+    "Do not include explanation text.",
     "",
     rawEmailText,
   ].join("\n");
@@ -572,7 +614,7 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap> {
       max_tokens: 700,
       temperature: 0,
       system:
-        "Extract travel reservation details from forwarded email text. Return strict JSON only with keys: type, title, provider, confirmationCode, localTime, timezone, location, notes.",
+        "Extract travel reservations from forwarded email text. Return strict JSON only in the shape { reservations: [{ type, title, provider, confirmationCode, localTime, timezone, location, notes }] }. For multi-flight emails, return every flight as a separate reservations[] item.",
       messages: [
         {
           role: "user",
@@ -590,7 +632,12 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap> {
       aiResponseRaw: text,
       aiResponseLength: text.length,
     });
-    return parseAiResponse(text);
+    const parsedCandidates = parseAiResponse(text);
+    logger.info("AI fallback parsed reservations.", {
+      scope: EMAIL_FORWARD_PARSER_SCOPE,
+      aiReservationCount: parsedCandidates.length,
+    });
+    return parsedCandidates;
   } catch (error) {
     logger.error("AI fallback call failed.", {
       scope: EMAIL_FORWARD_PARSER_SCOPE,
@@ -598,7 +645,7 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap> {
       rawEmailText,
       aiPrompt,
     });
-    return {};
+    return [];
   }
 }
 
@@ -631,6 +678,27 @@ function missingFieldsFromDraft(draft: ForwardedReservationDraft): ForwardedRese
   return [...missing];
 }
 
+function dedupeDrafts(drafts: ForwardedReservationDraft[]): ForwardedReservationDraft[] {
+  const seen = new Set<string>();
+  const output: ForwardedReservationDraft[] = [];
+  for (const draft of drafts) {
+    const key = [
+      draft.type.trim().toLowerCase(),
+      draft.title.trim().toLowerCase(),
+      draft.provider.trim().toLowerCase(),
+      draft.localTime.trim().toLowerCase(),
+      draft.location.trim().toLowerCase(),
+      draft.confirmationCode.trim().toLowerCase(),
+    ].join("|");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push(draft);
+  }
+  return output;
+}
+
 function chooseBodyText(text: string, html: string): { parsedText: string; imageBasedEmail: boolean } {
   const normalizedText = normalizeWhitespace(text);
   if (normalizedText.length >= MIN_READABLE_TEXT_LENGTH) {
@@ -641,6 +709,13 @@ function chooseBodyText(text: string, html: string): { parsedText: string; image
     return { parsedText: strippedHtml, imageBasedEmail: false };
   }
   return { parsedText: strippedHtml || normalizedText, imageBasedEmail: true };
+}
+
+function hasMultipleFlightMentions(text: string): boolean {
+  const matches = [...text.matchAll(/\b([A-Z]{2}\s?\d{2,4}[A-Z]?)\b/gu)]
+    .map((match) => (match[1] ?? "").replace(/\s+/gu, "").toUpperCase())
+    .filter((value) => value.length >= 4);
+  return new Set(matches).size > 1;
 }
 
 export async function parseForwardedEmail(input: ForwardedEmailParseInput): Promise<ForwardedEmailParseResult> {
@@ -662,6 +737,7 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
   const html = input.html ?? "";
   const parserNotes: string[] = [];
   const { parsedText, imageBasedEmail } = chooseBodyText(text, html);
+  const multiFlightDetected = hasMultipleFlightMentions(`${subject}\n${parsedText}`);
   const pdfAttached = hasPdfAttachment(input.attachments);
 
   if (pdfAttached) {
@@ -669,31 +745,37 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
     parserNotes.push("Check the attached PDF for your confirmation code");
   }
 
-  let candidates = buildRegexCandidates({
+  const regexCandidates = buildRegexCandidates({
     text: parsedText,
     subject,
     from,
     parserNotes,
   });
+  let candidates = regexCandidates;
   let score = scoreCandidates(candidates);
   let usedAiFallback = false;
+  let aiCandidates: CandidateMap[] = [];
+  const shouldAttemptAiFallback = multiFlightDetected || (!imageBasedEmail && score < HIGH_CONFIDENCE_THRESHOLD);
 
-  if (!imageBasedEmail && score < HIGH_CONFIDENCE_THRESHOLD) {
+  if (shouldAttemptAiFallback) {
     logger.info("Email parser attempting AI fallback.", {
       scope: EMAIL_FORWARD_PARSER_SCOPE,
       scoreBeforeAiFallback: score,
       threshold: HIGH_CONFIDENCE_THRESHOLD,
+      multiFlightDetected,
+      imageBasedEmail,
       parsedText,
       parsedTextLength: parsedText.length,
     });
-    const aiCandidates = await runAiFallback(parsedText);
-    if (Object.keys(aiCandidates).length > 0) {
+    aiCandidates = await runAiFallback(parsedText);
+    if (aiCandidates.length > 0) {
       usedAiFallback = true;
-      candidates = mergeCandidates(candidates, aiCandidates);
+      candidates = mergeCandidates(candidates, aiCandidates[0] ?? {});
       score = scoreCandidates(candidates);
       parserNotes.push("Applied AI fallback extraction for low-confidence fields.");
       logger.info("AI fallback extracted fields.", {
         scope: EMAIL_FORWARD_PARSER_SCOPE,
+        aiCandidatesCount: aiCandidates.length,
         aiCandidates,
         scoreAfterAiFallback: score,
       });
@@ -707,12 +789,27 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
     logger.info("AI fallback not attempted.", {
       scope: EMAIL_FORWARD_PARSER_SCOPE,
       imageBasedEmail,
+      multiFlightDetected,
+      shouldAttemptAiFallback,
       scoreBeforeAiFallback: score,
       threshold: HIGH_CONFIDENCE_THRESHOLD,
     });
   }
 
   const draft = buildDraft(candidates, parserNotes);
+  const supplementalDrafts = aiCandidates
+    .slice(1)
+    .map((candidate) => buildDraft(mergeCandidates(regexCandidates, candidate), parserNotes))
+    .filter((candidateDraft) =>
+      Boolean(
+        candidateDraft.title.trim() ||
+          candidateDraft.provider.trim() ||
+          candidateDraft.confirmationCode.trim() ||
+          candidateDraft.localTime.trim() ||
+          candidateDraft.location.trim(),
+      ),
+    );
+  const drafts = dedupeDrafts([draft, ...supplementalDrafts]);
   const missingFields = missingFieldsFromDraft(draft);
   const adjustedScore = Math.max(0, score - missingFields.length * 6);
   const boundedScore = imageBasedEmail ? Math.min(adjustedScore, 20) : adjustedScore;
@@ -722,6 +819,7 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
     scope: EMAIL_FORWARD_PARSER_SCOPE,
     extractedCandidates: candidates,
     extractedDraft: draft,
+    extractedDrafts: drafts,
     missingFields,
     parserNotes,
     confidenceScore: boundedScore,
@@ -732,6 +830,7 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
 
   return {
     draft,
+    drafts,
     confidenceScore: boundedScore,
     confidenceLevel: level,
     parsingStatus,

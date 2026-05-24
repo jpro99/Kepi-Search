@@ -2,7 +2,18 @@
 
 import Link from "next/link";
 import { useClerk, useUser } from "@clerk/nextjs";
-import { cache, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type TouchEvent as ReactTouchEvent } from "react";
+import {
+  cache,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type TouchEvent as ReactTouchEvent,
+} from "react";
 import {
   enforceStatusFloor,
   evaluateTravelStatusGovernance,
@@ -145,6 +156,9 @@ interface ReservationDraft {
   flightArrivalTerminal?: string;
   flightDelayMinutes?: number;
   flightOnTime?: boolean;
+  checkOutDate?: string;
+  roomType?: string;
+  trainNumber?: string;
 }
 
 interface Reservation extends ReservationDraft {
@@ -298,6 +312,7 @@ interface FlightStatusCheckResult {
   checkedAt: string;
   busy: boolean;
   error: string | null;
+  hotelStatusSummary?: string | null;
 }
 
 interface ManagedTrip {
@@ -846,6 +861,35 @@ function formatHotelDate(value: string): string {
   return trimmed;
 }
 
+function formatCompactMeridiemTime(valueMs: number): string {
+  const formatted = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(new Date(valueMs));
+  const normalized = formatted.replace(/\s+/gu, "").toLowerCase();
+  return normalized.endsWith(":00am") || normalized.endsWith(":00pm")
+    ? normalized.replace(":00", "")
+    : normalized;
+}
+
+function buildHotelCheckInStatusSummary(reservation: Reservation, nowMs = Date.now()): string {
+  const confirmationCode = reservation.confirmationCode.trim() || "Code pending";
+  const checkInMs = parseDateInput(reservation.localTime);
+  if (!Number.isNaN(checkInMs) && checkInMs >= nowMs && checkInMs - nowMs <= 24 * 60 * 60 * 1000) {
+    return `Check-in tomorrow at ${formatCompactMeridiemTime(checkInMs)} — ${confirmationCode}`;
+  }
+  if (!Number.isNaN(checkInMs)) {
+    const dateLabel = new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(new Date(checkInMs));
+    return `Check-in on ${dateLabel} — ${confirmationCode}`;
+  }
+  return `Check-in on ${reservation.localTime || "date pending"} — ${confirmationCode}`;
+}
+
 function resolveHotelCardData(reservation: Reservation): {
   hotelName: string;
   checkInDate: string;
@@ -907,7 +951,10 @@ function extractFlightLookupInput(reservation: Reservation): {
   flightDate: string;
 } | null {
   const reservationRecord = reservation as Reservation & Record<string, unknown>;
-  const notesFlightNumber = reservation.notes.match(/\b([A-Z0-9]{2,3}\s?\d{1,4}[A-Z]?)\b/u)?.[1] ?? "";
+  const notesFlightNumber =
+    reservation.notes.match(/\b(?:flight(?:\s*number)?|flt)\s*[:#-]?\s*([A-Z0-9]{2,3}\s?\d{1,4}[A-Z]?)\b/iu)?.[1] ??
+    reservation.notes.match(/\b([A-Z0-9]{2,3}\s?\d{1,4}[A-Z]?)\b/u)?.[1] ??
+    "";
   const inferredFlightNumber =
     (typeof reservationRecord.flightNumber === "string" ? reservationRecord.flightNumber : "") ||
     (typeof reservationRecord.flight_number === "string" ? reservationRecord.flight_number : "") ||
@@ -917,6 +964,12 @@ function extractFlightLookupInput(reservation: Reservation): {
     (typeof reservationRecord.flight_no === "string" ? reservationRecord.flight_no : "") ||
     (typeof reservationRecord.flightCode === "string" ? reservationRecord.flightCode : "") ||
     (typeof reservationRecord.flight_code === "string" ? reservationRecord.flight_code : "") ||
+    (typeof reservationRecord.operatingFlightNumber === "string" ? reservationRecord.operatingFlightNumber : "") ||
+    (typeof reservationRecord.operating_flight_number === "string" ? reservationRecord.operating_flight_number : "") ||
+    (typeof reservationRecord.marketingFlightNumber === "string" ? reservationRecord.marketingFlightNumber : "") ||
+    (typeof reservationRecord.marketing_flight_number === "string" ? reservationRecord.marketing_flight_number : "") ||
+    (typeof reservationRecord.iataFlightNumber === "string" ? reservationRecord.iataFlightNumber : "") ||
+    (typeof reservationRecord.iata_flight_number === "string" ? reservationRecord.iata_flight_number : "") ||
     notesFlightNumber ||
     reservation.title.match(/\b([A-Z0-9]{2,3}\s?\d{1,4}[A-Z]?)\b/u)?.[1] ||
     reservation.provider.match(/\b([A-Z0-9]{2,3}\s?\d{1,4}[A-Z]?)\b/u)?.[1] ||
@@ -932,15 +985,32 @@ function extractFlightLookupInput(reservation: Reservation): {
     (typeof reservationRecord.airlineName === "string" ? reservationRecord.airlineName : "") ||
     (typeof reservationRecord.airline_name === "string" ? reservationRecord.airline_name : "") ||
     (typeof reservationRecord.airline === "string" ? reservationRecord.airline : "") ||
+    (typeof reservationRecord.carrier === "string" ? reservationRecord.carrier : "") ||
+    (typeof reservationRecord.carrierName === "string" ? reservationRecord.carrierName : "") ||
+    (typeof reservationRecord.carrier_name === "string" ? reservationRecord.carrier_name : "") ||
+    (typeof reservationRecord.operator === "string" ? reservationRecord.operator : "") ||
+    (typeof reservationRecord.operatorName === "string" ? reservationRecord.operatorName : "") ||
+    (typeof reservationRecord.operator_name === "string" ? reservationRecord.operator_name : "") ||
     reservation.provider.trim() ||
     airlineFromTitle ||
     "Unknown Airline";
+  const notesDate =
+    reservation.notes.match(/\b(20\d{2}-\d{2}-\d{2})\b/u)?.[1] ??
+    reservation.notes.match(/\b(\d{1,2}\/\d{1,2}\/\d{2,4})\b/u)?.[1] ??
+    "";
   const flightDateRaw =
     (typeof reservationRecord.flightDate === "string" ? reservationRecord.flightDate : "") ||
     (typeof reservationRecord.flight_date === "string" ? reservationRecord.flight_date : "") ||
     (typeof reservationRecord.departureDate === "string" ? reservationRecord.departureDate : "") ||
     (typeof reservationRecord.departure_date === "string" ? reservationRecord.departure_date : "") ||
+    (typeof reservationRecord.travelDate === "string" ? reservationRecord.travelDate : "") ||
+    (typeof reservationRecord.travel_date === "string" ? reservationRecord.travel_date : "") ||
+    (typeof reservationRecord.scheduledDeparture === "string" ? reservationRecord.scheduledDeparture : "") ||
+    (typeof reservationRecord.scheduled_departure === "string" ? reservationRecord.scheduled_departure : "") ||
+    (typeof reservationRecord.departureTime === "string" ? reservationRecord.departureTime : "") ||
+    (typeof reservationRecord.departure_time === "string" ? reservationRecord.departure_time : "") ||
     (typeof reservationRecord.date === "string" ? reservationRecord.date : "") ||
+    notesDate ||
     (typeof reservationRecord.localTime === "string" ? reservationRecord.localTime : "") ||
     (typeof reservationRecord.local_time === "string" ? reservationRecord.local_time : "");
   const flightDate =
@@ -1501,6 +1571,7 @@ export default function TravelAssistantPage() {
   const applyingTripStateRef = useRef(false);
   const drawerContainerRef = useRef<HTMLDivElement | null>(null);
   const drawerCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const ticketScanInputRef = useRef<HTMLInputElement | null>(null);
   const lastFocusedElementBeforeDrawerRef = useRef<HTMLElement | null>(null);
   const readinessChecklistSectionRef = useRef<HTMLElement | null>(null);
   const reservationsPullStartYRef = useRef<number | null>(null);
@@ -1586,6 +1657,7 @@ export default function TravelAssistantPage() {
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [manualReservationModalOpen, setManualReservationModalOpen] = useState(false);
   const [reservationsRefreshing, setReservationsRefreshing] = useState(false);
+  const [ticketScanBusy, setTicketScanBusy] = useState(false);
 
   const viewerDisplayName = useMemo(
     () => resolveViewerName(user?.firstName, user?.primaryEmailAddress?.emailAddress),
@@ -4054,6 +4126,110 @@ export default function TravelAssistantPage() {
     });
   };
 
+  const handleTicketScanUpload = useCallback(
+    async (file: File): Promise<void> => {
+      if (ticketScanBusy) {
+        return;
+      }
+      setTicketScanBusy(true);
+      console.log("[travel-assistant] Ticket scan upload started.", {
+        fileName: file.name,
+        fileType: file.type,
+        fileSize: file.size,
+      });
+      try {
+        const formData = new FormData();
+        formData.append("image", file);
+        const response = await fetch("/api/travel-updates?action=ticket-scan", {
+          method: "POST",
+          body: formData,
+          cache: "no-store",
+          credentials: "include",
+        });
+        const payload = (await response.json()) as {
+          error?: string;
+          draft?: ReservationDraft;
+        };
+        console.log("[travel-assistant] Ticket scan API response.", {
+          status: response.status,
+          payload,
+        });
+        if (!response.ok || !payload.draft) {
+          throw new Error(payload.error ?? `Ticket scan failed (${response.status})`);
+        }
+
+        const scannedDraft: ReservationDraft = {
+          ...EMPTY_DRAFT,
+          ...payload.draft,
+          type: payload.draft.type,
+          title: payload.draft.title.trim(),
+          provider: payload.draft.provider.trim(),
+          localTime: payload.draft.localTime.trim(),
+          timezone: payload.draft.timezone.trim() || "Etc/UTC",
+          location: payload.draft.location.trim(),
+          confirmationCode: payload.draft.confirmationCode.trim(),
+          assignedTo: payload.draft.assignedTo ?? [],
+          stage: payload.draft.stage,
+          critical: payload.draft.critical,
+          confidence: payload.draft.confidence,
+          notes: payload.draft.notes.trim(),
+        };
+        const reviewItem: ReviewItem = {
+          id: nextId("review"),
+          reasons: ["Scanned from ticket image. Confirm details before publishing."],
+          impact: "Ticket details were extracted from a photo and need confirmation.",
+          sourceEmailSubject: `Scanned ticket: ${file.name || "image upload"}`,
+          sourceChannel: "manual",
+          parseConfidenceScore: 55,
+          parsingStatus: "needs-review",
+          reviewStatus: "pending",
+          draft: scannedDraft,
+        };
+        setReviewQueue((prev) => [reviewItem, ...prev]);
+        queueMutation("Ticket scan added to review queue.", {
+          key: "ticket-scan-review",
+          fingerprint: `ticket-scan:${reviewItem.id}`,
+        });
+        setDrawerDraft(reviewItem.draft);
+        setFlightLookupError(null);
+        setFlightLookupBusy(false);
+        setActiveDrawer({ kind: "review", id: reviewItem.id });
+        setConsumerTab("reservations");
+        console.log("[travel-assistant] Ticket scan queued review item.", {
+          reviewId: reviewItem.id,
+          reservationDraft: reviewItem.draft,
+        });
+        setToast("Ticket scanned. Review and confirm before saving.");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Ticket scan failed.";
+        console.error("[travel-assistant] Ticket scan failed.", { error: message });
+        setToast(message);
+      } finally {
+        setTicketScanBusy(false);
+      }
+    },
+    [queueMutation, setToast, ticketScanBusy],
+  );
+
+  const handleTicketScanFileSelected = useCallback(
+    (event: ChangeEvent<HTMLInputElement>): void => {
+      const file = event.target.files?.[0] ?? null;
+      event.currentTarget.value = "";
+      if (!file) {
+        return;
+      }
+      void handleTicketScanUpload(file);
+    },
+    [handleTicketScanUpload],
+  );
+
+  const openTicketScanPicker = useCallback((): void => {
+    if (ticketScanBusy) {
+      return;
+    }
+    ticketScanInputRef.current?.click();
+  }, [ticketScanBusy]);
+
   const syncReservationsToGoogleCalendar = useCallback(
     async (reservationSnapshot: Reservation[], source: "manual" | "review-accept"): Promise<void> => {
       setCalendarSyncInFlight(true);
@@ -4120,6 +4296,23 @@ export default function TravelAssistantPage() {
             critical: reservation.critical,
             confidence: reservation.confidence,
             notes: reservation.notes,
+            flightNumber: reservation.flightNumber,
+            flightAirline: reservation.flightAirline,
+            flightDate: reservation.flightDate,
+            flightDepartureAirport: reservation.flightDepartureAirport,
+            flightArrivalAirport: reservation.flightArrivalAirport,
+            flightDepartureTime: reservation.flightDepartureTime,
+            flightArrivalTime: reservation.flightArrivalTime,
+            flightStatus: reservation.flightStatus,
+            flightDepartureGate: reservation.flightDepartureGate,
+            flightDepartureTerminal: reservation.flightDepartureTerminal,
+            flightArrivalGate: reservation.flightArrivalGate,
+            flightArrivalTerminal: reservation.flightArrivalTerminal,
+            flightDelayMinutes: reservation.flightDelayMinutes,
+            flightOnTime: reservation.flightOnTime,
+            checkOutDate: reservation.checkOutDate,
+            roomType: reservation.roomType,
+            trainNumber: reservation.trainNumber,
           });
         }
       } else {
@@ -4756,6 +4949,31 @@ export default function TravelAssistantPage() {
         return;
       }
       console.log("[travel-assistant] Check status full reservation object.", reservation);
+      if (reservation.type === "hotel") {
+        const hotelSummary = buildHotelCheckInStatusSummary(reservation);
+        console.info("[travel-assistant] Hotel check status summary.", {
+          reservationId,
+          hotelSummary,
+        });
+        setFlightStatusCheckByReservationId((prev) => ({
+          ...prev,
+          [reservationId]: {
+            flightStatus: prev[reservationId]?.flightStatus ?? "",
+            delayMinutes: prev[reservationId]?.delayMinutes ?? null,
+            departureGate: prev[reservationId]?.departureGate ?? "",
+            departureTerminal: prev[reservationId]?.departureTerminal ?? "",
+            arrivalGate: prev[reservationId]?.arrivalGate ?? "",
+            arrivalTerminal: prev[reservationId]?.arrivalTerminal ?? "",
+            onTime: prev[reservationId]?.onTime ?? null,
+            checkedAt: new Date().toISOString(),
+            busy: false,
+            error: null,
+            hotelStatusSummary: hotelSummary,
+          },
+        }));
+        setToast(hotelSummary);
+        return;
+      }
       if (reservation.type !== "flight") {
         setToast("Status lookup is available for flight reservations only.");
         return;
@@ -4784,6 +5002,10 @@ export default function TravelAssistantPage() {
             reservationRecord.flight_number,
             reservationRecord.flightNo,
             reservationRecord.flight_no,
+            reservationRecord.operatingFlightNumber,
+            reservationRecord.operating_flight_number,
+            reservationRecord.marketingFlightNumber,
+            reservationRecord.marketing_flight_number,
             reservation.title,
             reservation.provider,
           ],
@@ -4791,11 +5013,20 @@ export default function TravelAssistantPage() {
             reservationRecord.flightAirline,
             reservationRecord.flight_airline,
             reservationRecord.airline,
+            reservationRecord.carrier,
+            reservationRecord.carrier_name,
+            reservationRecord.operator,
             reservation.provider,
           ],
           dateCandidates: [
             reservationRecord.flightDate,
             reservationRecord.flight_date,
+            reservationRecord.departureDate,
+            reservationRecord.departure_date,
+            reservationRecord.travelDate,
+            reservationRecord.travel_date,
+            reservationRecord.departureTime,
+            reservationRecord.departure_time,
             reservationRecord.localTime,
             reservationRecord.local_time,
           ],
@@ -4813,6 +5044,7 @@ export default function TravelAssistantPage() {
             checkedAt: new Date().toISOString(),
             busy: false,
             error: errorMessage,
+            hotelStatusSummary: null,
           },
         }));
         setToast(errorMessage);
@@ -4832,6 +5064,7 @@ export default function TravelAssistantPage() {
           checkedAt: new Date().toISOString(),
           busy: true,
           error: null,
+          hotelStatusSummary: null,
         },
       }));
 
@@ -4902,6 +5135,7 @@ export default function TravelAssistantPage() {
             checkedAt: new Date().toISOString(),
             busy: false,
             error: null,
+            hotelStatusSummary: null,
           },
         }));
 
@@ -4948,6 +5182,7 @@ export default function TravelAssistantPage() {
             checkedAt: new Date().toISOString(),
             busy: false,
             error: message,
+            hotelStatusSummary: null,
           },
         }));
         setToast(message);
@@ -5700,6 +5935,19 @@ export default function TravelAssistantPage() {
           className: "bg-slate-900/10 text-slate-700 ring-1 ring-slate-400/30 dark:text-slate-200",
         };
       }
+      if (reservation.type === "hotel") {
+        const checkedStatus = flightStatusCheckByReservationId[reservation.id];
+        if (checkedStatus?.hotelStatusSummary) {
+          return {
+            label: "Check-in info",
+            className: "bg-cyan-500/15 text-cyan-700 ring-1 ring-cyan-500/30 dark:text-cyan-100",
+          };
+        }
+        return {
+          label: "Check status",
+          className: "bg-slate-900/10 text-slate-700 ring-1 ring-slate-400/30 dark:text-slate-200",
+        };
+      }
       if (reservation.critical) {
         return {
           label: "Action needed",
@@ -6406,13 +6654,31 @@ export default function TravelAssistantPage() {
               </div>
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">All reservations</h2>
-                <button
-                  type="button"
-                  onClick={() => setManualReservationModalOpen(true)}
-                  className="rounded-xl bg-emerald-500 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-400"
-                >
-                  Add manually
-                </button>
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={ticketScanInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleTicketScanFileSelected}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={openTicketScanPicker}
+                    disabled={ticketScanBusy}
+                    className="rounded-xl bg-cyan-500 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {ticketScanBusy ? "Scanning..." : "Scan ticket"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setManualReservationModalOpen(true)}
+                    className="rounded-xl bg-emerald-500 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-400"
+                  >
+                    Add manually
+                  </button>
+                </div>
               </div>
 
               {reviewQueue.length > 0 ? (
@@ -6512,6 +6778,14 @@ export default function TravelAssistantPage() {
                   >
                     Add manually
                   </button>
+                  <button
+                    type="button"
+                    onClick={openTicketScanPicker}
+                    disabled={ticketScanBusy}
+                    className="ml-2 mt-4 rounded-lg bg-cyan-500 px-3 py-2 text-sm font-semibold text-white transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {ticketScanBusy ? "Scanning..." : "Scan ticket"}
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -6536,6 +6810,8 @@ export default function TravelAssistantPage() {
                             error: flightStatusCheck?.error ?? null,
                           }
                         : null;
+                    const hotelStatusSummary =
+                      reservation.type === "hotel" ? flightStatusCheck?.hotelStatusSummary?.trim() || null : null;
                     const hasInlineFlightStatus =
                       inlineFlightStatus !== null &&
                       Boolean(
@@ -6546,6 +6822,7 @@ export default function TravelAssistantPage() {
                           typeof inlineFlightStatus.delayMinutes === "number" ||
                           typeof inlineFlightStatus.onTime === "boolean",
                       );
+                    const hasInlineHotelStatus = reservation.type === "hotel" && Boolean(hotelStatusSummary);
                     const flightAirports = reservation.type === "flight" ? resolveFlightAirports(reservation) : null;
                     const flightCode = reservation.type === "flight" ? getFlightNumberLabel(reservation) : "";
                     const airlineLabel =
@@ -6755,6 +7032,19 @@ export default function TravelAssistantPage() {
                             >
                               {inlineFlightStatus?.busy ? "Checking..." : "Check status"}
                             </button>
+                          ) : reservation.type === "hotel" ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                console.log("[travel-assistant] Hotel check status button clicked.", {
+                                  reservationId: reservation.id,
+                                });
+                                void handleCheckFlightStatus(reservation.id);
+                              }}
+                              className="rounded-lg bg-cyan-500 px-3 py-1.5 font-semibold text-white transition hover:bg-cyan-400"
+                            >
+                              Check status
+                            </button>
                           ) : null}
                           <button
                             type="button"
@@ -6773,7 +7063,7 @@ export default function TravelAssistantPage() {
                             Delete
                           </button>
                         </div>
-                        {hasInlineFlightStatus && inlineFlightStatus ? (
+                        {((hasInlineFlightStatus && inlineFlightStatus) || hasInlineHotelStatus) ? (
                           <div
                             className={`border-t px-4 py-2 text-xs ${
                               reservation.type === "flight"
@@ -6783,7 +7073,11 @@ export default function TravelAssistantPage() {
                                 : "border-slate-200 text-slate-700 dark:border-slate-800 dark:text-slate-200"
                             }`}
                           >
-                            {inlineFlightStatus.error ? (
+                            {reservation.type === "hotel" && hotelStatusSummary ? (
+                              <p className="break-words">
+                                <span className="font-semibold">Status:</span> {hotelStatusSummary}
+                              </p>
+                            ) : inlineFlightStatus?.error ? (
                               <p className="break-words text-rose-700 dark:text-rose-300">
                                 Status error: {inlineFlightStatus.error}
                               </p>
