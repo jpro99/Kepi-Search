@@ -796,8 +796,12 @@ function extractFlightLookupInput(reservation: Reservation): {
   airline: string;
   flightDate: string;
 } | null {
+  const reservationRecord = reservation as Reservation & Record<string, unknown>;
   const inferredFlightNumber =
-    reservation.flightNumber?.trim() ||
+    (typeof reservationRecord.flightNumber === "string" ? reservationRecord.flightNumber : "") ||
+    (typeof reservationRecord.flight_number === "string" ? reservationRecord.flight_number : "") ||
+    (typeof reservationRecord.flightNo === "string" ? reservationRecord.flightNo : "") ||
+    (typeof reservationRecord.flight_no === "string" ? reservationRecord.flight_no : "") ||
     reservation.title.match(/\b([A-Z0-9]{2,3}\s?\d{1,4}[A-Z]?)\b/u)?.[1] ||
     reservation.provider.match(/\b([A-Z0-9]{2,3}\s?\d{1,4}[A-Z]?)\b/u)?.[1] ||
     "";
@@ -806,8 +810,20 @@ function extractFlightLookupInput(reservation: Reservation): {
     .replace(/\b([A-Z0-9]{2,3}\s?\d{1,4}[A-Z]?)\b/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
-  const airline = reservation.flightAirline?.trim() || reservation.provider.trim() || airlineFromTitle || "Unknown Airline";
-  const flightDate = reservation.flightDate?.trim() || extractDateFromReservationLocalTime(reservation.localTime) || "";
+  const airline =
+    (typeof reservationRecord.flightAirline === "string" ? reservationRecord.flightAirline : "") ||
+    (typeof reservationRecord.flight_airline === "string" ? reservationRecord.flight_airline : "") ||
+    (typeof reservationRecord.airline === "string" ? reservationRecord.airline : "") ||
+    reservation.provider.trim() ||
+    airlineFromTitle ||
+    "Unknown Airline";
+  const flightDateRaw =
+    (typeof reservationRecord.flightDate === "string" ? reservationRecord.flightDate : "") ||
+    (typeof reservationRecord.flight_date === "string" ? reservationRecord.flight_date : "") ||
+    (typeof reservationRecord.localTime === "string" ? reservationRecord.localTime : "") ||
+    (typeof reservationRecord.local_time === "string" ? reservationRecord.local_time : "");
+  const flightDate =
+    extractDateFromReservationLocalTime(flightDateRaw) || extractDateFromReservationLocalTime(reservation.localTime) || "";
   if (!flightNumber || !flightDate) {
     return null;
   }
@@ -4228,15 +4244,24 @@ export default function TravelAssistantPage() {
         setToast("Reservation not found.");
         return;
       }
-      const reservationLabel = reservation.title || reservation.provider || "this reservation";
-      if (typeof window !== "undefined") {
-        const shouldDelete = window.confirm(`Delete ${reservationLabel}?`);
-        if (!shouldDelete) {
-          return;
-        }
-      }
+      const nextReservations = reservations.filter((item) => item.id !== reservationId);
       pushUndoSnapshot("Reservation deleted");
-      setReservations((prev) => prev.filter((item) => item.id !== reservationId));
+      setReservations(nextReservations);
+      if (activeTripId) {
+        void fetch(TRIP_API_ROUTE, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "update",
+            id: activeTripId,
+            patch: {
+              reservations: nextReservations,
+            },
+          }),
+        }).catch(() => {
+          // Persist fallback is handled by existing autosave effect.
+        });
+      }
       setExpandedConsumerReservationId((prev) => (prev === reservationId ? null : prev));
       setHighlightedReservationId((prev) => (prev === reservationId ? null : prev));
       setFlightStatusCheckByReservationId((prev) => {
@@ -4252,7 +4277,7 @@ export default function TravelAssistantPage() {
         reservationId,
       });
     },
-    [pushUndoSnapshot, queueMutation, reservations, setToast],
+    [activeTripId, pushUndoSnapshot, queueMutation, reservations, setToast],
   );
 
   const handleCheckFlightStatus = useCallback(
@@ -4268,6 +4293,18 @@ export default function TravelAssistantPage() {
       }
 
       const lookupInput = extractFlightLookupInput(reservation);
+      const reservationRecord = reservation as Reservation & Record<string, unknown>;
+      console.info("[travel-assistant] Flight status lookup reservation fields.", {
+        reservationId,
+        reservationKeys: Object.keys(reservationRecord),
+        flightNumber: reservationRecord.flightNumber ?? reservationRecord.flight_number ?? null,
+        flightAirline: reservationRecord.flightAirline ?? reservationRecord.flight_airline ?? reservationRecord.airline ?? null,
+        flightDate: reservationRecord.flightDate ?? reservationRecord.flight_date ?? null,
+        localTime: reservationRecord.localTime ?? reservationRecord.local_time ?? null,
+        provider: reservation.provider,
+        title: reservation.title,
+        lookupInput,
+      });
       if (!lookupInput) {
         const errorMessage = "Add flight number, airline, and date before checking status.";
         setFlightStatusCheckByReservationId((prev) => ({
