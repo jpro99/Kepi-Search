@@ -131,6 +131,14 @@ interface ReservationDraft {
   critical: boolean;
   confidence: Confidence;
   notes: string;
+  flightNumber?: string;
+  flightAirline?: string;
+  flightDate?: string;
+  flightDepartureAirport?: string;
+  flightArrivalAirport?: string;
+  flightDepartureTime?: string;
+  flightArrivalTime?: string;
+  flightStatus?: string;
 }
 
 interface Reservation extends ReservationDraft {
@@ -1307,6 +1315,8 @@ export default function TravelAssistantPage() {
   const [selectedEmailId, setSelectedEmailId] = useState(EMAIL_SAMPLES[0]?.id ?? "");
   const [activeDrawer, setActiveDrawer] = useState<DrawerState | null>(null);
   const [drawerDraft, setDrawerDraft] = useState<ReservationDraft>(EMPTY_DRAFT);
+  const [flightLookupBusy, setFlightLookupBusy] = useState(false);
+  const [flightLookupError, setFlightLookupError] = useState<string | null>(null);
   const [mergeTargetByReview, setMergeTargetByReview] = useState<Record<string, string>>({});
   const [stageFocusMode, setStageFocusMode] = useState(true);
   const [quickAddText, setQuickAddText] = useState("");
@@ -3849,6 +3859,8 @@ export default function TravelAssistantPage() {
           setDrawerDraft(reviewItem.draft);
         }
       }
+      setFlightLookupError(null);
+      setFlightLookupBusy(false);
       setActiveDrawer({ kind, id });
     },
     [reservations, reviewQueue],
@@ -3871,6 +3883,8 @@ export default function TravelAssistantPage() {
   );
 
   const closeDrawer = useCallback((): void => {
+    setFlightLookupError(null);
+    setFlightLookupBusy(false);
     setActiveDrawer(null);
   }, []);
 
@@ -4034,6 +4048,87 @@ export default function TravelAssistantPage() {
     }
     closeDrawer();
   };
+
+  const handleLookupReviewFlight = useCallback(async (): Promise<void> => {
+    if (!activeDrawer || activeDrawer.kind !== "review" || drawerDraft.type !== "flight") {
+      return;
+    }
+    const flightNumber = drawerDraft.flightNumber?.trim() ?? "";
+    const flightAirline = drawerDraft.flightAirline?.trim() ?? "";
+    const flightDate = drawerDraft.flightDate?.trim() ?? "";
+    if (!flightNumber || !flightAirline || !flightDate) {
+      setFlightLookupError("Enter flight number, airline, and date first.");
+      return;
+    }
+
+    setFlightLookupBusy(true);
+    setFlightLookupError(null);
+    try {
+      const params = new URLSearchParams({
+        action: "flight-lookup",
+        flightNumber,
+        airline: flightAirline,
+        flightDate,
+      });
+      const response = await fetch(`/api/travel-updates?${params.toString()}`, {
+        method: "GET",
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        flightNumber?: string;
+        airline?: string;
+        flightDate?: string;
+        departureAirport?: string;
+        arrivalAirport?: string;
+        departureTime?: string;
+        arrivalTime?: string;
+        flightStatus?: string;
+      };
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? `Flight lookup failed (${response.status})`);
+      }
+
+      const departureAirport = payload.departureAirport?.trim() ?? "";
+      const arrivalAirport = payload.arrivalAirport?.trim() ?? "";
+      const departureTime = payload.departureTime?.trim() ?? "";
+      const arrivalTime = payload.arrivalTime?.trim() ?? "";
+      const nextFlightDate = payload.flightDate?.trim() || flightDate;
+      const departureClockMatch = departureTime.match(/T(\d{2}:\d{2})/u);
+      const nextLocalTime = departureClockMatch?.[1] ? `${nextFlightDate} ${departureClockMatch[1]}` : drawerDraft.localTime;
+
+      setDrawerDraft((prev) => ({
+        ...prev,
+        flightNumber: payload.flightNumber?.trim() || flightNumber,
+        flightAirline: payload.airline?.trim() || flightAirline,
+        flightDate: nextFlightDate,
+        flightDepartureAirport: departureAirport,
+        flightArrivalAirport: arrivalAirport,
+        flightDepartureTime: departureTime,
+        flightArrivalTime: arrivalTime,
+        flightStatus: payload.flightStatus?.trim() ?? "",
+        location:
+          departureAirport && arrivalAirport
+            ? `${departureAirport} -> ${arrivalAirport}`
+            : prev.location,
+        localTime: nextLocalTime,
+        notes: [
+          prev.notes.trim(),
+          payload.flightStatus ? `Flight status: ${payload.flightStatus}` : "",
+          arrivalTime ? `Arrival: ${arrivalTime}` : "",
+        ]
+          .filter((entry) => entry.length > 0)
+          .join(" | "),
+      }));
+      setToast("Flight details populated from AviationStack.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to look up flight.";
+      setFlightLookupError(message);
+      setToast(message);
+    } finally {
+      setFlightLookupBusy(false);
+    }
+  }, [activeDrawer, drawerDraft, setToast]);
 
   const normalizeDuplicateValue = (value: string): string => value.trim().toLowerCase();
 
@@ -4758,6 +4853,75 @@ export default function TravelAssistantPage() {
               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
             />
           </label>
+          {activeDrawer.kind === "review" && drawerDraft.type === "flight" ? (
+            <section className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 p-3">
+              <p className="text-xs font-semibold text-cyan-100">Flight lookup</p>
+              <div className="mt-2 grid gap-3 md:grid-cols-3">
+                <label className="block">
+                  <span className="mb-1 block text-xs text-cyan-100/90">Flight number</span>
+                  <input
+                    value={drawerDraft.flightNumber ?? ""}
+                    onChange={(event) =>
+                      setDrawerDraft((prev) => ({ ...prev, flightNumber: event.target.value.trim().toUpperCase() }))
+                    }
+                    placeholder="AA123"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-cyan-100/90">Airline</span>
+                  <input
+                    value={drawerDraft.flightAirline ?? ""}
+                    onChange={(event) =>
+                      setDrawerDraft((prev) => ({ ...prev, flightAirline: event.target.value }))
+                    }
+                    placeholder="American Airlines"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-cyan-100/90">Date</span>
+                  <input
+                    type="date"
+                    value={drawerDraft.flightDate ?? ""}
+                    onChange={(event) =>
+                      setDrawerDraft((prev) => ({ ...prev, flightDate: event.target.value }))
+                    }
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  void handleLookupReviewFlight();
+                }}
+                disabled={
+                  flightLookupBusy ||
+                  !(drawerDraft.flightNumber?.trim() && drawerDraft.flightAirline?.trim() && drawerDraft.flightDate?.trim())
+                }
+                className="mt-3 rounded-lg bg-cyan-400 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {flightLookupBusy ? "Looking up..." : "Look up flight"}
+              </button>
+              {flightLookupError ? <p className="mt-2 text-xs text-rose-300">{flightLookupError}</p> : null}
+              {drawerDraft.flightDepartureAirport || drawerDraft.flightArrivalAirport || drawerDraft.flightStatus ? (
+                <div className="mt-3 space-y-1 text-xs text-cyan-50">
+                  <p>
+                    <span className="font-semibold">Departure:</span>{" "}
+                    {drawerDraft.flightDepartureAirport || "Unknown"} {drawerDraft.flightDepartureTime ? `• ${drawerDraft.flightDepartureTime}` : ""}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Arrival:</span>{" "}
+                    {drawerDraft.flightArrivalAirport || "Unknown"} {drawerDraft.flightArrivalTime ? `• ${drawerDraft.flightArrivalTime}` : ""}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Status:</span> {drawerDraft.flightStatus || "Unknown"}
+                  </p>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
           <label className="block">
             <span className="mb-1 block text-slate-300">Assigned people</span>
             <div className="grid gap-2 rounded-lg border border-slate-700 bg-slate-950 p-3 text-xs">

@@ -23,6 +23,14 @@ interface ReservationDraft {
   critical: boolean;
   confidence: Confidence;
   notes: string;
+  flightNumber?: string;
+  flightAirline?: string;
+  flightDate?: string;
+  flightDepartureAirport?: string;
+  flightArrivalAirport?: string;
+  flightDepartureTime?: string;
+  flightArrivalTime?: string;
+  flightStatus?: string;
 }
 
 interface ReviewItem {

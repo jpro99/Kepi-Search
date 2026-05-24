@@ -16,6 +16,14 @@ export interface SessionReservation {
   confidence: "high" | "medium" | "low";
   notes: string;
   source: "imported" | "manual" | "review-accepted";
+  flightNumber?: string;
+  flightAirline?: string;
+  flightDate?: string;
+  flightDepartureAirport?: string;
+  flightArrivalAirport?: string;
+  flightDepartureTime?: string;
+  flightArrivalTime?: string;
+  flightStatus?: string;
 }
 
 export interface SessionReviewItem {
