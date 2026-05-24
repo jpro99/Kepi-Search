@@ -435,24 +435,6 @@ const INITIAL_FAMILY: FamilyMember[] = [
     visibility: "all-members",
     location: { lat: 40.6428, lon: -73.7808, updatedAt: new Date().toISOString() },
   },
-  {
-    id: "jamie",
-    name: "Jamie",
-    role: "adult",
-    color: "#f9a8d4",
-    sharingEnabled: true,
-    visibility: "all-members",
-    location: { lat: 40.644, lon: -73.7822, updatedAt: new Date().toISOString() },
-  },
-  {
-    id: "riley",
-    name: "Riley",
-    role: "teen",
-    color: "#86efac",
-    sharingEnabled: false,
-    visibility: "organizer-only",
-    location: { lat: 40.6416, lon: -73.776, updatedAt: new Date().toISOString() },
-  },
 ];
 
 const INITIAL_RESERVATIONS: Reservation[] = [
@@ -465,7 +447,7 @@ const INITIAL_RESERVATIONS: Reservation[] = [
     timezone: "America/New_York",
     location: "Terminal 4, JFK",
     confirmationCode: "Y8Q4D2",
-    assignedTo: ["alex", "jamie", "riley"],
+    assignedTo: ["alex"],
     stage: "airport",
     critical: true,
     confidence: "high",
@@ -481,7 +463,7 @@ const INITIAL_RESERVATIONS: Reservation[] = [
     timezone: "America/Los_Angeles",
     location: "Union Square, San Francisco",
     confirmationCode: "MZ-10881",
-    assignedTo: ["alex", "jamie", "riley"],
+    assignedTo: ["alex"],
     stage: "arrival",
     critical: true,
     confidence: "high",
@@ -497,7 +479,7 @@ const INITIAL_RESERVATIONS: Reservation[] = [
     timezone: "America/Los_Angeles",
     location: "SFO Transit Station • Platform 4",
     confirmationCode: "CT-7730",
-    assignedTo: ["alex", "jamie"],
+    assignedTo: ["alex"],
     stage: "arrival",
     critical: true,
     confidence: "high",
@@ -513,11 +495,11 @@ const INITIAL_RESERVATIONS: Reservation[] = [
     timezone: "America/Los_Angeles",
     location: "Mission District",
     confirmationCode: "LK-5521",
-    assignedTo: ["alex", "jamie"],
+    assignedTo: ["alex"],
     stage: "arrival",
     critical: true,
     confidence: "medium",
-    notes: "Riley may join after game event.",
+    notes: "Guest may join after game event.",
     source: "manual",
   },
 ];
@@ -536,7 +518,7 @@ const INITIAL_REVIEW_QUEUE: ReviewItem[] = [
       timezone: "America/Los_Angeles",
       location: "SFO pickup zone",
       confirmationCode: "BAY-2217",
-      assignedTo: ["alex", "jamie", "riley"],
+      assignedTo: ["alex"],
       stage: "arrival",
       critical: true,
       confidence: "low",
@@ -556,7 +538,7 @@ const INITIAL_REVIEW_QUEUE: ReviewItem[] = [
       timezone: "America/New_York",
       location: "Terminal ???",
       confirmationCode: "Y8Q4D2",
-      assignedTo: ["alex", "jamie", "riley"],
+      assignedTo: ["alex"],
       stage: "airport",
       critical: true,
       confidence: "low",
@@ -601,7 +583,7 @@ const EMAIL_SAMPLES: EmailSample[] = [
       timezone: "America/New_York",
       location: "JFK Terminal 4",
       confirmationCode: "Y8Q4D2",
-      assignedTo: ["alex", "jamie", "riley"],
+      assignedTo: ["alex"],
       stage: "airport",
       critical: true,
       confidence: "high",
@@ -630,7 +612,7 @@ const EMAIL_SAMPLES: EmailSample[] = [
       timezone: "America/Los_Angeles",
       location: "SFO transportation zone",
       confirmationCode: "BAY-2217",
-      assignedTo: ["alex", "jamie", "riley"],
+      assignedTo: ["alex"],
       stage: "arrival",
       critical: true,
       confidence: "low",
@@ -2216,6 +2198,31 @@ export default function TravelAssistantPage() {
 
   const unresolvedReviewCount = reviewQueue.length;
   const unresolvedReadinessCount = readinessItems.filter((item) => item.required && !item.complete).length;
+  const assignmentTravelerOptions = useMemo(() => {
+    const travelerIds = new Set<string>();
+    const collectAssignees = (assignees: string[] | undefined): void => {
+      if (!Array.isArray(assignees)) {
+        return;
+      }
+      assignees.forEach((value) => {
+        const normalized = value.trim();
+        if (normalized) {
+          travelerIds.add(normalized);
+        }
+      });
+    };
+
+    reservations.forEach((reservation) => collectAssignees(reservation.assignedTo));
+    reviewQueue.forEach((item) => collectAssignees(item.draft.assignedTo));
+
+    return [...travelerIds].map((id) => {
+      const matchingFamilyMember = familyMembers.find((member) => member.id === id);
+      return {
+        id,
+        name: matchingFamilyMember?.name?.trim() || id,
+      };
+    });
+  }, [familyMembers, reservations, reviewQueue]);
   const hasProPlan = billingLoading ? true : hasProAccess;
   const canUseGmailImport = hasProPlan;
   const canUseAiSuggestions = hasProPlan;
@@ -4933,7 +4940,7 @@ export default function TravelAssistantPage() {
           <label className="block">
             <span className="mb-1 block text-slate-300">Assigned people</span>
             <div className="grid gap-2 rounded-lg border border-slate-700 bg-slate-950 p-3 text-xs">
-              {familyMembers.map((member) => (
+              {assignmentTravelerOptions.map((member) => (
                 <label key={member.id} className="flex items-center gap-2">
                   <input
                     type="checkbox"
@@ -4950,6 +4957,9 @@ export default function TravelAssistantPage() {
                   {member.name}
                 </label>
               ))}
+              {assignmentTravelerOptions.length === 0 ? (
+                <p className="text-xs text-slate-400">No travelers found for this trip yet.</p>
+              ) : null}
             </div>
           </label>
           <label className="block">
