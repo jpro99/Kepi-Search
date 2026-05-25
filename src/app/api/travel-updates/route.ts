@@ -314,8 +314,8 @@ export async function GET(req: Request) {
       flightNumber: best.number ?? flightNum,
       airline: best.airline?.name ?? parsed.data.airline,
       flightDate: parsed.data.flightDate,
-      departureAirport: dep?.airport?.iata ?? "",
-      arrivalAirport: arr?.airport?.iata ?? "",
+      departureAirport: dep?.airport?.iata ?? dep?.airport?.name ?? "",
+      arrivalAirport: arr?.airport?.iata ?? arr?.airport?.name ?? "",
       departureTime: resolveAeroDataBoxTime(dep),
       arrivalTime: resolveAeroDataBoxTime(arr),
       departureTerminal: dep?.terminal ?? "",
@@ -414,7 +414,11 @@ export async function POST(req: Request) {
           "Use this exact shape:",
           '{ "reservation": { "type": "", "provider": "", "title": "", "date": "", "time": "", "timezone": "", "confirmationCode": "", "location": "", "flightOrTrainNumber": "", "roomType": "", "checkOutDate": "", "notes": "" } }',
           "type must be one of: flight, hotel, train, ride, dinner.",
-          "Use ISO-like date YYYY-MM-DD when possible and 24-hour time HH:mm when possible.",
+          "CRITICAL: Only extract what is explicitly visible in the image. NEVER guess, infer, or assume any field.",
+          "If the year is not shown in the image, set date to empty string — do NOT assume the current year or any year.",
+          "If any field is unclear or not visible, return empty string for that field.",
+          "Use ISO date YYYY-MM-DD only when the full date including year is clearly visible. Use 24-hour HH:mm for time.",
+          "Do not invent confirmation codes, dates, or any other fields.",
         ].join(" "),
         messages: [
           {
@@ -491,7 +495,7 @@ export async function POST(req: Request) {
       const draft = {
         type: scannedType,
         title: title || `${provider || "Scanned"} reservation`,
-        provider: provider || "Scanned ticket",
+        provider: provider || title || (scannedType === "hotel" ? "Hotel" : scannedType === "flight" ? "Flight" : "Reservation"),
         localTime,
         timezone,
         location,

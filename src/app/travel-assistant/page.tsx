@@ -819,16 +819,33 @@ function getFlightNumberLabel(reservation: Reservation): string {
 function resolveFlightAirports(reservation: Reservation): { departureAirport: string; arrivalAirport: string } {
   const departureAirport = reservation.flightDepartureAirport?.trim() ?? "";
   const arrivalAirport = reservation.flightArrivalAirport?.trim() ?? "";
+
+  // If the stored value looks like a full airport name (contains spaces or >4 chars)
+  // try to extract just the IATA code or abbreviate it for the boarding pass display
+  const toDisplayCode = (raw: string): string => {
+    if (!raw) return "";
+    // Already looks like an IATA code (3-4 uppercase letters)
+    if (/^[A-Z]{3,4}$/.test(raw)) return raw;
+    // Try to find a 3-letter IATA code in parentheses e.g. "Seoul Gimpo (GMP)"
+    const parenMatch = raw.match(/\(([A-Z]{3})\)/u);
+    if (parenMatch?.[1]) return parenMatch[1];
+    // First word if ≤4 chars and all caps
+    const firstWord = raw.split(/[\s\-–]/u)[0] ?? "";
+    if (/^[A-Z]{3,4}$/.test(firstWord)) return firstWord;
+    // Truncate to first meaningful word (city name)
+    return raw.split(/[\s,\-–]/u)[0]?.slice(0, 6).toUpperCase() ?? raw.slice(0, 3).toUpperCase();
+  };
+
   if (departureAirport || arrivalAirport) {
     return {
-      departureAirport: departureAirport || "DEP",
-      arrivalAirport: arrivalAirport || "ARR",
+      departureAirport: toDisplayCode(departureAirport) || "DEP",
+      arrivalAirport: toDisplayCode(arrivalAirport) || "ARR",
     };
   }
   const route = reservation.location.split(/->|→/u).map((part) => part.trim());
   return {
-    departureAirport: route[0] || "DEP",
-    arrivalAirport: route[1] || "ARR",
+    departureAirport: toDisplayCode(route[0] ?? "") || "DEP",
+    arrivalAirport: toDisplayCode(route[1] ?? "") || "ARR",
   };
 }
 
