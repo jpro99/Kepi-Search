@@ -1584,7 +1584,9 @@ export default function TravelAssistantPage() {
     kind: "reservation" | "review";
     id: string;
     startX: number;
+    startY: number;
     startingOffset: number;
+    locked: boolean;
   } | null>(null);
 
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(INITIAL_FAMILY);
@@ -4836,7 +4838,9 @@ export default function TravelAssistantPage() {
         kind,
         id,
         startX,
+        startY: event.touches[0]?.clientY ?? 0,
         startingOffset,
+        locked: false,
       };
       if (kind === "reservation") {
         setSwipeOffsetByReviewId({});
@@ -4856,7 +4860,16 @@ export default function TravelAssistantPage() {
     if (typeof touchX !== "number") {
       return;
     }
+    const touchY = event.touches[0]?.clientY ?? 0;
     const deltaX = gesture.startX - touchX;
+    const deltaY = Math.abs((touchY) - (gesture.startY ?? 0));
+    // Require clearly horizontal gesture (2:1 ratio) before activating swipe
+    if (!gesture.locked && Math.abs(deltaX) < 8) return;
+    if (!gesture.locked && deltaY > Math.abs(deltaX) * 0.6) {
+      swipeGestureRef.current = null;
+      return;
+    }
+    gesture.locked = true;
     const nextOffset = Math.max(0, Math.min(SWIPE_DELETE_REVEAL_PX, gesture.startingOffset + deltaX));
     if (nextOffset > 0) {
       event.preventDefault();
