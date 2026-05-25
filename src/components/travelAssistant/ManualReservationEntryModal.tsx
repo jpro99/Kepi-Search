@@ -153,9 +153,9 @@ export function ManualReservationEntryModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-3 backdrop-blur-sm md:items-center">
-      <div className="flex max-h-[92dvh] w-full max-w-xl flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-[#161b22]">
+      <div className="flex max-h-[92dvh] w-full max-w-xl flex-col rounded-2xl border border-[var(--border-default)] bg-[var(--bg-card)] shadow-2xl">
         {/* ── Header (fixed, never scrolls away) ── */}
-        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 dark:border-slate-700">
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--border-default)] px-4 py-4">
           <div className="min-w-0">
             <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Add reservation</h2>
             <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
@@ -165,7 +165,7 @@ export function ManualReservationEntryModal({
           <button
             type="button"
             onClick={onClose}
-            className="shrink-0 rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold dark:border-slate-700"
+            className="shrink-0 rounded-md border border-[var(--border-default)] bg-[var(--bg-muted)] px-2 py-1 text-xs font-semibold text-[var(--text-primary)]"
           >
             Close
           </button>
@@ -235,7 +235,7 @@ export function ManualReservationEntryModal({
               <select
                 value={reservationType}
                 onChange={(e) => setReservationType(e.target.value as ManualReservationType)}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-base text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-muted)] px-3 py-3 text-base text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-cyan-400"
               >
                 {RESERVATION_TYPE_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -248,7 +248,7 @@ export function ManualReservationEntryModal({
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="AA 123 JFK→LAX, Hyatt Tokyo, Nobu dinner…"
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-base text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-muted)] px-3 py-3 text-base text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-cyan-400"
               />
             </label>
             <label className="block text-sm">
@@ -256,7 +256,7 @@ export function ManualReservationEntryModal({
               <input
                 value={provider}
                 onChange={(e) => setProvider(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-base text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-muted)] px-3 py-3 text-base text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-cyan-400"
               />
             </label>
             <label className="block text-sm">
@@ -265,7 +265,7 @@ export function ManualReservationEntryModal({
                 type="datetime-local"
                 value={localDateTime}
                 onChange={(e) => setLocalDateTime(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-base text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-muted)] px-3 py-3 text-base text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-cyan-400"
               />
             </label>
             <label className="block text-sm">
@@ -273,7 +273,7 @@ export function ManualReservationEntryModal({
               <input
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-base text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-muted)] px-3 py-3 text-base text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-cyan-400"
               />
             </label>
             <label className="block text-sm">
@@ -281,7 +281,7 @@ export function ManualReservationEntryModal({
               <input
                 value={confirmationCode}
                 onChange={(e) => setConfirmationCode(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-base text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-muted)] px-3 py-3 text-base text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-cyan-400"
               />
             </label>
             {reservationType === "hotel" ? (
@@ -292,7 +292,7 @@ export function ManualReservationEntryModal({
                     type="date"
                     value={checkOutDate}
                     onChange={(e) => setCheckOutDate(e.target.value)}
-                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-base text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-muted)] px-3 py-3 text-base text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-cyan-400"
                   />
                 </label>
                 <label className="block text-sm">
@@ -301,7 +301,7 @@ export function ManualReservationEntryModal({
                     value={roomType}
                     onChange={(e) => setRoomType(e.target.value)}
                     placeholder="e.g. King, Deluxe, Suite"
-                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-base text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-muted)] px-3 py-3 text-base text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-cyan-400"
                   />
                 </label>
               </>
@@ -315,7 +315,7 @@ export function ManualReservationEntryModal({
                   value={flightNumber}
                   onChange={(e) => setFlightNumber(e.target.value)}
                   placeholder={reservationType === "flight" ? "e.g. VI3557" : "e.g. Nozomi 15"}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-base text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-muted)] px-3 py-3 text-base text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-cyan-400"
                 />
               </label>
             ) : null}
@@ -325,7 +325,7 @@ export function ManualReservationEntryModal({
                 rows={2}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-base text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-muted)] px-3 py-3 text-base text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-cyan-400"
               />
             </label>
             {familyMembers.length > 1 ? (
