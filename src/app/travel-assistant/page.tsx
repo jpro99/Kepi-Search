@@ -5773,6 +5773,13 @@ export default function TravelAssistantPage() {
     );
   };
 
+  // Auto-close the review session card once all items have been processed.
+  useEffect(() => {
+    if (consumerReviewQueueSession.open && reviewQueue.length === 0) {
+      setConsumerReviewQueueSession({ open: false, processed: 0, total: 0 });
+    }
+  }, [consumerReviewQueueSession.open, reviewQueue.length]);
+
   const navigateToConsumerTab = useCallback((nextTab: ConsumerTab): void => {
     setConsumerTab(nextTab);
     const params = new URLSearchParams(window.location.search);
@@ -6990,6 +6997,105 @@ export default function TravelAssistantPage() {
                                 {reservation.location || "Location not set"}
                               </p>
                             </div>
+                          ) : reservation.type === "dinner" ? (
+                            <div className="rounded-2xl border border-rose-200 bg-gradient-to-br from-rose-50 via-rose-50 to-white p-4 shadow-[0_8px_24px_-16px_rgba(190,18,60,0.4)] dark:border-rose-500/40 dark:from-rose-500/15 dark:via-rose-500/10 dark:to-slate-900">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate text-lg font-semibold text-rose-950 dark:text-rose-100">
+                                    {reservation.provider || reservation.title || "Restaurant"}
+                                  </p>
+                                  <p className="mt-1 text-xs font-semibold uppercase tracking-[0.16em] text-rose-600 dark:text-rose-300">
+                                    Dinner reservation
+                                  </p>
+                                </div>
+                                <span className={`max-w-24 rounded-full px-2 py-1 text-center text-[11px] font-semibold leading-tight ${statusMeta.className}`}>
+                                  <span className="block truncate">{statusMeta.label}</span>
+                                </span>
+                              </div>
+                              <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                                <p className="rounded-lg border border-rose-200 bg-white/70 px-3 py-2 dark:border-rose-400/40 dark:bg-slate-950/50">
+                                  <span className="block uppercase tracking-[0.13em] text-rose-600 dark:text-rose-300">Date</span>
+                                  <span className="font-semibold text-rose-950 dark:text-rose-50">{formatConsumerReservationDate(reservation.localTime)}</span>
+                                </p>
+                                <p className="rounded-lg border border-rose-200 bg-white/70 px-3 py-2 dark:border-rose-400/40 dark:bg-slate-950/50">
+                                  <span className="block uppercase tracking-[0.13em] text-rose-600 dark:text-rose-300">Time</span>
+                                  <span className="font-semibold text-rose-950 dark:text-rose-50">{formatConsumerReservationTime(reservation.localTime)}</span>
+                                </p>
+                              </div>
+                              <p className="mt-3 truncate text-xs text-rose-800 dark:text-rose-200">{reservation.location || "Location not set"}</p>
+                              {reservation.confirmationCode ? (
+                                <p className="mt-1 text-xs text-rose-700 dark:text-rose-300">Confirmation: <span className="font-semibold">{reservation.confirmationCode}</span></p>
+                              ) : null}
+                            </div>
+                          ) : reservation.type === "train" ? (
+                            <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 via-emerald-50 to-white p-4 shadow-[0_8px_24px_-16px_rgba(5,150,105,0.4)] dark:border-emerald-500/40 dark:from-emerald-500/15 dark:via-emerald-500/10 dark:to-slate-900">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate text-lg font-semibold text-emerald-950 dark:text-emerald-100">
+                                    {reservation.provider || "Train"}
+                                  </p>
+                                  <p className="mt-1 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">
+                                    Train ticket
+                                  </p>
+                                </div>
+                                <span className={`max-w-24 rounded-full px-2 py-1 text-center text-[11px] font-semibold leading-tight ${statusMeta.className}`}>
+                                  <span className="block truncate">{statusMeta.label}</span>
+                                </span>
+                              </div>
+                              <div className="mt-4 flex items-center gap-3">
+                                <p className="min-w-0 flex-1 truncate text-2xl font-bold text-emerald-950 dark:text-emerald-50">
+                                  {reservation.location.split("→")[0]?.trim() || "Origin"}
+                                </p>
+                                <span className="text-lg text-emerald-600 dark:text-emerald-400">→</span>
+                                <p className="min-w-0 flex-1 truncate text-right text-2xl font-bold text-emerald-950 dark:text-emerald-50">
+                                  {reservation.location.split("→")[1]?.trim() || "Destination"}
+                                </p>
+                              </div>
+                              <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 p-2 text-xs dark:border-emerald-500/30 dark:bg-emerald-500/10">
+                                <p className="truncate">
+                                  <span className="block text-[10px] uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-300">Departs</span>
+                                  <span className="font-semibold text-emerald-950 dark:text-emerald-50">{formatConsumerReservationTime(reservation.localTime)}</span>
+                                </p>
+                                <p className="truncate">
+                                  <span className="block text-[10px] uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-300">Train</span>
+                                  <span className="font-semibold text-emerald-950 dark:text-emerald-50">{(reservation as Reservation & { trainNumber?: string }).trainNumber || "--"}</span>
+                                </p>
+                                <p className="truncate text-right">
+                                  <span className="block text-[10px] uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-300">Ref</span>
+                                  <span className="font-semibold text-emerald-950 dark:text-emerald-50">{reservation.confirmationCode || "--"}</span>
+                                </p>
+                              </div>
+                            </div>
+                          ) : reservation.type === "ride" ? (
+                            <div className="rounded-2xl border border-sky-200 bg-gradient-to-br from-sky-50 via-sky-50 to-white p-4 shadow-[0_8px_24px_-16px_rgba(2,132,199,0.3)] dark:border-sky-500/40 dark:from-sky-500/15 dark:via-sky-500/10 dark:to-slate-900">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate text-lg font-semibold text-sky-950 dark:text-sky-100">
+                                    {reservation.provider || "Car service"}
+                                  </p>
+                                  <p className="mt-1 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700 dark:text-sky-300">
+                                    {reservation.provider?.toLowerCase().includes("rental") || reservation.title?.toLowerCase().includes("rental") ? "Car rental" : "Ride / Transfer"}
+                                  </p>
+                                </div>
+                                <span className={`max-w-24 rounded-full px-2 py-1 text-center text-[11px] font-semibold leading-tight ${statusMeta.className}`}>
+                                  <span className="block truncate">{statusMeta.label}</span>
+                                </span>
+                              </div>
+                              <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                                <p className="rounded-lg border border-sky-200 bg-white/70 px-3 py-2 dark:border-sky-400/40 dark:bg-slate-950/50">
+                                  <span className="block uppercase tracking-[0.13em] text-sky-700 dark:text-sky-300">Pickup</span>
+                                  <span className="font-semibold text-sky-950 dark:text-sky-50">{formatConsumerReservationDate(reservation.localTime)}</span>
+                                </p>
+                                <p className="rounded-lg border border-sky-200 bg-white/70 px-3 py-2 dark:border-sky-400/40 dark:bg-slate-950/50">
+                                  <span className="block uppercase tracking-[0.13em] text-sky-700 dark:text-sky-300">Time</span>
+                                  <span className="font-semibold text-sky-950 dark:text-sky-50">{formatConsumerReservationTime(reservation.localTime)}</span>
+                                </p>
+                              </div>
+                              <p className="mt-3 truncate text-xs text-sky-800 dark:text-sky-200">{reservation.location || "Location not set"}</p>
+                              {reservation.confirmationCode ? (
+                                <p className="mt-1 text-xs text-sky-700 dark:text-sky-300">Confirmation: <span className="font-semibold">{reservation.confirmationCode}</span></p>
+                              ) : null}
+                            </div>
                           ) : (
                             <div className="flex items-center justify-between gap-3">
                               <div className="min-w-0">
@@ -7078,8 +7184,15 @@ export default function TravelAssistantPage() {
                                 <span className="font-semibold">Status:</span> {hotelStatusSummary}
                               </p>
                             ) : inlineFlightStatus?.error ? (
-                              <p className="break-words text-rose-700 dark:text-rose-300">
-                                Status error: {inlineFlightStatus.error}
+                              <p className="break-words text-slate-500 dark:text-slate-400">
+                                {(() => {
+                                  const flightDateMs = Date.parse(reservation.flightDate ?? reservation.localTime ?? "");
+                                  const hoursUntilFlight = Number.isNaN(flightDateMs) ? 0 : (flightDateMs - Date.now()) / 3_600_000;
+                                  if (hoursUntilFlight > 36) {
+                                    return `Gate and live status appear 24–48 hrs before departure. Scheduled: ${formatConsumerReservationDate(reservation.localTime)} at ${formatConsumerReservationTime(reservation.localTime)}.`;
+                                  }
+                                  return `Status unavailable: ${inlineFlightStatus.error}`;
+                                })()}
                               </p>
                             ) : (
                               <div className="grid gap-1 sm:grid-cols-2">
