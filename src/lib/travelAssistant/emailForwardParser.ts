@@ -563,13 +563,13 @@ function buildRegexCandidates(input: {
   if (parsedDate && parsedTime) {
     candidates.localTime = {
       value: `${parsedDate} ${parsedTime}`,
-      confidence: 0.9,
+      confidence: 0.55, // lowered — AI departure time should override for flights
       source: "regex",
     };
   } else if (parsedDate) {
     candidates.localTime = {
       value: `${parsedDate} 12:00`,
-      confidence: 0.6,
+      confidence: 0.45,
       source: "regex",
     };
     parserNotes.push("Time not found in email; defaulted to 12:00 local time for review.");
@@ -626,8 +626,11 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap[]> {
     '{ "reservations": [ { "type": "", "title": "", "provider": "", "confirmationCode": "", "localTime": "", "timezone": "", "location": "", "notes": "", "flightNumber": "" } ] }',
     "If there are multiple flights in one email, include one reservations[] object per flight.",
     "Use type values only: flight, hotel, train, ride.",
-    "Use localTime in 'YYYY-MM-DD HH:mm' when possible.",
-    "For flights, set flightNumber to the IATA flight number e.g. AA123, UA456, JL001.",
+    "CRITICAL for localTime: Use the actual FLIGHT DEPARTURE time, not the email send time, not check-in time, not boarding time.",
+    "The departure time is the scheduled time the plane leaves the gate. Format: 'YYYY-MM-DD HH:mm' in 24-hour.",
+    "For flights, set flightNumber to the IATA flight number e.g. AA123, UA456, JL001, VI3557.",
+    "For timezone: use the IATA timezone of the DEPARTURE airport city e.g. Pacific/Honolulu, America/New_York, Asia/Tokyo.",
+    "For location: set to the departure airport name or city, NOT the hotel address.",
     "If any field is unknown, return an empty string for that field.",
     "Do not include explanation text.",
     "",
@@ -647,7 +650,7 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap[]> {
       max_tokens: 700,
       temperature: 0,
       system:
-        "Extract travel reservations from forwarded email text. Return strict JSON only in the shape { reservations: [{ type, title, provider, confirmationCode, localTime, timezone, location, notes, flightNumber }] }. CRITICAL: type must be hotel for hotel/stay emails even if they mention arrival or departure dates. Only use type=flight when the email explicitly mentions a flight number, airline, or boarding pass. For flights, set flightNumber to the IATA code e.g. AA123. For multi-flight emails, return every flight as a separate reservations[] item.",
+        "Extract travel reservations from forwarded email text. Return strict JSON only. CRITICAL RULES: (1) type=hotel for hotel/stay emails even if they mention arrival/departure dates. type=flight ONLY when email has a flight number, airline, or boarding pass. (2) For flights, localTime MUST be the scheduled DEPARTURE time of the plane — not email send time, not check-in time, not boarding time. Use 24-hour YYYY-MM-DD HH:mm format. (3) timezone = IATA timezone of departure city e.g. Pacific/Honolulu, Asia/Tokyo. (4) location = departure airport name or city, not hotel address. (5) flightNumber = IATA code e.g. VI3557. (6) For multi-flight emails return one object per flight.",
       messages: [
         {
           role: "user",
