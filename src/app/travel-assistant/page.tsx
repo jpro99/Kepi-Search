@@ -3934,6 +3934,30 @@ export default function TravelAssistantPage() {
       };
       pushUndoSnapshot("Manual reservation added");
       setReservations((prev) => [reservation, ...prev]);
+      // Force immediate server write — don't rely on autosave debounce
+      const targetTripId = activeTripId ?? trips[0]?.id ?? null;
+      if (targetTripId) {
+        const currentReservations = [reservation, ...(trips.find((t) => t.id === targetTripId)?.reservations ?? [])];
+        void fetch(TRIP_API_ROUTE, {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "update",
+            id: targetTripId,
+            patch: { reservations: currentReservations },
+          }),
+        }).then(async (res) => {
+          if (!res.ok) return;
+          const payload = (await res.json()) as { trips?: unknown[] };
+          if (Array.isArray(payload.trips)) {
+            const parsedTrips = payload.trips
+              .map((t) => normalizeManagedTrip(t))
+              .filter((t): t is ManagedTrip => t !== null);
+            setTrips(parsedTrips);
+          }
+        });
+      }
       queueMutation("Manual reservation added to live timeline.", {
         key: "manual-reservation-add",
         reservationId: reservation.id,
@@ -3941,7 +3965,7 @@ export default function TravelAssistantPage() {
       setManualReservationModalOpen(false);
       setToast("Reservation added");
     },
-    [pushUndoSnapshot, queueMutation, setToast],
+    [activeTripId, pushUndoSnapshot, queueMutation, setToast, trips],
   );
 
   const handleImportParsedReservations = useCallback(
