@@ -1702,6 +1702,7 @@ export default function TravelAssistantPage() {
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [manualReservationModalOpen, setManualReservationModalOpen] = useState(false);
   const [reservationsCalendarView, setReservationsCalendarView] = useState(false);
+  const [showCompletedFlights, setShowCompletedFlights] = useState(false);
   const [reservationsRefreshing, setReservationsRefreshing] = useState(false);
   const [ticketScanBusy, setTicketScanBusy] = useState(false);
 
@@ -6720,12 +6721,25 @@ export default function TravelAssistantPage() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {consumerReservationsSorted.map((reservation) => {
-                    const expanded = expandedConsumerReservationId === reservation.id;
-                    const statusMeta = getConsumerReservationStatus(reservation);
-                    const flightStatusCheck = flightStatusCheckByReservationId[reservation.id] ?? null;
-                    const depMs = parseDateInput((reservation as Reservation & { flightDepartureTime?: string }).flightDepartureTime ?? reservation.localTime ?? "");
-                    const isPastFlight = reservation.type === "flight" && !Number.isNaN(depMs) && new Date().getTime() - depMs > 4 * 3_600_000;
+                  {(() => {
+                    const nowMs = new Date().getTime();
+                    const active = consumerReservationsSorted.filter((r) => {
+                      const depMs = parseDateInput((r as Reservation & { flightDepartureTime?: string }).flightDepartureTime ?? r.localTime ?? "");
+                      return !(r.type === "flight" && !Number.isNaN(depMs) && nowMs - depMs > 4 * 3_600_000);
+                    });
+                    const completed = consumerReservationsSorted.filter((r) => {
+                      const depMs = parseDateInput((r as Reservation & { flightDepartureTime?: string }).flightDepartureTime ?? r.localTime ?? "");
+                      return r.type === "flight" && !Number.isNaN(depMs) && nowMs - depMs > 4 * 3_600_000;
+                    });
+                    const visibleList = showCompletedFlights ? consumerReservationsSorted : active;
+                    return (
+                      <>
+                        {visibleList.map((reservation) => {
+                          const expanded = expandedConsumerReservationId === reservation.id;
+                          const statusMeta = getConsumerReservationStatus(reservation);
+                          const flightStatusCheck = flightStatusCheckByReservationId[reservation.id] ?? null;
+                          const depMs = parseDateInput((reservation as Reservation & { flightDepartureTime?: string }).flightDepartureTime ?? reservation.localTime ?? "");
+                          const isPastFlight = reservation.type === "flight" && !Number.isNaN(depMs) && new Date().getTime() - depMs > 4 * 3_600_000;
                     const inlineFlightStatus =
                       reservation.type === "flight"
                         ? {
@@ -7224,7 +7238,21 @@ export default function TravelAssistantPage() {
                         </div>
                       </div>
                     );
-                  })}
+                        })}
+                        {completed.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setShowCompletedFlights((v) => !v)}
+                            className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-800/50"
+                          >
+                            {showCompletedFlights
+                              ? `Hide ${completed.length} completed flight${completed.length === 1 ? '' : 's'}`
+                              : `Show ${completed.length} completed flight${completed.length === 1 ? '' : 's'}`}
+                          </button>
+                        ) : null}
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </section>
