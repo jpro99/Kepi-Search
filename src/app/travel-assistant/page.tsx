@@ -4646,7 +4646,7 @@ export default function TravelAssistantPage() {
             setTrips((previous) => previous.map((trip) => (trip.id === payload.trip?.id ? payload.trip : trip)));
           }
         })
-        .catch((error) => {
+        .catch(() => {
           setToast("Network error while deleting review item.");
         });
     },
@@ -4722,7 +4722,7 @@ export default function TravelAssistantPage() {
               setTrips((previous) => previous.map((trip) => (trip.id === payload.trip?.id ? payload.trip : trip)));
             }
           })
-          .catch((error) => {
+          .catch(() => {
             setToast("Network error while deleting reservation.");
           });
       } else {
