@@ -76,7 +76,6 @@ import { TripTimeline } from "@/components/travelAssistant/TripTimeline";
 import { TripSearch, type TripSearchSelection } from "@/components/travelAssistant/TripSearch";
 import { TripSwitcher } from "@/components/travelAssistant/TripSwitcher";
 import { TripOrientationCard } from "@/components/travelAssistant/TripOrientationCard";
-import { TripTimeline } from "@/components/travelAssistant/TripTimeline";
 import { DocumentVault } from "@/components/travelAssistant/DocumentVault";
 import { PackingList } from "@/components/travelAssistant/PackingList";
 import { WeatherCard } from "@/components/travelAssistant/WeatherCard";

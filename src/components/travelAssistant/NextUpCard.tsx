@@ -116,50 +116,44 @@ export function NextUpCard({ reservations, tripName, onReservationTap }: NextUpC
   const fetchGuidance = useCallback(async () => {
     if (reservations.filter((r) => hoursUntil(r.localTime) > -2).length === 0) return;
     setGuidance({ status: "loading" });
-    const nowIso = new Date().toISOString();
     const contextBlock = buildContextBlock(reservations);
 
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const nowIso = new Date().toISOString();
+      const res = await fetch("/api/trip-guidance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          system: [
-            "You are a precision travel execution assistant for the Kepi app.",
-            "Your ONLY job is to tell the traveler exactly what they need to do RIGHT NOW or very soon to stay on track.",
-            "Be specific with times. Include buffer time (2 hours before domestic, 3 hours before international flights).",
-            "For a hotel → flight sequence: calculate when to leave the hotel based on distance and check-in time.",
-            "Respond with a single JSON object: { \"urgency\": \"critical|warning|normal\", \"headline\": \"short action phrase max 8 words\", \"detail\": \"2-3 sentences of specific actionable guidance\" }",
-            "urgency=critical if < 4 hours to next event, warning if < 24 hours, normal otherwise.",
-            "Never say 'I' or 'you should' — give direct instructions. Example: 'Leave hotel by 7:45 AM.'",
-            "If the next event is days away, give a useful prep tip, not just 'nothing to do'.",
-          ].join(" "),
-          messages: [{
-            role: "user",
-            content: `Current time: ${nowIso}\nTrip: ${tripName}\n\nUpcoming reservations:\n${contextBlock}\n\nWhat does the traveler need to do right now or next to stay perfectly on track?`,
-          }],
+          tripName,
+          nowIso,
+          reservationContext: contextBlock,
         }),
       });
 
-      const data = (await res.json()) as {
-        content?: Array<{ type: string; text?: string }>;
-      };
+      if (!res.ok) {
+        setGuidance({ status: "error" });
+        return;
+      }
 
-      const raw = data.content?.find((b) => b.type === "text")?.text ?? "";
-      const clean = raw.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean) as {
+      const data = (await res.json()) as {
         urgency?: string;
         headline?: string;
         detail?: string;
+        error?: string;
       };
+
+      if (data.error) {
+        setGuidance({ status: "error" });
+        return;
+      }
 
       setGuidance({
         status: "done",
-        text: `**${parsed.headline ?? ""}**\n${parsed.detail ?? ""}`,
-        urgency: (parsed.urgency === "critical" || parsed.urgency === "warning")
-          ? parsed.urgency : "normal",
+        text: `**${data.headline ?? ""}**
+${data.detail ?? ""}`,
+        urgency: (data.urgency === "critical" || data.urgency === "warning")
+          ? data.urgency : "normal",
       });
     } catch {
       setGuidance({ status: "error" });
