@@ -3157,6 +3157,16 @@ export default function TravelAssistantPage() {
       return leftMs - rightMs;
     });
   }, [consumerDisplayReservations]);
+  const nextUpcomingFlight = useMemo(() => {
+    const nowMs = new Date().getTime();
+    return consumerReservationsSorted.find((r) => {
+      if (r.type !== "flight") return false;
+      const depMs = parseDateInput((r as Reservation & { flightDepartureTime?: string }).flightDepartureTime ?? r.localTime ?? "");
+      return !Number.isNaN(depMs) && depMs > nowMs - 4 * 3_600_000;
+    }) ?? null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consumerReservationsSorted]);
+
   const forwardedReviewItems = useMemo(
     () => reviewQueue.filter((item) => item.sourceChannel === "email-forward"),
     [reviewQueue],
@@ -5885,6 +5895,14 @@ export default function TravelAssistantPage() {
             className: "bg-emerald-500/15 text-emerald-700 ring-1 ring-emerald-500/30 dark:text-emerald-200",
           };
         }
+        // Past flight — departed more than 4 hours ago
+        const depMs = parseDateInput(reservation.flightDepartureTime ?? reservation.localTime ?? "");
+        if (!Number.isNaN(depMs) && Date.now() - depMs > 4 * 3_600_000) {
+          return {
+            label: "Completed",
+            className: "bg-slate-400/20 text-slate-500 ring-1 ring-slate-400/20 dark:text-slate-400",
+          };
+        }
         return {
           label: "Check status",
           className: "bg-slate-900/10 text-slate-700 ring-1 ring-slate-400/30 dark:text-slate-200",
@@ -6613,6 +6631,33 @@ export default function TravelAssistantPage() {
                 </div>
               ) : null}
 
+              {/* Next flight banner */}
+              {nextUpcomingFlight && !reservationsCalendarView ? (
+                <button
+                  type="button"
+                  onClick={() => openDrawer("reservation", nextUpcomingFlight.id)}
+                  className="w-full rounded-2xl bg-gradient-to-r from-violet-600 to-violet-500 px-4 py-3 text-left shadow-lg shadow-violet-500/20 transition hover:from-violet-500 hover:to-violet-400"
+                >
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-violet-200">Next flight</p>
+                  <div className="mt-1 flex items-center justify-between gap-3">
+                    <p className="text-lg font-black text-white">
+                      {(nextUpcomingFlight as Reservation & { flightDepartureAirport?: string }).flightDepartureAirport || "DEP"}
+                      {" → "}
+                      {(nextUpcomingFlight as Reservation & { flightArrivalAirport?: string }).flightArrivalAirport || "ARR"}
+                    </p>
+                    <div className="text-right">
+                      <p className="text-sm font-bold text-white">
+                        {(nextUpcomingFlight as Reservation & { flightNumber?: string }).flightNumber ||
+                          nextUpcomingFlight.provider}
+                      </p>
+                      <p className="text-xs text-violet-200">
+                        {formatConsumerReservationDate(nextUpcomingFlight.localTime)} · {formatConsumerReservationTime(nextUpcomingFlight.localTime)}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              ) : null}
+
               {reservationsCalendarView ? (
                 <TripCalendarView
                   reservations={consumerReservationsSorted}
@@ -6662,6 +6707,8 @@ export default function TravelAssistantPage() {
                     const expanded = expandedConsumerReservationId === reservation.id;
                     const statusMeta = getConsumerReservationStatus(reservation);
                     const flightStatusCheck = flightStatusCheckByReservationId[reservation.id] ?? null;
+                    const depMs = parseDateInput((reservation as Reservation & { flightDepartureTime?: string }).flightDepartureTime ?? reservation.localTime ?? "");
+                    const isPastFlight = reservation.type === "flight" && !Number.isNaN(depMs) && new Date().getTime() - depMs > 4 * 3_600_000;
                     const inlineFlightStatus =
                       reservation.type === "flight"
                         ? {
@@ -6721,7 +6768,7 @@ export default function TravelAssistantPage() {
                     const hotelData = reservation.type === "hotel" ? resolveHotelCardData(reservation) : null;
                     const reservationSwipeOffset = swipeOffsetByReservationId[reservation.id] ?? 0;
                     return (
-                      <div key={reservation.id} className="relative overflow-hidden rounded-2xl">
+                      <div key={reservation.id} className={`relative overflow-hidden rounded-2xl transition-opacity ${isPastFlight ? "opacity-50" : ""}`}>
                         <div
                           className="absolute inset-y-0 right-0 flex w-[92px] items-stretch"
                           style={{ opacity: reservationSwipeOffset > 0 ? 1 : 0 }}
