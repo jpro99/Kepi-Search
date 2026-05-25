@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
-import { resolveAuthenticatedUserId } from "@/lib/admin/adminAccess";
+import { auth } from "@clerk/nextjs/server";
 import { getActiveTrip, updateTrip } from "@/lib/travelAssistant/tripStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request): Promise<NextResponse> {
-  const auth = await resolveAuthenticatedUserId(request);
-  if (!auth.userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const trip = await getActiveTrip(auth.userId);
+export async function GET(): Promise<NextResponse> {
+  const session = await auth();
+  const userId = session.userId;
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth2 = { userId };
+  const trip = await getActiveTrip(auth2.userId);
   if (!trip) return NextResponse.json({ error: "No active trip" });
   return NextResponse.json({
     tripId: trip.id,
@@ -26,12 +28,14 @@ export async function GET(request: Request): Promise<NextResponse> {
   });
 }
 
-export async function DELETE(request: Request): Promise<NextResponse> {
-  const auth = await resolveAuthenticatedUserId(request);
-  if (!auth.userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const trip = await getActiveTrip(auth.userId);
+export async function DELETE(): Promise<NextResponse> {
+  const session = await auth();
+  const userId = session.userId;
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const auth2 = { userId };
+  const trip = await getActiveTrip(auth2.userId);
   if (!trip) return NextResponse.json({ error: "No active trip" });
   const before = trip.reservations.length;
-  await updateTrip(trip.id, { reservations: [], reviewQueue: [] }, auth.userId);
+  await updateTrip(trip.id, { reservations: [], reviewQueue: [] }, auth2.userId);
   return NextResponse.json({ cleared: before, tripId: trip.id });
 }
