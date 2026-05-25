@@ -72,6 +72,7 @@ import {
 } from "@/components/travelAssistant/ManualReservationEntryModal";
 import { TripCalendarView } from "@/components/travelAssistant/TripCalendarView";
 import { NextUpCard } from "@/components/travelAssistant/NextUpCard";
+import { TripTimeline } from "@/components/travelAssistant/TripTimeline";
 import { TripSearch, type TripSearchSelection } from "@/components/travelAssistant/TripSearch";
 import { TripSwitcher } from "@/components/travelAssistant/TripSwitcher";
 import { TripOrientationCard } from "@/components/travelAssistant/TripOrientationCard";
@@ -6496,144 +6497,15 @@ export default function TravelAssistantPage() {
                 </button>
               ) : null}
 
-              <section className="space-y-3">
-                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Flight reservations</h2>
-                {tripTabFlightReservations.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                    No flight reservations yet.
-                  </div>
-                ) : (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {tripTabFlightReservations.map((reservation) => {
-                      const statusMeta = getConsumerReservationStatus(reservation);
-                      return (
-                        <button
-                          key={reservation.id}
-                          type="button"
-                          onClick={() => openDrawer("reservation", reservation.id)}
-                          className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
-                              {reservation.provider || "Airline pending"} • {getFlightNumberLabel(reservation)}
-                            </p>
-                            <span
-                              className={`max-w-24 rounded-full px-2 py-1 text-center text-[11px] font-semibold leading-tight ${statusMeta.className}`}
-                            >
-                              {statusMeta.label}
-                            </span>
-                          </div>
-                          <p className="mt-2 break-words text-base font-semibold text-slate-900 dark:text-slate-100">
-                            {getReservationRouteLabel(reservation)}
-                          </p>
-                          <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">
-                            {formatConsumerReservationDate(reservation.localTime)} • {formatConsumerReservationTime(reservation.localTime)}
-                          </p>
-                          <p className="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
-                            Confirmation: {reservation.confirmationCode || "Not set"}
-                          </p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
+              <TripTimeline
+                reservations={consumerReservationsSorted}
+                tripName={activeTrip?.name ?? "Your trip"}
+                tripStartDate={consumerTripStartDate}
+                tripDaysAway={tripDaysAway}
+                onReservationTap={(id) => openDrawer("reservation", id)}
+              />
 
-              <section className="space-y-3">
-                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Hotel reservations</h2>
-                {tripTabHotelReservations.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                    No hotel reservations yet.
-                  </div>
-                ) : (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {tripTabHotelReservations.map((reservation) => (
-                      <button
-                        key={reservation.id}
-                        type="button"
-                        onClick={() => openDrawer("reservation", reservation.id)}
-                        className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
-                      >
-                        <p className="break-words text-base font-semibold text-slate-900 dark:text-slate-100">
-                          {reservation.provider || getFriendlyReservationTitle(reservation)}
-                        </p>
-                        <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">
-                          Check-in {formatConsumerReservationDate(reservation.localTime)} • {formatConsumerReservationTime(reservation.localTime)}
-                        </p>
-                        <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">
-                          {reservation.location || "Location pending"}
-                        </p>
-                        <p className="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
-                          Confirmation: {reservation.confirmationCode || "Not set"}
-                        </p>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </section>
-
-              {forwardedReviewItems.length > 0 ? (
-                <section className="space-y-3">
-                  <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Awaiting your review</h2>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {forwardedReviewItems.map((item) => {
-                      const reviewSwipeOffset = swipeOffsetByReviewId[item.id] ?? 0;
-                      return (
-                        <div key={item.id} className="relative overflow-hidden rounded-2xl">
-                          <div className="absolute inset-y-0 right-0 flex w-[92px] items-stretch">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                console.log("[travel-assistant] Swipe delete review button clicked.", {
-                                  reviewId: item.id,
-                                });
-                                requestDeleteConfirmation({
-                                  kind: "review",
-                                  id: item.id,
-                                  source: "review-card",
-                                });
-                              }}
-                              className="w-full bg-rose-600 px-3 text-sm font-semibold text-white hover:bg-rose-500"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                          <div
-                            className="relative z-10 transition-transform duration-200 ease-out"
-                            style={{ transform: `translateX(-${reviewSwipeOffset}px)` }}
-                            onTouchStart={(event) => handleCardTouchStart("review", item.id, event)}
-                            onTouchMove={handleCardTouchMove}
-                            onTouchEnd={handleCardTouchEnd}
-                            onTouchCancel={handleCardTouchEnd}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => openDrawer("review", item.id)}
-                              className="w-full rounded-2xl border border-amber-200 bg-amber-50 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-amber-500/40 dark:bg-amber-500/15"
-                            >
-                              <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">Pending review</p>
-                              <p className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
-                                {item.draft.type === "flight"
-                                  ? getReservationRouteLabel({ ...item.draft, id: item.id, source: "imported" })
-                                  : getFriendlyReservationTitle({ ...item.draft, id: item.id, source: "imported" })}
-                              </p>
-                              <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">{item.draft.provider}</p>
-                              <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                                {formatConsumerReservationDate(item.draft.localTime)} •{" "}
-                                {formatConsumerReservationTime(item.draft.localTime)}
-                              </p>
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              ) : null}
-
-              {tripTabFlightReservations.length === 0 &&
-              tripTabHotelReservations.length === 0 &&
-              forwardedReviewItems.length === 0 ? (
+              {consumerReservationsSorted.length === 0 ? (
                 <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                   <p className="font-semibold text-slate-900 dark:text-slate-100">No reservations yet</p>
                   <p className="mt-1">Forward any booking confirmation email to {emptyStateForwardAddress}</p>
