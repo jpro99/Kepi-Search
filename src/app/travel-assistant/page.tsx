@@ -894,11 +894,33 @@ function buildHotelCheckInStatusSummary(reservation: Reservation, nowMs = Date.n
   return `Check-in on ${reservation.localTime || "date pending"} — ${confirmationCode}`;
 }
 
+function parseCheckoutFromNotes(notes: string): string {
+  // Match patterns like "check out May 29", "checkout: 2026-05-29", "check-out the 29th", "checking out 29th"
+  const patterns = [
+    /check[\s-]?out\s+(?:on\s+|the\s+|by\s+)?(\w+\s+\d{1,2}(?:th|st|nd|rd)?(?:[,\s]+\d{4})?)/iu,
+    /check[\s-]?out\s*[:\-]\s*(\d{4}-\d{2}-\d{2})/iu,
+    /(?:checking out|checks? out)\s+(?:on\s+|the\s+)?(\w+\s+\d{1,2}(?:th|st|nd|rd)?(?:[,\s]+\d{4})?)/iu,
+    /depart(?:ure|s|ing)?\s+(?:on\s+)?(\w+\s+\d{1,2}(?:th|st|nd|rd)?(?:[,\s]+\d{4})?)/iu,
+    /(\d{4}-\d{2}-\d{2})\s*(?:checkout|check.out|departure)/iu,
+  ];
+  for (const pattern of patterns) {
+    const match = notes.match(pattern);
+    if (match?.[1]) {
+      // Strip ordinal suffixes before parsing
+      const cleaned = match[1].replace(/(\d+)(?:th|st|nd|rd)/gu, "$1").trim();
+      const ms = Date.parse(cleaned);
+      if (!Number.isNaN(ms)) return new Date(ms).toISOString().slice(0, 10);
+    }
+  }
+  return "";
+}
+
 function resolveHotelCardData(reservation: Reservation): {
   hotelName: string;
   checkInDate: string;
   checkOutDate: string;
   roomType: string;
+  confirmationCode: string;
 } {
   const reservationRecord = reservation as Reservation & Record<string, unknown>;
   const extractString = (...values: unknown[]): string => {
@@ -918,7 +940,8 @@ function resolveHotelCardData(reservation: Reservation): {
     reservationRecord.check_out,
     reservationRecord.checkout,
     reservationRecord.endDate,
-  );
+  ) || parseCheckoutFromNotes(reservation.notes);
+
   const roomTypeCandidate = extractString(
     reservationRecord.roomType,
     reservationRecord.room_type,
@@ -927,11 +950,18 @@ function resolveHotelCardData(reservation: Reservation): {
     reservationRecord.room_category,
   );
   const roomTypeFromNotes = reservation.notes.match(/room(?:\s*type)?\s*[:\-]\s*([^\n|]+)/iu)?.[1]?.trim() ?? "";
+
+  // Extract confirmation code from notes if not stored directly
+  const confFromNotes = reservation.notes.match(
+    /(?:confirmation|conf(?:irmation)?\s*(?:number|code|#)?|booking\s*(?:ref|number|code)|record\s*locator)\s*[:\-#]?\s*([A-Z0-9]{4,20})/iu
+  )?.[1]?.trim() ?? "";
+
   return {
     hotelName: reservation.provider.trim() || reservation.title.trim() || "Hotel",
     checkInDate: formatHotelDate(reservation.localTime),
     checkOutDate: formatHotelDate(checkOutCandidate || ""),
     roomType: roomTypeCandidate || roomTypeFromNotes || "Not set",
+    confirmationCode: reservation.confirmationCode.trim() || confFromNotes || "Not set",
   };
 }
 
@@ -6692,7 +6722,10 @@ export default function TravelAssistantPage() {
                     const reservationSwipeOffset = swipeOffsetByReservationId[reservation.id] ?? 0;
                     return (
                       <div key={reservation.id} className="relative overflow-hidden rounded-2xl">
-                        <div className="absolute inset-y-0 right-0 flex w-[92px] items-stretch">
+                        <div
+                          className="absolute inset-y-0 right-0 flex w-[92px] items-stretch"
+                          style={{ opacity: reservationSwipeOffset > 0 ? 1 : 0 }}
+                        >
                           <button
                             type="button"
                             onClick={() => {
@@ -6818,7 +6851,7 @@ export default function TravelAssistantPage() {
                                     Confirmation
                                   </span>
                                   <span className="font-semibold text-amber-950 dark:text-amber-50">
-                                    {reservation.confirmationCode || "Not set"}
+                                    {hotelData.confirmationCode}
                                   </span>
                                 </p>
                               </div>
