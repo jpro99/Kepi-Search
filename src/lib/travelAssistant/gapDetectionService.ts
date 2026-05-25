@@ -26,10 +26,17 @@ interface GapReservation {
   flightArrivalAirport?: string;
   checkOutDate?: string;
   confirmationCode?: string;
+  flightDate?: string;
 }
 
 function parseDayKey(localTime: string): string {
   return localTime.trim().slice(0, 10);
+}
+
+function flightDayKey(r: GapReservation): string {
+  // Use flightDate first (most reliable) — localTime may be email receive time
+  if (r.flightDate) return r.flightDate.slice(0, 10);
+  return parseDayKey(r.localTime);
 }
 
 function parseMs(localTime: string): number {
@@ -56,16 +63,25 @@ export function detectTripGaps(reservations: GapReservation[], nowMs = Date.now(
   const gaps: TripGap[] = [];
   const todayKey = new Date(nowMs).toISOString().slice(0, 10);
 
+  // Use flightDate for flights (localTime may be email receive time, not actual departure)
+  const getReservationMs = (r: GapReservation): number => {
+    if (r.type === "flight" && r.flightDate) {
+      const ms = Date.parse(r.flightDate + "T23:59:00");
+      if (!Number.isNaN(ms)) return ms;
+    }
+    return parseMs(r.localTime);
+  };
+
   const upcoming = reservations
-    .filter((r) => !Number.isNaN(parseMs(r.localTime)) && parseMs(r.localTime) > nowMs - 86_400_000)
-    .sort((a, b) => parseMs(a.localTime) - parseMs(b.localTime));
+    .filter((r) => getReservationMs(r) > nowMs - 86_400_000)
+    .sort((a, b) => getReservationMs(a) - getReservationMs(b));
 
   const flights = upcoming.filter((r) => r.type === "flight");
   const hotels = upcoming.filter((r) => r.type === "hotel");
 
   // ── 1. Flight tonight with no transport booked ───────────────────────────
   for (const flight of flights) {
-    const flightMs = parseMs(flight.localTime);
+    const flightMs = getReservationMs(flight);
     const hoursUntil = (flightMs - nowMs) / 3_600_000;
     if (hoursUntil > 0 && hoursUntil <= 6) {
       const hasRide = upcoming.some((r) =>
@@ -88,7 +104,7 @@ export function detectTripGaps(reservations: GapReservation[], nowMs = Date.now(
 
   // ── 2. No hotel night before a flight ───────────────────────────────────
   for (const flight of flights) {
-    const flightDayKey = parseDayKey(flight.localTime);
+    const flightDayKey = flightDayKey(flight);
     const nightBeforeKey = addDays(flightDayKey, -1);
     if (nightBeforeKey < todayKey) continue; // already past
     const hasHotelCoveringNight = hotels.some((h) => {
@@ -113,8 +129,8 @@ export function detectTripGaps(reservations: GapReservation[], nowMs = Date.now(
   for (let i = 0; i < flights.length - 1; i++) {
     const landing = flights[i];
     const nextDeparture = flights[i + 1];
-    const landingKey = parseDayKey(landing.localTime);
-    const nextKey = parseDayKey(nextDeparture.localTime);
+    const landingKey = flightDayKey(landing);
+    const nextKey = flightDayKey(nextDeparture);
     const nights = nightsBetween(landingKey, nextKey);
     if (nights > 1) {
       const hasHotel = hotels.some((h) => {
@@ -153,7 +169,7 @@ export function detectTripGaps(reservations: GapReservation[], nowMs = Date.now(
 
   // ── 5. Flight in <24h, no online check-in noted ──────────────────────────
   for (const flight of flights) {
-    const hoursUntil = (parseMs(flight.localTime) - nowMs) / 3_600_000;
+    const hoursUntil = (getReservationMs(flight) - nowMs) / 3_600_000;
     if (hoursUntil > 0 && hoursUntil <= 24) {
       gaps.push({
         id: `check-in-due-${flight.id}`,

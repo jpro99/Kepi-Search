@@ -3249,7 +3249,8 @@ export default function TravelAssistantPage() {
     return null;
   }, [earliestFlightReservation, consumerReservationsSorted]);
   const derivedTripStartDate = earliestFlightReservation
-    ? extractDateFromReservationLocalTime(earliestFlightReservation.localTime)
+    ? (earliestFlightReservation.flightDate?.slice(0, 10) ||
+       extractDateFromReservationLocalTime(earliestFlightReservation.localTime))
     : null;
   const consumerTripDestination = useMemo(() => {
     if (derivedTripDestination) {
