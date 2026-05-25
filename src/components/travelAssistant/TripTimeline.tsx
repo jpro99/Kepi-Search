@@ -158,11 +158,26 @@ function isPast(dateKey: string): boolean {
 
 // ─── Event chip (inline strip on day row) ────────────────────────────────────
 
+const EMAIL_PROVIDERS = new Set(["gmail", "yahoo", "outlook", "hotmail", "icloud", "aol", "me"]);
+
 function EventChip({ reservation, onTap }: { reservation: TimelineReservation; onTap: () => void }) {
   const cfg = typeConfig(reservation.type);
-  const label = reservation.type === "flight" && reservation.flightDepartureAirport && reservation.flightArrivalAirport
-    ? `${reservation.flightDepartureAirport}→${reservation.flightArrivalAirport}`
-    : reservation.provider || reservation.title || cfg.label;
+  let label: string;
+  if (reservation.type === "flight") {
+    if (reservation.flightDepartureAirport && reservation.flightArrivalAirport) {
+      label = `${reservation.flightDepartureAirport}→${reservation.flightArrivalAirport}`;
+    } else if (reservation.flightNumber) {
+      label = reservation.flightNumber;
+    } else if (reservation.provider && !EMAIL_PROVIDERS.has(reservation.provider.toLowerCase())) {
+      label = reservation.provider;
+    } else {
+      label = reservation.title || "Flight";
+    }
+  } else {
+    label = reservation.provider && !EMAIL_PROVIDERS.has(reservation.provider.toLowerCase())
+      ? reservation.provider
+      : reservation.title || cfg.label;
+  }
   return (
     <button
       type="button"
@@ -198,7 +213,9 @@ function ReservationCard({ reservation, onTap }: { reservation: TimelineReservat
             {cfg.emoji} {cfg.label}
           </span>
           <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-            {formatTime(reservation.localTime)}
+            {isFlight
+              ? (reservation.flightDepartureTime ? formatTime(reservation.flightDepartureTime) : formatTime(reservation.localTime))
+              : formatTime(reservation.localTime)}
           </span>
         </div>
 
@@ -236,7 +253,11 @@ function ReservationCard({ reservation, onTap }: { reservation: TimelineReservat
               </div>
             </div>
             <div className="mt-3 flex items-center justify-between gap-2 rounded-xl bg-white/5 px-3 py-2">
-              <span className="text-xs text-slate-400">{reservation.provider || "Airline"}</span>
+              <span className="text-xs text-slate-400">
+                {reservation.provider && !EMAIL_PROVIDERS.has(reservation.provider.toLowerCase())
+                  ? reservation.provider
+                  : reservation.flightNumber ?? "Airline"}
+              </span>
               {reservation.confirmationCode ? (
                 <span className="text-xs font-mono font-bold text-violet-300">{reservation.confirmationCode}</span>
               ) : null}

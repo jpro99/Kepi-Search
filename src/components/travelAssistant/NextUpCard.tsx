@@ -78,25 +78,32 @@ function typeEmoji(type: string): string {
 }
 
 // Build a compact summary of all upcoming reservations to pass to Claude
+const EMAIL_PROVIDER_NAMES = new Set(["gmail", "yahoo", "outlook", "hotmail", "icloud", "aol", "me"]);
+
 function buildContextBlock(reservations: NextUpReservation[]): string {
   const upcoming = reservations
-    .filter((r) => hoursUntil(r.localTime) > -2) // allow 2h past for ongoing
+    .filter((r) => hoursUntil(r.localTime) > -2)
     .sort((a, b) => parseMs(a.localTime) - parseMs(b.localTime))
     .slice(0, 8);
 
   if (upcoming.length === 0) return "No upcoming reservations.";
 
   return upcoming.map((r) => {
+    const resolvedProvider = r.provider && !EMAIL_PROVIDER_NAMES.has(r.provider.toLowerCase())
+      ? r.provider : null;
     const parts = [
       `type=${r.type}`,
-      r.provider ? `provider="${r.provider}"` : null,
-      r.localTime ? `time="${r.localTime}"` : null,
-      r.location ? `location="${r.location}"` : null,
-      r.flightNumber ? `flight=${r.flightNumber}` : null,
+      resolvedProvider ? `provider="${resolvedProvider}"` : null,
+      r.flightNumber ? `flightNumber=${r.flightNumber}` : null,
+      // Use actual flight departure time if available, otherwise localTime
+      r.type === "flight" && (r as NextUpReservation & { flightDepartureTime?: string }).flightDepartureTime
+        ? `departureTime="${(r as NextUpReservation & { flightDepartureTime?: string }).flightDepartureTime}"`
+        : r.localTime ? `time="${r.localTime}"` : null,
       r.flightDepartureAirport && r.flightArrivalAirport
         ? `route=${r.flightDepartureAirport}→${r.flightArrivalAirport}` : null,
+      r.location ? `location="${r.location}"` : null,
       r.confirmationCode ? `conf=${r.confirmationCode}` : null,
-      r.checkOutDate ? `checkout=${r.checkOutDate}` : null,
+      r.checkOutDate ? `hotelCheckout=${r.checkOutDate}` : null,
     ].filter(Boolean);
     return `[${parts.join(" ")}]`;
   }).join("\n");
@@ -235,7 +242,15 @@ ${data.detail ?? ""}`,
       >
         <p className="text-xl font-bold text-slate-900 dark:text-slate-100">
           {typeEmoji(nextReservation.type)}{" "}
-          {nextReservation.provider || nextReservation.title || "Reservation"}
+          {(() => {
+            const p = nextReservation.provider ?? "";
+            if (EMAIL_PROVIDER_NAMES.has(p.toLowerCase())) {
+              return nextReservation.flightNumber
+                ?? nextReservation.title
+                ?? (nextReservation.type === "flight" ? "Flight" : "Reservation");
+            }
+            return p || nextReservation.title || "Reservation";
+          })()}
         </p>
         <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-400">
           {formatTime(nextReservation.localTime)}
