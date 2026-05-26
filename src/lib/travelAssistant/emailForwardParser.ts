@@ -630,9 +630,9 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap[]> {
     '{ "reservations": [ { "type": "", "title": "", "provider": "", "confirmationCode": "", "localTime": "", "timezone": "", "location": "", "notes": "", "flightNumber": "", "departureAirport": "", "arrivalAirport": "" } ] }',
     "If there are multiple flights in one email, include one reservations[] object per flight.",
     "Use type values only: flight, hotel, train, ride.",
-    "CRITICAL for localTime: Use the actual FLIGHT DEPARTURE time, not the email send time, not check-in time, not boarding time. NEVER guess or infer a year — if the year is not explicitly in the email use the current year only if the date is clearly in the future, otherwise leave localTime empty.",
+    "CRITICAL for localTime: For flights, use the scheduled DEPARTURE time (not email send time, not boarding time). For hotels, use the check-in date and time if stated, otherwise just the check-in date at 15:00 local time. NEVER guess or infer a year — if the year is not explicitly in the email use the current year only if the date is clearly in the future, otherwise leave localTime empty.",
     "The departure time is the scheduled time the plane leaves the gate. Format: 'YYYY-MM-DD HH:mm' in 24-hour.",
-    "For flights, set flightNumber to airline code + number e.g. AS832, AS271, KE1121. Never use VISA card numbers (like VI3557) as flight numbers.",
+    "For flights, set flightNumber to airline code + number e.g. AS832, KE1121, UA456. Never use credit card numbers or payment references as flight numbers.",
     "For flights, set departureAirport to the IATA code of the origin airport and arrivalAirport to the IATA code of the destination. These are always in the email.",
     "For timezone: use the IATA timezone of the DEPARTURE airport city e.g. Pacific/Honolulu, America/New_York, Asia/Tokyo.",
     "For location: set to the departure airport name or city, NOT the hotel address.",
@@ -770,10 +770,12 @@ function hasMultipleFlightMentions(text: string): boolean {
     .map((match) => (match[1] ?? "").replace(/\s+/gu, "").toUpperCase())
     .filter((value) => value.length >= 4);
   if (new Set(flightMatches).size > 1) return true;
-  // Match multiple IATA airport codes (3 uppercase letters)
+  // Match multiple IATA airport codes (3 uppercase letters).
+  // Use a denylist of common English words instead of an allowlist so any airport works.
+  const AIRPORT_WORD_DENYLIST = new Set(["THE","AND","FOR","ARE","BUT","NOT","YOU","ALL","CAN","WAS","ONE","OUR","OUT","GET","HAS","HOW","NEW","NOW","OLD","SEE","TWO","WAY","WHO","ITS","LET","PUT","SAY","SHE","TOO","USE","MAY","END","FAR","FEW","GOT","HAD","HIM","HOW","LOW","OWN","PAY","SIT","SIX","TEN","TRY","YET","SUN","MON","TUE","WED","THU","FRI","SAT","JAN","FEB","MAR","APR","JUN","JUL","AUG","SEP","OCT","NOV","DEC","PDF","ETA","ETD","UTC","GMT","EST","CST","MST","PST"]);
   const airportMatches = [...text.matchAll(/\b([A-Z]{3})\b/gu)]
     .map((m) => m[1] ?? "")
-    .filter((code) => ["HND","HNL","SEA","ONT","LAX","JFK","SFO","NRT","ICN","LHR","CDG","SYD","SIN","ORD","MIA","DFW","DEN","BOS","LAS","SNA","SAN","GMP"].includes(code));
+    .filter((code) => !AIRPORT_WORD_DENYLIST.has(code));
   if (new Set(airportMatches).size > 2) return true;
   // Detect "Segment X" or "Flight X of Y" patterns
   if (/segment\s+\d|flight\s+\d\s+of\s+\d|\d\s+stop|connecting|layover/iu.test(text)) return true;
@@ -907,3 +909,4 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
     usedAiFallback,
   };
 }
+
