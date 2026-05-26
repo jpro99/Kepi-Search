@@ -653,7 +653,7 @@ async function runAiFallback(rawEmailText: string, subject = ""): Promise<Candid
     const client = new Anthropic({ apiKey });
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 4000,
+      max_tokens: 8000,  // 8000 handles up to ~30 flight legs safely
       temperature: 0,
       system:
         "You extract travel reservations from forwarded emails. Return ONLY a JSON object with a reservations array. CRITICAL RULES:\n(1) For FLIGHTS: scan the entire email for every individual flight segment. A 3-leg itinerary like HND→HNL→SEA→ONT has 3 separate flights — return 3 objects. NEVER merge segments into one. Each segment has its own flight number, departure airport, arrival airport, and departure time.\n(2) type=flight ONLY when a flight number or airline is present. type=hotel for hotels even if they mention arrival/departure dates.\n(3) localTime = scheduled DEPARTURE time of that specific flight leg in YYYY-MM-DD HH:mm 24-hour format. Not email send time, not boarding time.\n(4) flightNumber = IATA airline code + flight number e.g. AS815, AS272. Credit card numbers like VI3557 are NOT flight numbers.\n(5) departureAirport = IATA code of origin. arrivalAirport = IATA code of destination. Both must be set for every flight.\n(6) timezone = IANA timezone of the departure city e.g. Asia/Tokyo, Pacific/Honolulu, America/Los_Angeles.\n(7) location = departure city or airport name.\n(8) If a field is not in the email, use empty string. Never guess or invent values.",
