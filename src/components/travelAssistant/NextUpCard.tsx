@@ -128,8 +128,9 @@ export function NextUpCard({ reservations, tripName, onReservationTap }: NextUpC
   const [lastFetchKey, setLastFetchKey] = useState("");
 
   // Find the single most urgent upcoming reservation
+  const nowMs = new Date().getTime();
   const nextReservation = reservations
-    .filter((r) => (parseBestMs(r) - Date.now()) / 3_600_000 > -2)
+    .filter((r) => (parseBestMs(r) - nowMs) / 3_600_000 > -2)
     .sort((a, b) => parseBestMs(a) - parseBestMs(b))[0] ?? null;
 
   const fetchGuidance = useCallback(async () => {
