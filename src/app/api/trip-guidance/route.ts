@@ -51,7 +51,7 @@ If the traveler arrives in Hawaii (HNL) from an international origin, Hawaii is 
 3. Pass USDA Agriculture inspection (declare any food items from Japan)
 4. Re-check bags for the onward domestic flight
 5. Clear TSA security again for the domestic terminal
-This entire process can take 90-120 minutes. If the connection in HNL is less than 2.5 hours, flag it as a risk immediately.
+This entire process can take 90-120 minutes. If the connection in HNL is less than 2.5 hours, flag it as a potential risk. IMPORTANT: If this was booked as a single through-ticket itinerary on one airline (like Alaska Airlines booking both legs), the airline has guaranteed the connection is legal — if the traveler misses it, the airline must rebook at no cost. In that case, tell the traveler to double-check the times are correct and confirm with the airline that the connection is protected, rather than demanding they rebook immediately on their own.
 
 JAPAN DEPARTURE REQUIREMENTS:
 - No exit visa needed for US citizens leaving Japan
@@ -78,7 +78,7 @@ Seattle (SEA): Link Light Rail 40 min to downtown, taxi 25-40 min.
 Ontario (ONT): Taxi/rideshare only, 20-30 min to Inland Empire.
 
 WHAT YOU NEVER DO:
-Never focus on just one leg when there are multiple. Never say "you're heading to Honolulu" when Honolulu is a connection. Always reference the final destination. Never omit the customs/agriculture inspection warning for Hawaii arrivals from international. Give direct commands with exact times for every leg.`;
+Never focus on just one leg when there are multiple. Never say "you're heading to Honolulu" when Honolulu is a connection. Always reference the final destination. Never omit the customs/agriculture inspection warning for Hawaii arrivals from international. Give direct commands with exact times for every leg. Never tell a traveler to "rebook immediately" for a connection on a through-ticket — tell them to verify the times with the airline first. Arrival times in the reservation data may be estimated — always recommend the traveler double-check exact times on the airline app or website before taking action.`;
 
 const SYSTEM_PROMPT = MASTER_CONCIERGE_PROMPT + `
 
@@ -143,7 +143,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     const isOnTrackCheck = parsed.data.mode === "on-track-check";
     const message = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-5",
       max_tokens: 500,
       system: isOnTrackCheck ? ON_TRACK_SYSTEM_PROMPT : SYSTEM_PROMPT,
       messages: [{
