@@ -249,88 +249,84 @@ export async function GET(req: Request) {
     );
   }
 
-  const apiKey = process.env.AVIATIONSTACK_API_KEY?.trim();
+  const apiKey = process.env.AERODATABOX_API_KEY?.trim();
   if (!apiKey) {
     return NextResponse.json(
-      { error: "Flight lookup unavailable: AVIATIONSTACK_API_KEY is missing." },
+      { error: "Flight lookup unavailable: AERODATABOX_API_KEY is missing." },
       { status: 503, headers: rateLimit.headers },
     );
   }
 
   const flightNum = parsed.data.flightNumber.replace(/\s+/gu, "").toUpperCase();
-  const lookupUrl = new URL("https://api.aviationstack.com/v1/flights");
-  lookupUrl.searchParams.set("access_key", apiKey);
-  lookupUrl.searchParams.set("flight_iata", flightNum);
-  lookupUrl.searchParams.set("flight_date", parsed.data.flightDate);
-
-  routeLogger.info("AviationStack flight lookup request.", {
+  const lookupUrl = `${AERODATABOX_BASE_URL}/flights/number/${encodeURIComponent(flightNum)}/${encodeURIComponent(parsed.data.flightDate)}`;
+  routeLogger.info("AeroDataBox flight lookup request.", {
+    requestQuery: parsed.data,
+    lookupUrl,
     flightNum,
     flightDate: parsed.data.flightDate,
   });
 
   try {
-    const response = await fetch(lookupUrl.toString(), {
+    const response = await fetch(lookupUrl, {
       method: "GET",
+      headers: { "x-api-market-key": apiKey, "Accept": "application/json" },
       cache: "no-store",
     });
 
-    if (!response.ok) {
-      const errText = await response.text().catch(() => "");
-      throw new Error(`AviationStack returned ${response.status}: ${errText.slice(0, 200)}`);
-    }
-
-    const rawJson = await response.json() as Record<string, unknown>;
-    if (rawJson.error) {
-      const errMsg = (rawJson.error as Record<string, unknown>)?.message ?? "AviationStack error";
-      throw new Error(String(errMsg));
-    }
-
-    const dataArray = Array.isArray(rawJson.data) ? rawJson.data : [];
-    if (dataArray.length === 0) {
+    if (response.status === 204) {
       return NextResponse.json(
         { error: "No flight data found for that number and date." },
         { status: 404, headers: rateLimit.headers },
       );
     }
+    if (!response.ok) {
+      const errText = await response.text().catch(() => "");
+      throw new Error(`AeroDataBox returned ${response.status}: ${errText.slice(0, 200)}`);
+    }
 
-    const flight = dataArray[0] as Record<string, unknown>;
-    const dep = flight.departure as Record<string, unknown> | undefined;
-    const arr = flight.arrival as Record<string, unknown> | undefined;
-    const flightInfo = flight.flight as Record<string, unknown> | undefined;
-    const airline = flight.airline as Record<string, unknown> | undefined;
+    const rawJson = await response.json();
+    const flightArray = Array.isArray(rawJson) ? rawJson : [rawJson];
+    const parsedFlights = z.array(AeroDataBoxFlightSchema).safeParse(flightArray);
+    if (!parsedFlights.success) {
+      throw new Error("AeroDataBox payload validation failed.");
+    }
 
-    const scheduledDep = dep?.scheduled as string | undefined;
-    const estimatedDep = dep?.estimated as string | undefined;
-    const delayMinutes = scheduledDep && estimatedDep
-      ? Math.max(0, Math.round((Date.parse(estimatedDep) - Date.parse(scheduledDep)) / 60000))
-      : typeof dep?.delay === "number" ? Math.max(0, dep.delay as number) : null;
+    const best = chooseBestFlight(parsedFlights.data);
+    if (!best) {
+      return NextResponse.json(
+        { error: "No matching flight found for that number and date." },
+        { status: 404, headers: rateLimit.headers },
+      );
+    }
 
-    const rawStatus = String(flight.flight_status ?? "").toLowerCase();
-    const flightStatus = rawStatus === "active" ? "In flight"
-      : rawStatus === "landed" ? "Landed"
-      : rawStatus === "cancelled" ? "Cancelled"
-      : rawStatus === "diverted" ? "Diverted"
-      : rawStatus === "scheduled" ? "Scheduled"
-      : rawStatus || "Unknown";
-    const onTime = delayMinutes !== null ? delayMinutes <= 15 : rawStatus === "scheduled";
+    const dep = best.departure;
+    const arr = best.arrival;
+    const delayMinutes =
+      typeof dep?.delay === "number" && Number.isFinite(dep.delay)
+        ? Math.max(0, Math.round(dep.delay))
+        : typeof arr?.delay === "number" && Number.isFinite(arr.delay)
+          ? Math.max(0, Math.round(arr.delay))
+          : null;
+    const { flightStatus, onTime } = resolveAeroDataBoxStatus(best.status);
+    const computedOnTime = delayMinutes !== null ? delayMinutes <= 0 : onTime;
 
     const responseBody = {
-      flightNumber: String(flightInfo?.iata ?? flightNum),
-      airline: String(airline?.name ?? parsed.data.airline),
+      flightNumber: best.number ?? flightNum,
+      airline: best.airline?.name ?? parsed.data.airline,
       flightDate: parsed.data.flightDate,
-      departureAirport: String(dep?.iata ?? ""),
-      arrivalAirport: String(arr?.iata ?? ""),
-      departureTime: String(estimatedDep ?? scheduledDep ?? ""),
-      arrivalTime: String((arr?.estimated ?? arr?.scheduled) ?? ""),
-      departureTerminal: String(dep?.terminal ?? ""),
-      departureGate: String(dep?.gate ?? ""),
-      arrivalTerminal: String(arr?.terminal ?? ""),
-      arrivalGate: String(arr?.gate ?? ""),
+      departureAirport: dep?.airport?.iata ?? dep?.airport?.name ?? "",
+      arrivalAirport: arr?.airport?.iata ?? arr?.airport?.name ?? "",
+      departureTime: resolveAeroDataBoxTime(dep),
+      arrivalTime: resolveAeroDataBoxTime(arr),
+      departureTerminal: dep?.terminal ?? "",
+      departureGate: dep?.gate ?? "",
+      arrivalTerminal: arr?.terminal ?? "",
+      arrivalGate: arr?.gate ?? "",
       delayMinutes,
-      onTime,
+      onTime: computedOnTime,
       flightStatus,
     };
-    routeLogger.info("AviationStack flight lookup response.", { responseBody });
+    routeLogger.info("AeroDataBox flight lookup response.", { responseBody });
     return NextResponse.json(responseBody, { headers: rateLimit.headers });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown flight lookup error.";
