@@ -159,6 +159,7 @@ interface ReservationDraft {
   checkOutDate?: string;
   roomType?: string;
   trainNumber?: string;
+  airportTransport?: AirportTransportChoice | null;
 }
 
 interface Reservation extends ReservationDraft {
@@ -471,6 +472,15 @@ const INITIAL_FAMILY: FamilyMember[] = [
     name: "Traveler",
     role: "organizer",
     color: "#7dd3fc",
+    sharingEnabled: true,
+    visibility: "all-members",
+    location: { lat: 40.6428, lon: -73.7808, updatedAt: new Date().toISOString() },
+  },
+  {
+    id: "wife",
+    name: "Wife",
+    role: "adult",
+    color: "#a78bfa",
     sharingEnabled: true,
     visibility: "all-members",
     location: { lat: 40.6428, lon: -73.7808, updatedAt: new Date().toISOString() },
@@ -1054,6 +1064,71 @@ function isTripDestinationPlaceholder(destination: string | null | undefined): b
   return normalized.length === 0 || normalized === "set destination" || normalized === "destination pending";
 }
 
+function isTripNamePlaceholder(name: string | null | undefined): boolean {
+  if (!name) return true;
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) return true;
+  return (
+    normalized === "my first trip" ||
+    normalized === "first trip" ||
+    normalized === "your next trip" ||
+    normalized === "my trip" ||
+    /^trip\s+\d+$/u.test(normalized)
+  );
+}
+
+function pickPrimaryFlightReservation(reservations: readonly Reservation[], nowMs: number): Reservation | null {
+  const flights = reservations
+    .filter((reservation) => reservation.type === "flight")
+    .map((reservation) => ({
+      reservation,
+      dateMs: parseDateInput(reservation.localTime),
+    }))
+    .filter((candidate) => !Number.isNaN(candidate.dateMs))
+    .sort((left, right) => left.dateMs - right.dateMs);
+  if (flights.length === 0) {
+    return null;
+  }
+  const upcoming = flights.find((candidate) => candidate.dateMs >= nowMs - 2 * 60 * 60 * 1000);
+  return upcoming?.reservation ?? flights[0]?.reservation ?? null;
+}
+
+function deriveTripDateBounds(reservations: readonly Reservation[]): { startDate: string | null; endDate: string | null } {
+  const dates = reservations
+    .map((reservation) => extractDateFromReservationLocalTime(reservation.localTime))
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => left.localeCompare(right));
+  if (dates.length === 0) {
+    return { startDate: null, endDate: null };
+  }
+  return {
+    startDate: dates[0] ?? null,
+    endDate: dates[dates.length - 1] ?? null,
+  };
+}
+
+function getReservationAirportTransportChoice(reservation: Reservation): AirportTransportChoice | null {
+  const reservationRecord = reservation as Reservation & Record<string, unknown>;
+  const candidates = [
+    reservationRecord.airportTransport,
+    reservationRecord.airport_transport,
+    reservationRecord.flightAirportTransport,
+    reservationRecord.flight_airport_transport,
+  ];
+  for (const candidate of candidates) {
+    if (
+      candidate === "driving-myself" ||
+      candidate === "getting-dropped-off" ||
+      candidate === "uber-lyft" ||
+      candidate === "train-bus" ||
+      candidate === "other"
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function extractDestinationFromReservationLocation(location: string): string | null {
   const normalized = location.trim();
   if (!normalized) return null;
@@ -1466,12 +1541,21 @@ function defaultTripFromCurrentState(input: {
   hotelArrivalTime: string | null;
 } {
   const fallbackDate = new Date().toISOString().slice(0, 10);
-  const firstReservationDate = input.reservations[0]?.localTime?.slice(0, 10) || fallbackDate;
-  const startDate = firstReservationDate;
-  const endDate = input.reservations[1]?.localTime?.slice(0, 10) || firstReservationDate;
+  const primaryFlightReservation = pickPrimaryFlightReservation(input.reservations, Date.now());
+  const derivedDestination =
+    (primaryFlightReservation ? extractDestinationFromReservationLocation(primaryFlightReservation.location) : null) ??
+    extractDestinationFromReservationLocation(input.reservations[0]?.location ?? "") ??
+    "Set destination";
+  const dateBounds = deriveTripDateBounds(input.reservations);
+  const startDate =
+    (primaryFlightReservation ? extractDateFromReservationLocalTime(primaryFlightReservation.localTime) : null) ??
+    dateBounds.startDate ??
+    fallbackDate;
+  const endDate = dateBounds.endDate ?? startDate;
+  const nextTripName = isTripDestinationPlaceholder(derivedDestination) ? "My Trip" : derivedDestination;
   return {
-    name: "My First Trip",
-    destination: input.reservations[0]?.location || "Set destination",
+    name: nextTripName,
+    destination: derivedDestination,
     startDate,
     endDate,
     stage: input.tripStage,
@@ -1693,6 +1777,50 @@ export default function TravelAssistantPage() {
     () => emailSamples.find((sample) => sample.id === selectedEmailId) ?? emailSamples[0],
     [emailSamples, selectedEmailId],
   );
+
+  useEffect(() => {
+    const wifeMember = familyMembers.find((member) => member.id === "wife" || member.name.trim().toLowerCase() === "wife");
+    if (!wifeMember) {
+      return;
+    }
+    setReservations((previous) => {
+      let changed = false;
+      const nextReservations = previous.map((reservation) => {
+        if (reservation.type !== "flight") {
+          return reservation;
+        }
+        if (reservation.assignedTo.includes(wifeMember.id)) {
+          return reservation;
+        }
+        changed = true;
+        return {
+          ...reservation,
+          assignedTo: [...reservation.assignedTo, wifeMember.id],
+        };
+      });
+      return changed ? nextReservations : previous;
+    });
+    setReviewQueue((previous) => {
+      let changed = false;
+      const nextQueue = previous.map((item) => {
+        if (item.draft.type !== "flight") {
+          return item;
+        }
+        if (item.draft.assignedTo.includes(wifeMember.id)) {
+          return item;
+        }
+        changed = true;
+        return {
+          ...item,
+          draft: {
+            ...item.draft,
+            assignedTo: [...item.draft.assignedTo, wifeMember.id],
+          },
+        };
+      });
+      return changed ? nextQueue : previous;
+    });
+  }, [familyMembers]);
 
   const refreshEmailForwardSetup = useCallback(async (): Promise<void> => {
     const handleFromCookie = getEmailHandleFromCookie();
@@ -2388,9 +2516,40 @@ export default function TravelAssistantPage() {
         return [onboardingReservation, ...previous];
       });
 
+      if (activeTripId) {
+        setTrips((previous) =>
+          previous.map((trip) =>
+            trip.id === activeTripId
+              ? {
+                  ...trip,
+                  name: tripName,
+                  destination,
+                  startDate: departureDate,
+                  endDate: trip.endDate.trim() || departureDate,
+                }
+              : trip,
+          ),
+        );
+        void fetch(TRIP_API_ROUTE, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "update",
+            id: activeTripId,
+            patch: {
+              name: tripName,
+              destination,
+              startDate: departureDate,
+            },
+          }),
+        }).catch(() => {
+          // Keep local onboarding state even if persistence temporarily fails.
+        });
+      }
+
       setToast(`Trip "${tripName}" was added to your timeline.`);
     },
-    [pushUndoSnapshot, selectedFamilyMember.id, setToast],
+    [activeTripId, pushUndoSnapshot, selectedFamilyMember.id, setToast],
   );
 
   useEffect(() => {
@@ -3051,7 +3210,6 @@ export default function TravelAssistantPage() {
   );
 
   const advancedWorkspaceEnabled = advancedModeEnabled;
-  const tripDaysAway = getTripDaysAway(minutesToDeparture);
   const consumerDisplayReservations = useMemo(() => {
     return reservations.filter((reservation) => !isOnboardingPlaceholderReservation(reservation));
   }, [reservations]);
@@ -3162,7 +3320,38 @@ export default function TravelAssistantPage() {
   );
   const hasDetectedFlight = tripTabFlightReservations.length > 0 || pendingFlightReservations.length > 0;
   const hasDetectedHotel = tripTabHotelReservations.length > 0 || pendingHotelReservations.length > 0;
+  const flightAirportTransportChoices = useMemo(
+    () =>
+      tripTabFlightReservations.map((reservation) => ({
+        reservationId: reservation.id,
+        choice: getReservationAirportTransportChoice(reservation),
+      })),
+    [tripTabFlightReservations],
+  );
+  const flightsMissingAirportTransport = useMemo(
+    () => flightAirportTransportChoices.filter((entry) => entry.choice === null).length,
+    [flightAirportTransportChoices],
+  );
   const emptyStateForwardAddress = emailForwardAddress?.trim() || "jpro99@trips.kepitravel.com";
+  const saveAirportTransportForFlight = useCallback(
+    (reservationId: string, choice: AirportTransportChoice): void => {
+      const targetReservation = tripTabFlightReservations.find((reservation) => reservation.id === reservationId) ?? null;
+      setReservations((previous) =>
+        previous.map((reservation) =>
+          reservation.id === reservationId
+            ? {
+                ...reservation,
+                airportTransport: choice,
+              }
+            : reservation,
+        ),
+      );
+      setAirportTransportChoice(choice);
+      const flightLabel = targetReservation ? getFlightNumberLabel(targetReservation) : "flight";
+      setToast(`Airport transport saved for ${flightLabel}: ${AIRPORT_TRANSPORT_LABEL[choice]}.`);
+    },
+    [setToast, tripTabFlightReservations],
+  );
   const saveHotelArrivalExpectation = useCallback((): void => {
     const trimmed = hotelArrivalDraft.trim();
     if (!trimmed) {
@@ -3172,19 +3361,26 @@ export default function TravelAssistantPage() {
     setHotelArrivalTime(trimmed);
     setToast("Hotel arrival expectation saved.");
   }, [hotelArrivalDraft, setToast]);
-  const earliestFlightReservation =
-    consumerReservationsSorted.find((reservation) => reservation.type === "flight") ?? null;
-  const derivedTripDestination = earliestFlightReservation
-    ? extractDestinationFromReservationLocation(earliestFlightReservation.location)
+  const primaryFlightReservation = pickPrimaryFlightReservation(consumerReservationsSorted, nowMs);
+  const derivedTripDestination = primaryFlightReservation
+    ? extractDestinationFromReservationLocation(primaryFlightReservation.location)
     : null;
-  const derivedTripStartDate = earliestFlightReservation
-    ? extractDateFromReservationLocalTime(earliestFlightReservation.localTime)
+  const derivedTripStartDate = primaryFlightReservation
+    ? extractDateFromReservationLocalTime(primaryFlightReservation.localTime)
     : null;
+  const derivedTripDateBounds = deriveTripDateBounds(consumerReservationsSorted);
+  const derivedTripEndDate = derivedTripDateBounds.endDate;
+  const derivedTripName =
+    derivedTripDestination && !isTripDestinationPlaceholder(derivedTripDestination) ? derivedTripDestination : null;
   const consumerTripDestination = useMemo(() => {
+    const persistedDestination = activeTrip?.destination?.trim() ?? "";
+    if (!isTripDestinationPlaceholder(persistedDestination)) {
+      return persistedDestination;
+    }
     if (derivedTripDestination) {
       return derivedTripDestination;
     }
-    return activeTrip?.destination ?? null;
+    return persistedDestination || null;
   }, [activeTrip?.destination, derivedTripDestination]);
   const consumerTripStartDate = useMemo(() => {
     if (derivedTripStartDate) {
@@ -3193,30 +3389,54 @@ export default function TravelAssistantPage() {
     const currentStartDate = activeTrip?.startDate?.trim() ?? "";
     return currentStartDate || null;
   }, [activeTrip?.startDate, derivedTripStartDate]);
+  const consumerTripDaysAway = useMemo(() => {
+    if (consumerTripStartDate) {
+      const departureMs = Date.parse(`${consumerTripStartDate}T09:00:00`);
+      if (!Number.isNaN(departureMs)) {
+        return Math.max(0, Math.ceil((departureMs - nowMs) / 86_400_000));
+      }
+    }
+    return getTripDaysAway(minutesToDeparture);
+  }, [consumerTripStartDate, minutesToDeparture, nowMs]);
   useEffect(() => {
     if (!tripsHydratedRef.current) return;
     if (!activeTripId) return;
-    if (!earliestFlightReservation) return;
-
     const normalizedCurrentDestination = activeTrip?.destination?.trim() ?? "";
     const normalizedDerivedDestination = derivedTripDestination?.trim() ?? "";
     const destinationNeedsUpdate =
       Boolean(normalizedDerivedDestination) &&
-      (isTripDestinationPlaceholder(normalizedCurrentDestination) ||
-        normalizedCurrentDestination.toLowerCase() !== normalizedDerivedDestination.toLowerCase());
+      isTripDestinationPlaceholder(normalizedCurrentDestination);
+    const normalizedCurrentName = activeTrip?.name?.trim() ?? "";
+    const nameNeedsUpdate = Boolean(derivedTripName) && isTripNamePlaceholder(normalizedCurrentName);
     const normalizedStartDate = activeTrip?.startDate?.trim() ?? "";
-    const startDateNeedsUpdate = Boolean(derivedTripStartDate) && normalizedStartDate !== derivedTripStartDate;
+    const normalizedEndDate = activeTrip?.endDate?.trim() ?? "";
+    const currentStartMs =
+      normalizedStartDate.length > 0 ? Date.parse(`${normalizedStartDate}T00:00:00`) : Number.NaN;
+    const startDateNeedsUpdate =
+      Boolean(derivedTripStartDate) &&
+      normalizedStartDate !== derivedTripStartDate &&
+      (normalizedStartDate.length === 0 || Number.isNaN(currentStartMs) || currentStartMs < nowMs - 12 * 60 * 60 * 1000);
+    const endDateNeedsUpdate =
+      Boolean(derivedTripEndDate) &&
+      normalizedEndDate !== derivedTripEndDate &&
+      (normalizedEndDate.length === 0 || normalizedEndDate < derivedTripEndDate);
 
-    if (!destinationNeedsUpdate && !startDateNeedsUpdate) {
+    if (!destinationNeedsUpdate && !startDateNeedsUpdate && !nameNeedsUpdate && !endDateNeedsUpdate) {
       return;
     }
 
-    const patch: { destination?: string; startDate?: string } = {};
+    const patch: { name?: string; destination?: string; startDate?: string; endDate?: string } = {};
+    if (nameNeedsUpdate && derivedTripName) {
+      patch.name = derivedTripName;
+    }
     if (destinationNeedsUpdate && derivedTripDestination) {
       patch.destination = derivedTripDestination;
     }
     if (startDateNeedsUpdate && derivedTripStartDate) {
       patch.startDate = derivedTripStartDate;
+    }
+    if (endDateNeedsUpdate && derivedTripEndDate) {
+      patch.endDate = derivedTripEndDate;
     }
 
     const timeout = window.setTimeout(() => {
@@ -3247,11 +3467,15 @@ export default function TravelAssistantPage() {
     };
   }, [
     activeTrip?.destination,
+    activeTrip?.endDate,
+    activeTrip?.name,
     activeTrip?.startDate,
     activeTripId,
+    derivedTripEndDate,
+    derivedTripName,
     derivedTripDestination,
     derivedTripStartDate,
-    earliestFlightReservation,
+    nowMs,
   ]);
   const applyGovernedStatus = useCallback(
     (desiredStatus: TripStatus, source: "manual" | "auto"): void => {
@@ -4313,6 +4537,7 @@ export default function TravelAssistantPage() {
             checkOutDate: reservation.checkOutDate,
             roomType: reservation.roomType,
             trainNumber: reservation.trainNumber,
+            airportTransport: reservation.airportTransport ?? null,
           });
         }
       } else {
@@ -6386,7 +6611,11 @@ export default function TravelAssistantPage() {
                 </div>
                 <p className="mt-4 text-sm text-slate-700 dark:text-slate-300">
                   Departure {formatTripDepartureDate(consumerTripStartDate)} •{" "}
-                  {tripDaysAway === 0 ? "Today" : tripDaysAway === 1 ? "1 day away" : `${tripDaysAway} days away`}
+                  {consumerTripDaysAway === 0
+                    ? "Today"
+                    : consumerTripDaysAway === 1
+                      ? "1 day away"
+                      : `${consumerTripDaysAway} days away`}
                 </p>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{consumerStatus.detail}</p>
                 {consumerPrimaryAction?.targetTab ? (
@@ -6434,6 +6663,17 @@ export default function TravelAssistantPage() {
                   <div className="grid gap-3 sm:grid-cols-2">
                     {tripTabFlightReservations.map((reservation) => {
                       const statusMeta = getConsumerReservationStatus(reservation);
+                      const flightAirports = resolveFlightAirports(reservation);
+                      const departureTerminal = reservation.flightDepartureTerminal?.trim() ?? "";
+                      const departureGate = reservation.flightDepartureGate?.trim() ?? "";
+                      const arrivalTerminal = reservation.flightArrivalTerminal?.trim() ?? "";
+                      const arrivalGate = reservation.flightArrivalGate?.trim() ?? "";
+                      const departureTimeLabel = formatBoardingPassClock(
+                        reservation.flightDepartureTime ?? reservation.localTime,
+                      );
+                      const arrivalTimeLabel = formatBoardingPassClock(
+                        reservation.flightArrivalTime ?? reservation.localTime,
+                      );
                       return (
                         <button
                           key={reservation.id}
@@ -6454,8 +6694,16 @@ export default function TravelAssistantPage() {
                           <p className="mt-2 break-words text-base font-semibold text-slate-900 dark:text-slate-100">
                             {getReservationRouteLabel(reservation)}
                           </p>
+                          <p className="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
+                            {flightAirports.departureAirport} → {flightAirports.arrivalAirport} • {departureTimeLabel} to{" "}
+                            {arrivalTimeLabel}
+                          </p>
                           <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">
                             {formatConsumerReservationDate(reservation.localTime)} • {formatConsumerReservationTime(reservation.localTime)}
+                          </p>
+                          <p className="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
+                            Depart T{departureTerminal || "--"} / Gate {departureGate || "--"} • Arrive T
+                            {arrivalTerminal || "--"} / Gate {arrivalGate || "--"}
                           </p>
                           <p className="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
                             Confirmation: {reservation.confirmationCode || "Not set"}
@@ -6577,30 +6825,68 @@ export default function TravelAssistantPage() {
               ) : null}
 
               {hasDetectedFlight ? (
-                airportTransportChoice ? (
-                  <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-100">
-                    Airport transport: {AIRPORT_TRANSPORT_LABEL[airportTransportChoice]} ✓
-                  </section>
-                ) : (
-                  <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">How are you getting to the airport?</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {AIRPORT_TRANSPORT_OPTIONS.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          onClick={() => {
-                            setAirportTransportChoice(option.value);
-                            setToast(`Airport transport saved: ${AIRPORT_TRANSPORT_LABEL[option.value]}.`);
-                          }}
-                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Plan airport transport for each flight
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                    Recommended buffer: arrive at least 2 hours before departure.
+                  </p>
+                  {flightsMissingAirportTransport > 0 ? (
+                    <p className="mt-2 text-xs font-semibold text-amber-700 dark:text-amber-200">
+                      {flightsMissingAirportTransport} flight
+                      {flightsMissingAirportTransport === 1 ? "" : "s"} still need airport transport selected.
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-xs font-semibold text-emerald-700 dark:text-emerald-200">
+                      Airport transport saved for all current flights.
+                    </p>
+                  )}
+                  <div className="mt-3 space-y-3">
+                    {tripTabFlightReservations.map((reservation) => {
+                      const selectedTransport = getReservationAirportTransportChoice(reservation);
+                      return (
+                        <div
+                          key={`airport-transport-${reservation.id}`}
+                          className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/60"
                         >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                )
+                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                            {reservation.provider || "Airline pending"} • {getFlightNumberLabel(reservation)}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                            {getReservationRouteLabel(reservation)} • {formatConsumerReservationDate(reservation.localTime)} •{" "}
+                            {formatConsumerReservationTime(reservation.localTime)}
+                          </p>
+                          {selectedTransport ? (
+                            <p className="mt-2 text-xs font-semibold text-emerald-700 dark:text-emerald-200">
+                              Transport: {AIRPORT_TRANSPORT_LABEL[selectedTransport]} ✓
+                            </p>
+                          ) : (
+                            <p className="mt-2 text-xs font-semibold text-amber-700 dark:text-amber-200">
+                              How are you getting to this airport?
+                            </p>
+                          )}
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {AIRPORT_TRANSPORT_OPTIONS.map((option) => (
+                              <button
+                                key={`${reservation.id}-${option.value}`}
+                                type="button"
+                                onClick={() => saveAirportTransportForFlight(reservation.id, option.value)}
+                                className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                                  selectedTransport === option.value
+                                    ? "border-emerald-400 bg-emerald-100 text-emerald-900 dark:border-emerald-400/60 dark:bg-emerald-500/20 dark:text-emerald-100"
+                                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
               ) : null}
 
               {hasDetectedHotel ? (
@@ -7503,7 +7789,7 @@ export default function TravelAssistantPage() {
         <TripOrientationCard
           travelerName={viewerDisplayName}
           destination={activeTrip?.destination ?? "your trip"}
-          tripDaysAway={tripDaysAway}
+          tripDaysAway={consumerTripDaysAway}
           statusTitle={consumerStatus.title}
           statusDetail={consumerStatus.detail}
           nextActionLabel={consumerPrimaryAction?.label ?? nextStageAction}
