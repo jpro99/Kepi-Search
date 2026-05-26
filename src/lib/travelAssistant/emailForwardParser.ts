@@ -127,7 +127,9 @@ export type ForwardedReservationField =
   | "timezone"
   | "location"
   | "notes"
-  | "flightNumber";
+  | "flightNumber"
+  | "departureAirport"
+  | "arrivalAirport";
 export type ForwardedParsingStatus = "auto-parsed" | "needs-review" | "needs-user-input";
 export type ForwardedConfidenceLevel = "high" | "medium" | "low";
 
@@ -349,6 +351,8 @@ function parseAiCandidate(candidate: Record<string, unknown>): CandidateMap {
   setIfPresent("location", candidate.location, 0.76);
   setIfPresent("notes", candidate.notes, 0.68);
   setIfPresent("flightNumber", candidate.flightNumber, 0.9);
+  setIfPresent("departureAirport", candidate.departureAirport, 0.9);
+  setIfPresent("arrivalAirport", candidate.arrivalAirport, 0.9);
   return output;
 }
 
@@ -648,7 +652,7 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap[]> {
     const client = new Anthropic({ apiKey });
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 700,
+      max_tokens: 1500,
       temperature: 0,
       system:
         "Extract travel reservations from forwarded email text. Return strict JSON only. CRITICAL RULES: (1) type=hotel for hotel/stay emails even if they mention arrival/departure dates. type=flight ONLY when email has a flight number, airline, or boarding pass. (2) For flights, localTime MUST be the scheduled DEPARTURE time of the plane — not email send time, not check-in time, not boarding time. Use 24-hour YYYY-MM-DD HH:mm format. (3) timezone = IATA timezone of departure city e.g. Pacific/Honolulu, Asia/Tokyo. (4) location = departure airport name or city, not hotel address. (5) flightNumber = IATA code e.g. VI3557. (6) For multi-flight emails return one object per flight.",
@@ -705,6 +709,14 @@ function buildDraft(candidates: CandidateMap, parserNotes: string[]): ForwardedR
     flightNumber:
       typeValue === "flight"
         ? (candidates.flightNumber?.value ?? "").replace(/[^A-Za-z0-9]/gu, "").toUpperCase()
+        : "",
+    departureAirport:
+      typeValue === "flight"
+        ? (candidates.departureAirport?.value ?? "").trim().toUpperCase().slice(0, 4)
+        : "",
+    arrivalAirport:
+      typeValue === "flight"
+        ? (candidates.arrivalAirport?.value ?? "").trim().toUpperCase().slice(0, 4)
         : "",
   };
 }

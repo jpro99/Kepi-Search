@@ -650,13 +650,13 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
         flightAirline: resolvedAirline,
         flightDate: parserType === "flight" ? parserLocalTime.slice(0, 10) : "",
         flightDepartureAirport: parserType === "flight"
-          ? (typeof parserDraftRecord.departureAirport === "string" ? parserDraftRecord.departureAirport.trim().toUpperCase().slice(0, 4) : "")
+          ? (parserDraft.departureAirport?.trim().toUpperCase().slice(0, 4) ||
+             (typeof parserDraftRecord.departureAirport === "string" ? parserDraftRecord.departureAirport.trim().toUpperCase().slice(0, 4) : ""))
           : "",
         flightArrivalAirport: parserType === "flight"
-          ? (typeof parserDraftRecord.arrivalAirport === "string" ? parserDraftRecord.arrivalAirport.trim().toUpperCase().slice(0, 4) : "")
+          ? (parserDraft.arrivalAirport?.trim().toUpperCase().slice(0, 4) ||
+             (typeof parserDraftRecord.arrivalAirport === "string" ? parserDraftRecord.arrivalAirport.trim().toUpperCase().slice(0, 4) : ""))
           : "",
-        // Store departure time explicitly so AI context always has it
-        // localTime = actual departure time for flights (enforced by parser prompt)
         flightDepartureTime: parserType === "flight" && parserLocalTime ? parserLocalTime : "",
       };
 
