@@ -133,18 +133,27 @@ export function detectTripGaps(reservations: GapReservation[], nowMs = Date.now(
   }
 
   // ── 2. No hotel night before a flight ───────────────────────────────────
+  // Only check the first flight of each departure day to avoid duplicate alerts
+  const checkedNightBefore = new Set<string>();
   for (const flight of flights) {
     const flightDay = flightDayKey(flight);
+    if (checkedNightBefore.has(flightDay)) continue; // already checked this day
+    checkedNightBefore.add(flightDay);
     const nightBeforeKey = addDays(flightDay, -1);
     if (nightBeforeKey < todayKey) continue; // already past
     const hasHotelCoveringNight = hotels.some((h) => {
       const checkInKey = parseDayKey(h.localTime);
-      const checkOutKey = h.checkOutDate?.slice(0, 10) || extractCheckoutFromNotes(h.notes ?? "") || addDays(checkInKey, 1);
+      // Use checkOutDate field, notes fallback, or default to flightDay
+      // (multi-night stays should use their actual checkout date)
+      const checkOutKey =
+        (h as GapReservation & { checkOutDate?: string }).checkOutDate?.slice(0, 10) ||
+        extractCheckoutFromNotes(h.notes ?? "") ||
+        flightDay; // if no checkout date, assume at least through flight day
       return checkInKey <= nightBeforeKey && checkOutKey > nightBeforeKey;
     });
     if (!hasHotelCoveringNight) {
       gaps.push({
-        id: `no-hotel-night-before-${flight.id}`,
+        id: `no-hotel-night-before-${flightDay}`,
         severity: "warning",
         emoji: "🏨",
         title: "No hotel night before your flight",
