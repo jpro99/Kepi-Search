@@ -638,11 +638,11 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
       const parserAssignedTo = Array.isArray(parserAssignedToRaw)
         ? parserAssignedToRaw.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
         : [];
-      const parserFlightNumber =
+      const rawFlightNumber =
         typeof parserDraftRecord.flightNumber === "string"
-          ? parserDraftRecord.flightNumber
+          ? parserDraftRecord.flightNumber.trim()
           : typeof parserDraftRecord.flight_number === "string"
-            ? parserDraftRecord.flight_number
+            ? parserDraftRecord.flight_number.trim()
             : "";
 
       // Resolve the airline name — never use email provider names (Gmail, Yahoo, etc.)
@@ -650,6 +650,36 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
       const EMAIL_PROVIDER_NAMES = new Set(["gmail", "yahoo", "outlook", "hotmail", "icloud", "me", "aol"]);
       const rawAirline = parserProvider.trim();
       const isEmailProviderName = EMAIL_PROVIDER_NAMES.has(rawAirline.toLowerCase());
+
+      // Infer IATA prefix if AI returned just the number (e.g. "832" → "AS832")
+      const AIRLINE_IATA_MAP: Record<string, string> = {
+        "alaska airlines": "AS", "alaska": "AS",
+        "hawaiian airlines": "HA", "hawaiian": "HA",
+        "united airlines": "UA", "united": "UA",
+        "american airlines": "AA", "american": "AA",
+        "delta air lines": "DL", "delta": "DL",
+        "southwest airlines": "WN", "southwest": "WN",
+        "jetblue": "B6",
+        "korean air": "KE",
+        "ana": "NH", "all nippon airways": "NH",
+        "japan airlines": "JL", "jal": "JL",
+        "lufthansa": "LH", "british airways": "BA",
+        "air france": "AF", "emirates": "EK",
+        "cathay pacific": "CX", "singapore airlines": "SQ",
+        "qantas": "QF", "air canada": "AC",
+      };
+      const hasIataPrefix = /^[A-Z]{2}\d/i.test(rawFlightNumber);
+      let parserFlightNumber = rawFlightNumber.toUpperCase();
+      if (!hasIataPrefix && /^\d+$/.test(rawFlightNumber)) {
+        const lowerProvider = rawAirline.toLowerCase();
+        for (const [name, code] of Object.entries(AIRLINE_IATA_MAP)) {
+          if (lowerProvider.includes(name)) {
+            parserFlightNumber = `${code}${rawFlightNumber}`;
+            break;
+          }
+        }
+      }
+
       const iataPrefix = parserFlightNumber.slice(0, 2).toUpperCase();
       const resolvedAirline = parserType === "flight"
         ? (isEmailProviderName && iataPrefix.length === 2 ? `${iataPrefix} Airlines` : rawAirline || "Unknown Airline")
