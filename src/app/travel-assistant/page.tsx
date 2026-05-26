@@ -1783,43 +1783,48 @@ export default function TravelAssistantPage() {
     if (!wifeMember) {
       return;
     }
-    setReservations((previous) => {
-      let changed = false;
-      const nextReservations = previous.map((reservation) => {
-        if (reservation.type !== "flight") {
-          return reservation;
-        }
-        if (reservation.assignedTo.includes(wifeMember.id)) {
-          return reservation;
-        }
-        changed = true;
-        return {
-          ...reservation,
-          assignedTo: [...reservation.assignedTo, wifeMember.id],
-        };
+    const timeout = window.setTimeout(() => {
+      setReservations((previous) => {
+        let changed = false;
+        const nextReservations = previous.map((reservation) => {
+          if (reservation.type !== "flight") {
+            return reservation;
+          }
+          if (reservation.assignedTo.includes(wifeMember.id)) {
+            return reservation;
+          }
+          changed = true;
+          return {
+            ...reservation,
+            assignedTo: [...reservation.assignedTo, wifeMember.id],
+          };
+        });
+        return changed ? nextReservations : previous;
       });
-      return changed ? nextReservations : previous;
-    });
-    setReviewQueue((previous) => {
-      let changed = false;
-      const nextQueue = previous.map((item) => {
-        if (item.draft.type !== "flight") {
-          return item;
-        }
-        if (item.draft.assignedTo.includes(wifeMember.id)) {
-          return item;
-        }
-        changed = true;
-        return {
-          ...item,
-          draft: {
-            ...item.draft,
-            assignedTo: [...item.draft.assignedTo, wifeMember.id],
-          },
-        };
+      setReviewQueue((previous) => {
+        let changed = false;
+        const nextQueue = previous.map((item) => {
+          if (item.draft.type !== "flight") {
+            return item;
+          }
+          if (item.draft.assignedTo.includes(wifeMember.id)) {
+            return item;
+          }
+          changed = true;
+          return {
+            ...item,
+            draft: {
+              ...item.draft,
+              assignedTo: [...item.draft.assignedTo, wifeMember.id],
+            },
+          };
+        });
+        return changed ? nextQueue : previous;
       });
-      return changed ? nextQueue : previous;
-    });
+    }, 0);
+    return () => {
+      window.clearTimeout(timeout);
+    };
   }, [familyMembers]);
 
   const refreshEmailForwardSetup = useCallback(async (): Promise<void> => {
