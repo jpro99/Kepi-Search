@@ -879,8 +879,102 @@ function formatCompactMeridiemTime(valueMs: number): string {
   }).format(new Date(valueMs));
   const normalized = formatted.replace(/\s+/gu, "").toLowerCase();
   return normalized.endsWith(":00am") || normalized.endsWith(":00pm")
-    ? normalized.replace(":00", "")
-    : normalized;
+    ? normalized.replace(":00", "").replace(/(am|pm)$/u, " $1")
+    : normalized.replace(/(am|pm)$/u, " $1");
+}
+
+function parseTimeToMinutes(value: string): number | null {
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+  const twelveHourMatch = /^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/iu.exec(normalized);
+  if (twelveHourMatch) {
+    let hour = Number.parseInt(twelveHourMatch[1] ?? "", 10);
+    const minute = Number.parseInt(twelveHourMatch[2] ?? "0", 10);
+    const period = (twelveHourMatch[3] ?? "").toUpperCase();
+    if (Number.isNaN(hour) || Number.isNaN(minute)) {
+      return null;
+    }
+    if (period === "PM" && hour < 12) {
+      hour += 12;
+    }
+    if (period === "AM" && hour === 12) {
+      hour = 0;
+    }
+    return hour * 60 + minute;
+  }
+  const twentyFourHourMatch = /^(\d{1,2})(?::(\d{2}))?$/u.exec(normalized);
+  if (!twentyFourHourMatch) {
+    return null;
+  }
+  const hour = Number.parseInt(twentyFourHourMatch[1] ?? "", 10);
+  const minute = Number.parseInt(twentyFourHourMatch[2] ?? "0", 10);
+  if (Number.isNaN(hour) || Number.isNaN(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return null;
+  }
+  return hour * 60 + minute;
+}
+
+function formatMinutesAsMeridiem(minutes: number): string {
+  const bounded = ((minutes % (24 * 60)) + (24 * 60)) % (24 * 60);
+  const hour24 = Math.floor(bounded / 60);
+  const minute = bounded % 60;
+  const period = hour24 >= 12 ? "pm" : "am";
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  if (minute === 0) {
+    return `${hour12} ${period}`;
+  }
+  return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
+}
+
+function resolveHotelCheckoutStatusSummary(reservation: Reservation, nowMs: number): string | null {
+  const reservationRecord = reservation as Reservation & Record<string, unknown>;
+  const extractString = (...values: unknown[]): string => {
+    for (const value of values) {
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value.trim();
+      }
+    }
+    return "";
+  };
+  const checkoutDateRaw = extractString(
+    reservationRecord.checkOutDate,
+    reservationRecord.check_out_date,
+    reservationRecord.checkoutDate,
+    reservationRecord.checkout_date,
+    reservationRecord.checkOut,
+    reservationRecord.check_out,
+    reservationRecord.checkout,
+    reservationRecord.endDate,
+  );
+  const checkoutDate = getReservationLocalDateKey(checkoutDateRaw);
+  if (!checkoutDate || checkoutDate !== formatLocalDateKey(nowMs)) {
+    return null;
+  }
+  const lateCheckoutMatch =
+    reservation.notes.match(/late\s+check-?out(?:\s*(?:until|at))?\s*[:\-]?\s*([0-2]?\d(?::[0-5]\d)?\s*(?:AM|PM)?)?/iu) ??
+    null;
+  const lateCheckoutRequested = lateCheckoutMatch !== null;
+  const explicitCheckoutTimeRaw =
+    extractString(
+      reservationRecord.checkOutTime,
+      reservationRecord.check_out_time,
+      reservationRecord.checkoutTime,
+      reservationRecord.checkout_time,
+      reservationRecord.endTime,
+    ) ||
+    reservation.notes.match(/check-?out(?:\s*time)?\s*[:\-]\s*([0-2]?\d(?::[0-5]\d)?\s*(?:AM|PM)?)/iu)?.[1] ||
+    lateCheckoutMatch?.[1] ||
+    "";
+  const explicitCheckoutMinutes = parseTimeToMinutes(explicitCheckoutTimeRaw);
+  if (explicitCheckoutMinutes !== null) {
+    return `Hotel check out is at ${formatMinutesAsMeridiem(explicitCheckoutMinutes)}.`;
+  }
+  if (lateCheckoutRequested) {
+    return "Hotel check out is later than 10 am (late checkout requested).";
+  }
+  return "Hotel check out is at 10 am unless you requested a later checkout time.";
 }
 
 function buildHotelCheckInStatusSummary(reservation: Reservation, nowMs = Date.now()): string {
@@ -1075,6 +1169,31 @@ function isTripNamePlaceholder(name: string | null | undefined): boolean {
     normalized === "my trip" ||
     /^trip\s+\d+$/u.test(normalized)
   );
+}
+
+function resolveTripDisplayName(name: string | null | undefined, destination: string | null | undefined): string {
+  const normalizedName = name?.trim() ?? "";
+  const normalizedDestination = destination?.trim() ?? "";
+  if (!isTripNamePlaceholder(normalizedName)) {
+    return normalizedName;
+  }
+  if (!isTripDestinationPlaceholder(normalizedDestination)) {
+    return normalizedDestination;
+  }
+  return normalizedName || "Your next trip";
+}
+
+function formatLocalDateKey(valueMs: number): string {
+  const date = new Date(valueMs);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function getReservationLocalDateKey(localTime: string): string | null {
+  const parsed = parseDateInput(localTime);
+  if (!Number.isNaN(parsed)) {
+    return formatLocalDateKey(parsed);
+  }
+  return extractDateFromReservationLocalTime(localTime);
 }
 
 function pickPrimaryFlightReservation(reservations: readonly Reservation[], nowMs: number): Reservation | null {
@@ -3229,11 +3348,67 @@ export default function TravelAssistantPage() {
     [flightLiveStatusByReservationId, reservations],
   );
   const consumerStatus = useMemo(() => {
+    const todayDateKey = formatLocalDateKey(nowMs);
+    const reservationsToday = consumerDisplayReservations.filter(
+      (reservation) => getReservationLocalDateKey(reservation.localTime) === todayDateKey,
+    );
+    const nextUpcomingFlight = consumerDisplayReservations
+      .filter((reservation): reservation is Reservation => reservation.type === "flight")
+      .map((reservation) => ({
+        reservation,
+        dateMs: parseDateInput(reservation.localTime),
+      }))
+      .filter((candidate) => !Number.isNaN(candidate.dateMs) && candidate.dateMs >= nowMs)
+      .sort((left, right) => left.dateMs - right.dateMs)[0] ?? null;
+    const airportPreparationDetail = (() => {
+      if (!nextUpcomingFlight) {
+        return null;
+      }
+      const hoursUntilDeparture = (nextUpcomingFlight.dateMs - nowMs) / (60 * 60 * 1000);
+      if (hoursUntilDeparture > 24) {
+        return null;
+      }
+      const leaveByMs = nextUpcomingFlight.dateMs - 2 * 60 * 60 * 1000;
+      const leaveByDateLabel =
+        formatLocalDateKey(leaveByMs) === todayDateKey
+          ? formatCompactMeridiemTime(leaveByMs)
+          : `${new Intl.DateTimeFormat(undefined, {
+              month: "short",
+              day: "numeric",
+            }).format(new Date(leaveByMs))} at ${formatCompactMeridiemTime(leaveByMs)}`;
+      const transportChoice = getReservationAirportTransportChoice(nextUpcomingFlight.reservation);
+      const transportLabel = transportChoice ? AIRPORT_TRANSPORT_LABEL[transportChoice] : null;
+      return `Prepare for getting to airport due to traffic — leave by ${leaveByDateLabel} for ${getFlightNumberLabel(nextUpcomingFlight.reservation)} (${getReservationRouteLabel(nextUpcomingFlight.reservation)}). ${
+        transportLabel
+          ? `Current transport: ${transportLabel}.`
+          : "Please select how you are getting to this airport."
+      }`;
+    })();
+    const hotelCheckoutDetail =
+      consumerDisplayReservations
+        .filter((reservation) => reservation.type === "hotel")
+        .map((reservation) => resolveHotelCheckoutStatusSummary(reservation, nowMs))
+        .find((summary): summary is string => Boolean(summary)) ?? null;
+
     if (tripStatus === "red" || activeScenario !== "none" || delayedFlight) {
       return {
         title: "Flight delayed 🔴",
         detail: delayedFlight ? `${delayedFlight.provider} needs attention.` : "Something changed. Kepi can help fix it.",
         tone: "border-red-200 bg-red-50 text-red-950 dark:border-red-500/40 dark:bg-red-500/15 dark:text-red-50",
+      };
+    }
+    if (airportPreparationDetail) {
+      return {
+        title: "Airport timing plan ✈️",
+        detail: airportPreparationDetail,
+        tone: "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50",
+      };
+    }
+    if (hotelCheckoutDetail) {
+      return {
+        title: "Hotel checkout reminder 🏨",
+        detail: hotelCheckoutDetail,
+        tone: "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50",
       };
     }
     if (unresolvedReviewCount > 0 || unresolvedReadinessCount > 0 || blockingIssueCount > 0 || tripStatus === "yellow") {
@@ -3250,27 +3425,61 @@ export default function TravelAssistantPage() {
         tone: "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50",
       };
     }
+    if (reservationsToday.length === 0) {
+      return {
+        title: "You're on track ✅",
+        detail: "You are already checked in and do not have anything scheduled today.",
+        tone: "border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50",
+      };
+    }
     return {
       title: "You're ready ✅",
-      detail: "Everything important looks set.",
+      detail: "You are already checked in and on track for today.",
       tone: "border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50",
     };
   }, [
     activeScenario,
     blockingIssueCount,
+    consumerDisplayReservations,
     delayedFlight,
+    nowMs,
     tripStatus,
     unresolvedReadinessCount,
     unresolvedReviewCount,
   ]);
   const consumerHeroStatus = useMemo(() => {
+    const requiresAirportPreparation = (() => {
+      const nextUpcomingFlight = consumerDisplayReservations
+        .filter((reservation): reservation is Reservation => reservation.type === "flight")
+        .map((reservation) => ({
+          reservation,
+          dateMs: parseDateInput(reservation.localTime),
+        }))
+        .filter((candidate) => !Number.isNaN(candidate.dateMs) && candidate.dateMs >= nowMs)
+        .sort((left, right) => left.dateMs - right.dateMs)[0] ?? null;
+      if (!nextUpcomingFlight) {
+        return false;
+      }
+      const hoursUntilDeparture = (nextUpcomingFlight.dateMs - nowMs) / (60 * 60 * 1000);
+      return hoursUntilDeparture <= 24;
+    })();
+    const hasHotelCheckoutToday = consumerDisplayReservations
+      .filter((reservation) => reservation.type === "hotel")
+      .some((reservation) => Boolean(resolveHotelCheckoutStatusSummary(reservation, nowMs)));
     if (tripStatus === "red" || activeScenario !== "none" || delayedFlight) {
       return {
         label: "Urgent",
         className: "bg-red-500/15 text-red-700 ring-1 ring-red-500/30 dark:text-red-200",
       };
     }
-    if (tripStatus === "yellow" || unresolvedReviewCount > 0 || unresolvedReadinessCount > 0 || blockingIssueCount > 0) {
+    if (
+      tripStatus === "yellow" ||
+      unresolvedReviewCount > 0 ||
+      unresolvedReadinessCount > 0 ||
+      blockingIssueCount > 0 ||
+      requiresAirportPreparation ||
+      hasHotelCheckoutToday
+    ) {
       return {
         label: "Action needed",
         className: "bg-amber-500/15 text-amber-700 ring-1 ring-amber-500/30 dark:text-amber-200",
@@ -3280,7 +3489,16 @@ export default function TravelAssistantPage() {
       label: "All good",
       className: "bg-emerald-500/15 text-emerald-700 ring-1 ring-emerald-500/30 dark:text-emerald-200",
     };
-  }, [activeScenario, blockingIssueCount, delayedFlight, tripStatus, unresolvedReadinessCount, unresolvedReviewCount]);
+  }, [
+    activeScenario,
+    blockingIssueCount,
+    consumerDisplayReservations,
+    delayedFlight,
+    nowMs,
+    tripStatus,
+    unresolvedReadinessCount,
+    unresolvedReviewCount,
+  ]);
   const consumerReservationsSorted = useMemo(() => {
     return [...consumerDisplayReservations].sort((left, right) => {
       const leftMs = parseDateInput(left.localTime);
@@ -3387,6 +3605,10 @@ export default function TravelAssistantPage() {
     }
     return persistedDestination || null;
   }, [activeTrip?.destination, derivedTripDestination]);
+  const consumerTripName = useMemo(
+    () => resolveTripDisplayName(activeTrip?.name, consumerTripDestination ?? activeTrip?.destination),
+    [activeTrip?.destination, activeTrip?.name, consumerTripDestination],
+  );
   const consumerTripStartDate = useMemo(() => {
     if (derivedTripStartDate) {
       return derivedTripStartDate;
@@ -3412,7 +3634,10 @@ export default function TravelAssistantPage() {
       Boolean(normalizedDerivedDestination) &&
       isTripDestinationPlaceholder(normalizedCurrentDestination);
     const normalizedCurrentName = activeTrip?.name?.trim() ?? "";
-    const nameNeedsUpdate = Boolean(derivedTripName) && isTripNamePlaceholder(normalizedCurrentName);
+    const resolvedNameCandidate =
+      derivedTripName ||
+      (!isTripDestinationPlaceholder(normalizedCurrentDestination) ? normalizedCurrentDestination : null);
+    const nameNeedsUpdate = Boolean(resolvedNameCandidate) && isTripNamePlaceholder(normalizedCurrentName);
     const normalizedStartDate = activeTrip?.startDate?.trim() ?? "";
     const normalizedEndDate = activeTrip?.endDate?.trim() ?? "";
     const currentStartMs =
@@ -3431,8 +3656,8 @@ export default function TravelAssistantPage() {
     }
 
     const patch: { name?: string; destination?: string; startDate?: string; endDate?: string } = {};
-    if (nameNeedsUpdate && derivedTripName) {
-      patch.name = derivedTripName;
+    if (nameNeedsUpdate && resolvedNameCandidate) {
+      patch.name = resolvedNameCandidate;
     }
     if (destinationNeedsUpdate && derivedTripDestination) {
       patch.destination = derivedTripDestination;
@@ -6604,7 +6829,7 @@ export default function TravelAssistantPage() {
                   <div>
                     <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Trip</p>
                     <h1 className="mt-1 text-2xl font-bold text-slate-950 dark:text-slate-100">
-                      {activeTrip?.name ?? "Your next trip"}
+                      {consumerTripName}
                     </h1>
                     <p className="mt-1 text-base text-slate-600 dark:text-slate-300">
                       {consumerTripDestination ?? "Destination pending"}
@@ -7699,7 +7924,7 @@ export default function TravelAssistantPage() {
             <TripSwitcher
               trips={trips.map((trip) => ({
                 id: trip.id,
-                name: trip.name,
+                name: resolveTripDisplayName(trip.name, trip.destination),
                 destination: trip.destination,
                 startDate: trip.startDate,
                 endDate: trip.endDate,
@@ -7730,7 +7955,7 @@ export default function TravelAssistantPage() {
               <TripSearch
                 trips={trips.map((trip) => ({
                   id: trip.id,
-                  name: trip.name,
+                  name: resolveTripDisplayName(trip.name, trip.destination),
                   destination: trip.destination,
                   startDate: trip.startDate,
                   endDate: trip.endDate,
@@ -7793,7 +8018,7 @@ export default function TravelAssistantPage() {
         />
         <TripOrientationCard
           travelerName={viewerDisplayName}
-          destination={activeTrip?.destination ?? "your trip"}
+          destination={consumerTripDestination ?? activeTrip?.destination ?? "your trip"}
           tripDaysAway={consumerTripDaysAway}
           statusTitle={consumerStatus.title}
           statusDetail={consumerStatus.detail}
@@ -7837,8 +8062,8 @@ export default function TravelAssistantPage() {
         {shouldRenderMobilePanel("essentials") ? (
           <ConciergePanel
             tripId={activeTripId}
-            tripName={activeTrip?.name ?? "Current trip"}
-            destination={activeTrip?.destination ?? ""}
+            tripName={consumerTripName}
+            destination={consumerTripDestination ?? activeTrip?.destination ?? ""}
             billingPlan={billingBasePlan}
             showUpsellWhenUnavailable={!hasProAccess}
             reservations={reservations}
