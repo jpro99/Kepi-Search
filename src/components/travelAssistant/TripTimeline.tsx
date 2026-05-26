@@ -98,9 +98,9 @@ function formatDayHeader(dateKey: string): { weekday: string; dateStr: string } 
   if (Number.isNaN(ms)) return { weekday: "—", dateStr: dateKey };
   const d = new Date(ms);
   const now = new Date();
-  const todayKey = now.toISOString().slice(0, 10);
-  const tomorrowKey = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
-  const weekday = dateKey === todayKey ? "Today" : dateKey === tomorrowKey ? "Tomorrow"
+  const nowTodayKey = now.toISOString().slice(0, 10);
+  const nowTomorrowKey = new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
+  const weekday = dateKey === nowTodayKey ? "Today" : dateKey === nowTomorrowKey ? "Tomorrow"
     : d.toLocaleDateString("en-US", { weekday: "long" });
   return { weekday, dateStr: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) };
 }
