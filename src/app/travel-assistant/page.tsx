@@ -3337,6 +3337,57 @@ export default function TravelAssistantPage() {
   const consumerDisplayReservations = useMemo(() => {
     return reservations.filter((reservation) => !isOnboardingPlaceholderReservation(reservation));
   }, [reservations]);
+  const todayDateKey = useMemo(() => formatLocalDateKey(nowMs), [nowMs]);
+  const reservationsToday = useMemo(
+    () =>
+      consumerDisplayReservations.filter((reservation) => getReservationLocalDateKey(reservation.localTime) === todayDateKey),
+    [consumerDisplayReservations, todayDateKey],
+  );
+  const nextUpcomingFlightWithin24h = useMemo(() => {
+    const nextUpcomingFlight =
+      consumerDisplayReservations
+        .filter((reservation): reservation is Reservation => reservation.type === "flight")
+        .map((reservation) => ({
+          reservation,
+          dateMs: parseDateInput(reservation.localTime),
+        }))
+        .filter((candidate) => !Number.isNaN(candidate.dateMs) && candidate.dateMs >= nowMs)
+        .sort((left, right) => left.dateMs - right.dateMs)[0] ?? null;
+    if (!nextUpcomingFlight) {
+      return null;
+    }
+    const hoursUntilDeparture = (nextUpcomingFlight.dateMs - nowMs) / (60 * 60 * 1000);
+    if (hoursUntilDeparture > 24) {
+      return null;
+    }
+    return nextUpcomingFlight;
+  }, [consumerDisplayReservations, nowMs]);
+  const airportPreparationDetail = useMemo(() => {
+    if (!nextUpcomingFlightWithin24h) {
+      return null;
+    }
+    const leaveByMs = nextUpcomingFlightWithin24h.dateMs - 2 * 60 * 60 * 1000;
+    const leaveByDateLabel =
+      formatLocalDateKey(leaveByMs) === todayDateKey
+        ? formatCompactMeridiemTime(leaveByMs)
+        : `${new Intl.DateTimeFormat(undefined, {
+            month: "short",
+            day: "numeric",
+          }).format(new Date(leaveByMs))} at ${formatCompactMeridiemTime(leaveByMs)}`;
+    const transportChoice = getReservationAirportTransportChoice(nextUpcomingFlightWithin24h.reservation);
+    const transportLabel = transportChoice ? AIRPORT_TRANSPORT_LABEL[transportChoice] : null;
+    return `Prepare for getting to airport due to traffic — leave by ${leaveByDateLabel} for ${getFlightNumberLabel(nextUpcomingFlightWithin24h.reservation)} (${getReservationRouteLabel(nextUpcomingFlightWithin24h.reservation)}). ${
+      transportLabel ? `Current transport: ${transportLabel}.` : "Please select how you are getting to this airport."
+    }`;
+  }, [nextUpcomingFlightWithin24h, todayDateKey]);
+  const hotelCheckoutDetail = useMemo(
+    () =>
+      consumerDisplayReservations
+        .filter((reservation) => reservation.type === "hotel")
+        .map((reservation) => resolveHotelCheckoutStatusSummary(reservation, nowMs))
+        .find((summary): summary is string => Boolean(summary)) ?? null,
+    [consumerDisplayReservations, nowMs],
+  );
   const delayedFlight = useMemo(
     () =>
       reservations.find(
@@ -3348,48 +3399,6 @@ export default function TravelAssistantPage() {
     [flightLiveStatusByReservationId, reservations],
   );
   const consumerStatus = useMemo(() => {
-    const todayDateKey = formatLocalDateKey(nowMs);
-    const reservationsToday = consumerDisplayReservations.filter(
-      (reservation) => getReservationLocalDateKey(reservation.localTime) === todayDateKey,
-    );
-    const nextUpcomingFlight = consumerDisplayReservations
-      .filter((reservation): reservation is Reservation => reservation.type === "flight")
-      .map((reservation) => ({
-        reservation,
-        dateMs: parseDateInput(reservation.localTime),
-      }))
-      .filter((candidate) => !Number.isNaN(candidate.dateMs) && candidate.dateMs >= nowMs)
-      .sort((left, right) => left.dateMs - right.dateMs)[0] ?? null;
-    const airportPreparationDetail = (() => {
-      if (!nextUpcomingFlight) {
-        return null;
-      }
-      const hoursUntilDeparture = (nextUpcomingFlight.dateMs - nowMs) / (60 * 60 * 1000);
-      if (hoursUntilDeparture > 24) {
-        return null;
-      }
-      const leaveByMs = nextUpcomingFlight.dateMs - 2 * 60 * 60 * 1000;
-      const leaveByDateLabel =
-        formatLocalDateKey(leaveByMs) === todayDateKey
-          ? formatCompactMeridiemTime(leaveByMs)
-          : `${new Intl.DateTimeFormat(undefined, {
-              month: "short",
-              day: "numeric",
-            }).format(new Date(leaveByMs))} at ${formatCompactMeridiemTime(leaveByMs)}`;
-      const transportChoice = getReservationAirportTransportChoice(nextUpcomingFlight.reservation);
-      const transportLabel = transportChoice ? AIRPORT_TRANSPORT_LABEL[transportChoice] : null;
-      return `Prepare for getting to airport due to traffic — leave by ${leaveByDateLabel} for ${getFlightNumberLabel(nextUpcomingFlight.reservation)} (${getReservationRouteLabel(nextUpcomingFlight.reservation)}). ${
-        transportLabel
-          ? `Current transport: ${transportLabel}.`
-          : "Please select how you are getting to this airport."
-      }`;
-    })();
-    const hotelCheckoutDetail =
-      consumerDisplayReservations
-        .filter((reservation) => reservation.type === "hotel")
-        .map((reservation) => resolveHotelCheckoutStatusSummary(reservation, nowMs))
-        .find((summary): summary is string => Boolean(summary)) ?? null;
-
     if (tripStatus === "red" || activeScenario !== "none" || delayedFlight) {
       return {
         title: "Flight delayed 🔴",
@@ -3439,33 +3448,18 @@ export default function TravelAssistantPage() {
     };
   }, [
     activeScenario,
+    airportPreparationDetail,
     blockingIssueCount,
-    consumerDisplayReservations,
     delayedFlight,
-    nowMs,
+    hotelCheckoutDetail,
+    reservationsToday.length,
     tripStatus,
     unresolvedReadinessCount,
     unresolvedReviewCount,
   ]);
   const consumerHeroStatus = useMemo(() => {
-    const requiresAirportPreparation = (() => {
-      const nextUpcomingFlight = consumerDisplayReservations
-        .filter((reservation): reservation is Reservation => reservation.type === "flight")
-        .map((reservation) => ({
-          reservation,
-          dateMs: parseDateInput(reservation.localTime),
-        }))
-        .filter((candidate) => !Number.isNaN(candidate.dateMs) && candidate.dateMs >= nowMs)
-        .sort((left, right) => left.dateMs - right.dateMs)[0] ?? null;
-      if (!nextUpcomingFlight) {
-        return false;
-      }
-      const hoursUntilDeparture = (nextUpcomingFlight.dateMs - nowMs) / (60 * 60 * 1000);
-      return hoursUntilDeparture <= 24;
-    })();
-    const hasHotelCheckoutToday = consumerDisplayReservations
-      .filter((reservation) => reservation.type === "hotel")
-      .some((reservation) => Boolean(resolveHotelCheckoutStatusSummary(reservation, nowMs)));
+    const requiresAirportPreparation = Boolean(airportPreparationDetail);
+    const hasHotelCheckoutToday = Boolean(hotelCheckoutDetail);
     if (tripStatus === "red" || activeScenario !== "none" || delayedFlight) {
       return {
         label: "Urgent",
@@ -3491,10 +3485,10 @@ export default function TravelAssistantPage() {
     };
   }, [
     activeScenario,
+    airportPreparationDetail,
     blockingIssueCount,
-    consumerDisplayReservations,
     delayedFlight,
-    nowMs,
+    hotelCheckoutDetail,
     tripStatus,
     unresolvedReadinessCount,
     unresolvedReviewCount,
@@ -4155,20 +4149,51 @@ export default function TravelAssistantPage() {
   };
 
   const evaluateStatus = (): void => {
+    let targetStatus: TripStatus = "green";
     if (
       minutesToDeparture <= 75 ||
       unresolvedReviewCount >= 2 ||
       unresolvedReadinessCount >= 2 ||
       blockingIssueCount > 0
     ) {
-      applyGovernedStatus("red", "auto");
-      return;
+      targetStatus = "red";
+    } else if (minutesToDeparture <= 160 || unresolvedReadinessCount > 0) {
+      targetStatus = "yellow";
     }
-    if (minutesToDeparture <= 160 || unresolvedReadinessCount > 0) {
-      applyGovernedStatus("yellow", "auto");
-      return;
-    }
-    applyGovernedStatus("green", "auto");
+    console.log("[OnTrack] evaluateStatus triggered", {
+      targetStatus,
+      minutesToDeparture,
+      unresolvedReviewCount,
+      unresolvedReadinessCount,
+      blockingIssueCount,
+      delayedFlightId: delayedFlight?.id ?? null,
+      activeScenario,
+    });
+    applyGovernedStatus(targetStatus, "auto");
+
+    const detail =
+      delayedFlight
+        ? `${delayedFlight.provider} needs attention.`
+        : activeScenario !== "none"
+          ? "Something changed. Kepi can help fix it."
+          : airportPreparationDetail
+            ? airportPreparationDetail
+            : hotelCheckoutDetail
+              ? hotelCheckoutDetail
+              : unresolvedReviewCount > 0
+                ? `${unresolvedReviewCount} email${unresolvedReviewCount === 1 ? "" : "s"} to review.`
+                : unresolvedReadinessCount > 0
+                  ? `${unresolvedReadinessCount} checklist item${unresolvedReadinessCount === 1 ? "" : "s"} left.`
+                  : blockingIssueCount > 0
+                    ? `${blockingIssueCount} blocker${blockingIssueCount === 1 ? "" : "s"} to clear.`
+                    : reservationsToday.length === 0
+                      ? "You are already checked in and do not have anything scheduled today."
+                      : "You are already checked in and on track for today.";
+    const headline =
+      targetStatus === "red" ? "Action needed" : targetStatus === "yellow" ? "Heads up" : "You're on track";
+    const evaluationSummary = `${headline}: ${detail}`;
+    console.log("[OnTrack] evaluation summary", evaluationSummary);
+    setToast(evaluationSummary);
   };
 
   const advanceTripStage = (): void => {
