@@ -26,10 +26,7 @@ interface GapReservation {
   flightArrivalAirport?: string;
   checkOutDate?: string;
   confirmationCode?: string;
-  flightDate?: string;
   notes?: string;
-  flightDepartureAirport?: string;
-  flightArrivalAirport?: string;
 }
 
 function extractCheckoutFromNotes(notes: string): string {
@@ -146,7 +143,7 @@ export function detectTripGaps(reservations: GapReservation[], nowMs = Date.now(
       // Use checkOutDate field, notes fallback, or default to flightDay
       // (multi-night stays should use their actual checkout date)
       const checkOutKey =
-        (h as GapReservation & { checkOutDate?: string }).checkOutDate?.slice(0, 10) ||
+        h.checkOutDate?.slice(0, 10) ||
         extractCheckoutFromNotes(h.notes ?? "") ||
         flightDay; // if no checkout date, assume at least through flight day
       return checkInKey <= nightBeforeKey && checkOutKey > nightBeforeKey;
