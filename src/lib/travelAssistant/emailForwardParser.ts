@@ -172,6 +172,24 @@ export interface ForwardedEmailParseResult {
   usedAiFallback: boolean;
 }
 
+function extractOriginalEmailFromForwardChain(text: string): string {
+  // When an email is forwarded multiple times, Gmail adds repeated
+  // "---------- Forwarded message ---------" headers. Extract the LAST
+  // (deepest/original) block which contains the actual reservation data.
+  const forwardMarker = "---------- Forwarded message ---------";
+  const lastMarkerIdx = text.lastIndexOf(forwardMarker);
+  if (lastMarkerIdx >= 0) {
+    return text.slice(lastMarkerIdx);
+  }
+  // Also handle "-----Original Message-----" style
+  const originalMarker = "-----Original Message-----";
+  const lastOriginalIdx = text.lastIndexOf(originalMarker);
+  if (lastOriginalIdx >= 0) {
+    return text.slice(lastOriginalIdx);
+  }
+  return text;
+}
+
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
@@ -801,7 +819,11 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
   const text = normalizeWhitespace(input.text ?? "");
   const html = input.html ?? "";
   const parserNotes: string[] = [];
-  const { parsedText, imageBasedEmail } = chooseBodyText(text, html);
+  const chosenBody = chooseBodyText(text, html);
+  const imageBasedEmail = chosenBody.imageBasedEmail;
+  // Strip repeated forwarding headers — keep only the deepest original email
+  // This prevents 18x forwarded emails from burying the actual reservation data
+  const parsedText = extractOriginalEmailFromForwardChain(chosenBody.parsedText);
   const multiFlightDetected = hasMultipleFlightMentions(`${subject}\n${parsedText}`);
   const pdfAttached = hasPdfAttachment(input.attachments);
 
