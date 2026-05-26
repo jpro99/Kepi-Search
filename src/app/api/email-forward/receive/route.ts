@@ -172,6 +172,7 @@ function isDuplicateReservation(
     localTime?: string;
     location?: string;
     confirmationCode?: string;
+    flightNumber?: string;
   },
   candidate: {
     type?: string;
@@ -179,12 +180,35 @@ function isDuplicateReservation(
     localTime?: string;
     location?: string;
     confirmationCode?: string;
+    flightNumber?: string;
   },
 ): boolean {
   const existingCode = normalizeDuplicateValue(existing.confirmationCode);
   const candidateCode = normalizeDuplicateValue(candidate.confirmationCode);
-  // Confirmation code match is always a duplicate
+  const existingFlight = normalizeDuplicateValue(existing.flightNumber);
+  const candidateFlight = normalizeDuplicateValue(candidate.flightNumber);
+
+  // For flights: same confirmation code is NOT enough — multi-leg itineraries
+  // share one booking reference but are different flights. Require flight number
+  // to also match, or fall back to departure time if flight number is missing.
+  const existingType = normalizeDuplicateValue(existing.type);
+  const candidateType = normalizeDuplicateValue(candidate.type);
   if (existingCode.length > 0 && candidateCode.length > 0 && existingCode === candidateCode) {
+    if (existingType === "flight" || candidateType === "flight") {
+      // Both have flight numbers — they must match to be a duplicate
+      if (existingFlight.length > 0 && candidateFlight.length > 0) {
+        return existingFlight === candidateFlight;
+      }
+      // No flight numbers — fall back to departure time match
+      const existingTime = normalizeDuplicateValue(existing.localTime);
+      const candidateTime = normalizeDuplicateValue(candidate.localTime);
+      if (existingTime.length > 0 && candidateTime.length > 0) {
+        return existingTime === candidateTime;
+      }
+      // Can't distinguish — treat as duplicate to be safe
+      return true;
+    }
+    // Non-flight: confirmation code match is a duplicate
     return true;
   }
   const existingType = normalizeDuplicateValue(existing.type);
@@ -239,6 +263,7 @@ function isDuplicateAgainstReviewQueue(
     localTime?: string;
     location?: string;
     confirmationCode?: string;
+    flightNumber?: string;
   },
 ): boolean {
   if (!Array.isArray(reviewQueue)) {
@@ -257,6 +282,7 @@ function isDuplicateAgainstReviewQueue(
         localTime: typeof draft.localTime === "string" ? draft.localTime : "",
         location: typeof draft.location === "string" ? draft.location : "",
         confirmationCode: typeof draft.confirmationCode === "string" ? draft.confirmationCode : "",
+        flightNumber: typeof draft.flightNumber === "string" ? draft.flightNumber : "",
       },
       candidate,
     );
