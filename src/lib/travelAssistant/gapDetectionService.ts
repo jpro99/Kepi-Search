@@ -27,6 +27,34 @@ interface GapReservation {
   checkOutDate?: string;
   confirmationCode?: string;
   flightDate?: string;
+  notes?: string;
+}
+
+function extractCheckoutFromNotes(notes: string): string {
+  if (!notes) return "";
+  // Match "checkout the 29th", "check out May 29", "2026-05-29", "checking out 29th"
+  const patterns = [
+    /check[\s-]?out[^0-9]*(\d{4}-\d{2}-\d{2})/iu,
+    /check[\s-]?out[^a-z]*([A-Za-z]+\s+\d{1,2}(?:th|st|nd|rd)?(?:[,\s]+\d{4})?)/iu,
+    /(?:checking out|checks? out)[^0-9]*(\d{1,2})(?:th|st|nd|rd)?(?:\s|$)/iu,
+  ];
+  for (const pattern of patterns) {
+    const m = notes.match(pattern);
+    if (m?.[1]) {
+      const cleaned = m[1].replace(/(\d+)(?:th|st|nd|rd)/gu, "$1").trim();
+      const ms = Date.parse(cleaned);
+      if (!Number.isNaN(ms)) return new Date(ms).toISOString().slice(0, 10);
+      // Ordinal only — infer current month
+      const day = parseInt(cleaned, 10);
+      if (day >= 1 && day <= 31) {
+        const now = new Date();
+        const candidate = new Date(now.getFullYear(), now.getMonth(), day);
+        if (candidate < now) candidate.setMonth(candidate.getMonth() + 1);
+        return candidate.toISOString().slice(0, 10);
+      }
+    }
+  }
+  return "";
 }
 
 function parseDayKey(localTime: string): string {
@@ -109,7 +137,7 @@ export function detectTripGaps(reservations: GapReservation[], nowMs = Date.now(
     if (nightBeforeKey < todayKey) continue; // already past
     const hasHotelCoveringNight = hotels.some((h) => {
       const checkInKey = parseDayKey(h.localTime);
-      const checkOutKey = h.checkOutDate?.slice(0, 10) ?? addDays(checkInKey, 1);
+      const checkOutKey = h.checkOutDate?.slice(0, 10) || extractCheckoutFromNotes(h.notes ?? "") || addDays(checkInKey, 1);
       return checkInKey <= nightBeforeKey && checkOutKey > nightBeforeKey;
     });
     if (!hasHotelCoveringNight) {
