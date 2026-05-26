@@ -159,6 +159,9 @@ export interface ForwardedReservationDraft {
   confirmationCode: string;
   notes: string;
   flightNumber?: string;
+  checkOutDate?: string;
+  departureAirport?: string;
+  arrivalAirport?: string;
 }
 
 export interface ForwardedEmailParseResult {
@@ -748,6 +751,10 @@ function buildDraft(candidates: CandidateMap, parserNotes: string[]): ForwardedR
     arrivalAirport:
       typeValue === "flight"
         ? (candidates.arrivalAirport?.value ?? "").trim().toUpperCase().slice(0, 4)
+        : "",
+    checkOutDate:
+      typeValue === "hotel"
+        ? normalizeWhitespace(candidates.checkOutDate?.value ?? "")
         : "",
   };
 }
