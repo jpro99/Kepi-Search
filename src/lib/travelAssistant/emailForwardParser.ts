@@ -613,7 +613,7 @@ function buildRegexCandidates(input: {
   return candidates;
 }
 
-async function runAiFallback(rawEmailText: string): Promise<CandidateMap[]> {
+async function runAiFallback(rawEmailText: string, subject = ""): Promise<CandidateMap[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
     logger.warn("AI fallback skipped: ANTHROPIC_API_KEY is missing.", {
@@ -624,6 +624,7 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap[]> {
     return [];
   }
 
+  const emailContext = subject.trim() ? `Subject: ${subject}\n\n${rawEmailText}` : rawEmailText;
   const aiPrompt = [
     "Extract every travel reservation found in this email.",
     "Return strict JSON only with this shape:",
@@ -639,7 +640,7 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap[]> {
     "If any field is not explicitly stated in the email, return empty string. NEVER invent or guess dates, codes, or any other field.",
     "Do not include explanation text.",
     "",
-    rawEmailText,
+    emailContext,
   ].join("\n");
   logger.info("AI fallback request started.", {
     scope: EMAIL_FORWARD_PARSER_SCOPE,
@@ -655,7 +656,7 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap[]> {
       max_tokens: 1500,
       temperature: 0,
       system:
-        "Extract travel reservations from forwarded email text. Return strict JSON only. CRITICAL RULES: (1) type=hotel for hotel/stay emails even if they mention arrival/departure dates. type=flight ONLY when email has a flight number, airline, or boarding pass. (2) For flights, localTime MUST be the scheduled DEPARTURE time of the plane — not email send time, not check-in time, not boarding time. Use 24-hour YYYY-MM-DD HH:mm format. (3) timezone = IATA timezone of departure city e.g. Pacific/Honolulu, Asia/Tokyo. (4) location = departure airport name or city, not hotel address. (5) flightNumber = IATA code e.g. VI3557. (6) For multi-flight emails return one object per flight.",
+        "Extract travel reservations from forwarded email text. Return strict JSON only. CRITICAL RULES: (1) type=hotel for hotel/stay emails even if they mention arrival/departure dates. type=flight ONLY when email has a flight number, airline, or boarding pass. (2) For flights, localTime MUST be the scheduled DEPARTURE time of the plane — not email send time, not check-in time, not boarding time. Use 24-hour YYYY-MM-DD HH:mm format. (3) timezone = IATA timezone of departure city e.g. Pacific/Honolulu, Asia/Tokyo. (4) location = departure airport name or city, not hotel address. (5) flightNumber = airline IATA code + number e.g. AS832, KE1121, UA456. Never use payment/card numbers. (6) IMPORTANT: For multi-flight itineraries you MUST return one separate object per flight leg — if the email has 2 flights return 2 objects, 3 flights return 3 objects. Do not merge legs.",
       messages: [
         {
           role: "user",
@@ -834,7 +835,7 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
       parsedText,
       parsedTextLength: parsedText.length,
     });
-    aiCandidates = await runAiFallback(parsedText);
+    aiCandidates = await runAiFallback(parsedText, subject);
     if (aiCandidates.length > 0) {
       usedAiFallback = true;
       candidates = mergeCandidates(candidates, aiCandidates[0] ?? {});
