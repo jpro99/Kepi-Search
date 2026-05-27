@@ -1556,6 +1556,23 @@ function getEmailHandleFromCookie(): string | null {
   return sanitizeEmailHandle(readCookieValue(EMAIL_HANDLE_COOKIE_NAME));
 }
 
+function normalizeReservationTypeValue(value: unknown): ReservationType {
+  if (typeof value !== "string") {
+    return "ride";
+  }
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "flight" ||
+    normalized === "hotel" ||
+    normalized === "train" ||
+    normalized === "ride" ||
+    normalized === "dinner"
+  ) {
+    return normalized;
+  }
+  return "ride";
+}
+
 function normalizeManagedTrip(trip: unknown): ManagedTrip | null {
   if (!trip || typeof trip !== "object") {
     return null;
@@ -1574,6 +1591,36 @@ function normalizeManagedTrip(trip: unknown): ManagedTrip | null {
     return null;
   }
 
+  const normalizedReservations = candidate.reservations
+    .filter(
+      (reservation): reservation is Record<string, unknown> =>
+        Boolean(reservation) && typeof reservation === "object" && !Array.isArray(reservation),
+    )
+    .map((reservation) => ({
+      ...(reservation as Reservation),
+      type: normalizeReservationTypeValue(reservation.type),
+    }));
+  const normalizedReviewQueue = Array.isArray(candidate.reviewQueue)
+    ? candidate.reviewQueue
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+        .map((item) => {
+          const rawDraft =
+            item.draft && typeof item.draft === "object" && !Array.isArray(item.draft)
+              ? (item.draft as Record<string, unknown>)
+              : null;
+          if (!rawDraft) {
+            return item as ReviewItem;
+          }
+          return {
+            ...(item as ReviewItem),
+            draft: {
+              ...(rawDraft as ReservationDraft),
+              type: normalizeReservationTypeValue(rawDraft.type),
+            },
+          };
+        })
+    : [];
+
   return {
     id: candidate.id,
     name: candidate.name,
@@ -1581,7 +1628,7 @@ function normalizeManagedTrip(trip: unknown): ManagedTrip | null {
     startDate: candidate.startDate,
     endDate: candidate.endDate,
     stage: candidate.stage as TripStage,
-    reservations: candidate.reservations as Reservation[],
+    reservations: normalizedReservations,
     createdAt: candidate.createdAt,
     tripStatus:
       candidate.tripStatus === "green" || candidate.tripStatus === "yellow" || candidate.tripStatus === "red"
@@ -1596,7 +1643,7 @@ function normalizeManagedTrip(trip: unknown): ManagedTrip | null {
       candidate.activeScenario === "ride-no-show"
         ? candidate.activeScenario
         : "none",
-    reviewQueue: Array.isArray(candidate.reviewQueue) ? (candidate.reviewQueue as ReviewItem[]) : [],
+    reviewQueue: normalizedReviewQueue,
     readinessItems: Array.isArray(candidate.readinessItems) ? (candidate.readinessItems as ReadinessItem[]) : [],
     updateFeed: Array.isArray(candidate.updateFeed) ? (candidate.updateFeed as UpdateFeedItem[]) : [],
     airportTransport:
