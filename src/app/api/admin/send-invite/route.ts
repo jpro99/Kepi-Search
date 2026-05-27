@@ -40,6 +40,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     type,
     createdBy: userId,
     note: note ?? email,
+    intendedEmail: email,
   });
 
   // Build redemption URL
