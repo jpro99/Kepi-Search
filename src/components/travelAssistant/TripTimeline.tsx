@@ -10,6 +10,7 @@ interface TimelineReservation {
   title: string;
   provider: string;
   localTime: string;
+  timezone?: string;
   location: string;
   confirmationCode: string;
   flightNumber?: string;
@@ -71,13 +72,33 @@ function parseLocalMs(localTime: string): number {
   return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime();
 }
 
+function toUtcMs(localTime: string, timezone?: string): number {
+  const ms = parseLocalMs(localTime);
+  if (Number.isNaN(ms) || !timezone) return ms;
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+    const parts = Object.fromEntries(formatter.formatToParts(new Date(ms)).map(p => [p.type, p.value]));
+    const tzDate = new Date(`${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:00Z`);
+    return ms - (tzDate.getTime() - ms);
+  } catch {
+    return ms;
+  }
+}
+
 function bestFlightMs(r: TimelineReservation): number {
-  const candidates = [
-    r.flightDate ? Date.parse(r.flightDate + "T23:59:00") : Number.NaN,
-    r.flightDepartureTime ? parseLocalMs(r.flightDepartureTime) : Number.NaN,
-    parseLocalMs(r.localTime),
-  ].filter((v) => !Number.isNaN(v));
-  return candidates.length > 0 ? Math.max(...candidates) : Number.NaN;
+  // Use localTime + timezone for UTC-correct sorting
+  // Never use flightDate+T23:59 which makes all same-day flights equal
+  const utc = toUtcMs(r.localTime, r.timezone);
+  if (!Number.isNaN(utc)) return utc;
+  if (r.flightDepartureTime) {
+    const depMs = parseLocalMs(r.flightDepartureTime);
+    if (!Number.isNaN(depMs)) return depMs;
+  }
+  return parseLocalMs(r.localTime);
 }
 
 function localDateKey(localTime: string): string { return localTime.trim().slice(0, 10); }
