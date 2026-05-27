@@ -81,6 +81,8 @@ import { TripOrientationCard } from "@/components/travelAssistant/TripOrientatio
 import { DocumentVault } from "@/components/travelAssistant/DocumentVault";
 import { PackingList } from "@/components/travelAssistant/PackingList";
 import { ShareTripCard } from "@/components/travelAssistant/ShareTripCard";
+import { FamilyPanel } from "@/components/travelAssistant/FamilyPanel";
+import { ReferralCard } from "@/components/referral/ReferralCard";
 import { WeatherCard } from "@/components/travelAssistant/WeatherCard";
 import { LocalIntelligencePanel } from "@/components/travelAssistant/LocalIntelligencePanel";
 import { ConciergePanel } from "@/components/travelAssistant/ConciergePanel";
@@ -2302,6 +2304,35 @@ export default function TravelAssistantPage() {
       window.clearInterval(timer);
     };
   }, [refreshTripsFromServer, tripsLoading]);
+
+  // Auto-poll flight status for upcoming flights within 24 hours
+  useEffect(() => {
+    if (!activeTripId || !reservations.length) return;
+    const nowMs = Date.now();
+    const upcomingFlights = reservations.filter((r) => {
+      if (r.type !== "flight") return false;
+      const local = (r as Record<string, unknown>).localTime as string | undefined;
+      if (!local) return false;
+      const depMs = Date.parse(local.replace("T", " ").slice(0, 16));
+      const hoursUntil = (depMs - nowMs) / 3_600_000;
+      return hoursUntil > -1 && hoursUntil < 24;
+    });
+    if (!upcomingFlights.length) return;
+    // Poll every 5 minutes for flights within 24 hours
+    const pollFlight = async () => {
+      for (const flight of upcomingFlights) {
+        try {
+          await handleCheckFlightStatus(flight.id);
+        } catch {
+          // Fail silently
+        }
+      }
+    };
+    void pollFlight();
+    const interval = window.setInterval(() => { void pollFlight(); }, 5 * 60_000);
+    return () => window.clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTripId, reservations.length]);
 
   useEffect(() => {
     if (!tripsHydratedRef.current) return;
@@ -7442,6 +7473,13 @@ export default function TravelAssistantPage() {
             <section className="space-y-3">
               {/* Share trip */}
               <ShareTripCard tripName={activeTrip?.name ?? "My Trip"} />
+              {/* Invite a friend */}
+              <ReferralCard />
+              {/* Family tracker */}
+              <FamilyPanel
+                isPremium={hasProAccess || isLifetime || isTrial}
+                onUpgrade={() => openUpgradeModal("multi-trip", "Upgrade to Pro to unlock Family Tracker — real-time location sharing for your whole group.")}
+              />
               <section
                 id="readiness-checklist-section"
                 ref={readinessChecklistSectionRef}
