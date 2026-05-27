@@ -154,7 +154,7 @@ function buildContextBlock(reservations: NextUpReservation[]): string {
       r.flightDepartureAirport && r.flightArrivalAirport
         ? `route=${r.flightDepartureAirport}→${r.flightArrivalAirport}` : null,
       r.flightDepartureTime ? `departureTime="${r.flightDepartureTime}"` : null,
-      r.flightArrivalTime ? `arrivalTime="${r.flightArrivalTime}"` : null,
+      r.flightArrivalTime ? `arrivalTime="${r.flightArrivalTime}"` : `arrivalTime="[not stored — do not estimate]"`,
       r.location ? `location="${r.location}"` : null,
       r.confirmationCode ? `conf=${r.confirmationCode}` : null,
       r.checkOutDate ? `hotelCheckout=${r.checkOutDate}` : null,
