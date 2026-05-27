@@ -166,9 +166,11 @@ export function AdminDashboardClient() {
         if (!response.ok) {
           throw new Error(payload.error ?? `Generate endpoint returned ${response.status}`);
         }
-        setAdminMessage(
-          `Generated ${type === "lifetime" ? "Invite Code (Lifetime)" : "Invite Code (30-day Trial)"}: ${payload.code?.code ?? "unknown"}`,
-        );
+        const code = payload.code?.code ?? "unknown";
+        const appUrl = window.location.origin;
+        const redeemUrl = `${appUrl}/redeem?code=${encodeURIComponent(code)}`;
+        setAdminMessage(`Generated ${type === "lifetime" ? "Lifetime" : "30-day Trial"} code: ${code}`);
+        setInviteSendResult({ code, redeemUrl, emailSent: false });
         setInviteNote("");
         await loadInviteCodes();
       } catch (error) {
@@ -483,14 +485,36 @@ export function AdminDashboardClient() {
               </button>
             </div>
             {inviteSendResult && (
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-500/30 dark:bg-emerald-500/10">
-                <p className="text-xs font-semibold text-emerald-800 dark:text-emerald-200">
-                  {inviteSendResult.emailSent ? "Email sent ✓" : "Code generated (email failed)"}
-                </p>
-                <p className="mt-1 font-mono text-xs text-emerald-700 dark:text-emerald-300">{inviteSendResult.code}</p>
-                <p className="mt-1 break-all text-xs text-emerald-600 dark:text-emerald-400">{inviteSendResult.redeemUrl}</p>
+              <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 dark:border-sky-500/30 dark:bg-sky-500/10">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-bold text-sky-800 dark:text-sky-200">
+                    {inviteSendResult.emailSent ? "✅ Email sent" : "🔗 Share this link"}
+                  </p>
+                </div>
+                {/* Code row */}
+                <div className="mt-2 flex items-center gap-2">
+                  <p className="flex-1 font-mono text-sm font-bold tracking-widest text-sky-900 dark:text-sky-100">{inviteSendResult.code}</p>
+                  <button
+                    type="button"
+                    onClick={() => { void navigator.clipboard.writeText(inviteSendResult.code); setAdminMessage("Code copied!"); }}
+                    className="rounded-md border border-sky-300 px-2 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-100 dark:border-sky-600 dark:text-sky-300"
+                  >
+                    Copy code
+                  </button>
+                </div>
+                {/* Link row */}
+                <div className="mt-2 flex items-start gap-2">
+                  <p className="flex-1 break-all text-xs text-sky-700 dark:text-sky-300">{inviteSendResult.redeemUrl}</p>
+                  <button
+                    type="button"
+                    onClick={() => { void navigator.clipboard.writeText(inviteSendResult.redeemUrl); setAdminMessage("Link copied!"); }}
+                    className="shrink-0 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-500"
+                  >
+                    Copy link
+                  </button>
+                </div>
                 {inviteSendResult.warning && (
-                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{inviteSendResult.warning}</p>
+                  <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">{inviteSendResult.warning}</p>
                 )}
               </div>
             )}
