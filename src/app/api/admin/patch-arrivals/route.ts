@@ -5,7 +5,7 @@ import { getActiveTrip, updateTrip } from "@/lib/travelAssistant/tripStore";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(): Promise<NextResponse> {
+export async function GET(): Promise<NextResponse> {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
