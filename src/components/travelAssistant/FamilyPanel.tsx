@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, lazy, Suspense } from "react";
+
+const FamilyMap = lazy(() => import("@/components/travelAssistant/FamilyMap").then(m => ({ default: m.FamilyMap })));
 
 interface LocationPoint {
   lat: number;
@@ -34,6 +36,7 @@ interface FamilyGroup {
 interface FamilyPanelProps {
   isPremium: boolean;
   onUpgrade: () => void;
+  maptilerKey?: string;
 }
 
 function timeAgo(iso: string): string {
@@ -50,7 +53,7 @@ function isStale(iso: string): boolean {
   return Date.now() - Date.parse(iso) > 10 * 60_000;
 }
 
-export function FamilyPanel({ isPremium, onUpgrade }: FamilyPanelProps) {
+export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelProps) {
   const [group, setGroup] = useState<FamilyGroup | null>(null);
   const [locations, setLocations] = useState<Record<string, LocationPoint>>({});
   const [loading, setLoading] = useState(true);
@@ -64,6 +67,8 @@ export function FamilyPanel({ isPremium, onUpgrade }: FamilyPanelProps) {
   const [copiedCode, setCopiedCode] = useState(false);
   const [groupRole, setGroupRole] = useState<"owner" | "member" | null>(null);
   const [hasGroup, setHasGroup] = useState(false);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const [showMap, setShowMap] = useState(true);
   const [joiningGroup, setJoiningGroup] = useState(false);
   const [joinCode, setJoinCode] = useState("");
   const [joinName, setJoinName] = useState("");
@@ -301,6 +306,37 @@ export function FamilyPanel({ isPremium, onUpgrade }: FamilyPanelProps) {
           {sharingLocation ? "Getting location..." : "📍 Share my location"}
         </button>
       </div>
+
+      {/* Map toggle */}
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          {Object.keys(locations).length > 0 ? `${Object.keys(locations).length} location${Object.keys(locations).length !== 1 ? "s" : ""} live` : "No locations shared yet"}
+        </p>
+        <button
+          type="button"
+          onClick={() => setShowMap(v => !v)}
+          className="text-xs font-semibold text-sky-600 hover:underline dark:text-sky-400"
+        >
+          {showMap ? "Hide map" : "Show map"}
+        </button>
+      </div>
+
+      {/* Live map */}
+      {showMap && maptilerKey && (
+        <Suspense fallback={<div className="h-64 w-full rounded-2xl bg-slate-100 dark:bg-slate-800 animate-pulse" />}>
+          <FamilyMap
+            members={group?.members ?? []}
+            locations={locations}
+            maptilerKey={maptilerKey}
+            onMemberClick={setSelectedMemberId}
+          />
+        </Suspense>
+      )}
+      {showMap && !maptilerKey && Object.keys(locations).length > 0 && (
+        <div className="h-32 w-full rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+          <p className="text-xs text-slate-500">Map unavailable — MAPTILER key not configured</p>
+        </div>
+      )}
 
       {/* Invite code */}
       {group && (
