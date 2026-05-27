@@ -7,6 +7,7 @@ import { createInviteCode } from "@/lib/invite/inviteCodeStore";
 import { InviteEmail } from "@/lib/email/templates/inviteEmail";
 import { getResendClient, getResendFromEmail } from "@/lib/email/resendClient";
 import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,7 +37,6 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     const { email, type, note } = parsed.data;
 
-    // Generate the invite code
     let record: Awaited<ReturnType<typeof createInviteCode>>;
     try {
       record = await createInviteCode({
@@ -52,13 +52,28 @@ export async function POST(request: Request): Promise<NextResponse> {
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://kepi-search.vercel.app";
     const redeemUrl = `${appUrl}/redeem?code=${encodeURIComponent(record.code)}`;
 
-    // Try to send email — if Resend not configured, return code only
     const resend = getResendClient();
     if (!resend) {
       return NextResponse.json({
         ok: true, code: record.code, redeemUrl, emailSent: false,
         warning: "RESEND_API_KEY not configured — code generated but email not sent.",
       });
+    }
+
+    // Render React component to HTML string — Resend requires html: not react:
+    // unless @react-email packages are installed
+    let html: string;
+    try {
+      html = "<!DOCTYPE html>" + renderToStaticMarkup(
+        createElement(InviteEmail, {
+          recipientEmail: email,
+          inviteCode: record.code,
+          inviteType: type,
+          redeemUrl,
+        })
+      );
+    } catch (err) {
+      return NextResponse.json({ error: "Failed to render email template: " + (err instanceof Error ? err.message : String(err)) }, { status: 500 });
     }
 
     let emailSent = false;
@@ -71,12 +86,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         subject: type === "lifetime"
           ? "You\'re invited to Kepi — Lifetime Access"
           : "You\'re invited to Kepi — 30-Day Trial",
-        react: createElement(InviteEmail, {
-          recipientEmail: email,
-          inviteCode: record.code,
-          inviteType: type,
-          redeemUrl,
-        }),
+        html,
       });
       if (sendError) {
         warning = "Email failed: " + sendError.message;
