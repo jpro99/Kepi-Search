@@ -3507,6 +3507,10 @@ export default function TravelAssistantPage() {
     () => reviewQueue.filter((item) => item.sourceChannel === "email-forward"),
     [reviewQueue],
   );
+  const pendingHotelReviewItems = useMemo(
+    () => forwardedReviewItems.filter((item) => item.draft.type === "hotel"),
+    [forwardedReviewItems],
+  );
   const firstForwardedReviewItem = forwardedReviewItems[0] ?? null;
   const pendingForwardedReservations = useMemo(
     () =>
@@ -6972,7 +6976,7 @@ export default function TravelAssistantPage() {
 
               <section className="space-y-3">
                 <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Hotel reservations</h2>
-                {tripTabHotelReservations.length === 0 ? (
+                {tripTabHotelReservations.length === 0 && pendingHotelReviewItems.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                     No hotel reservations yet.
                   </div>
@@ -6996,6 +7000,28 @@ export default function TravelAssistantPage() {
                         </p>
                         <p className="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
                           Confirmation: {reservation.confirmationCode || "Not set"}
+                        </p>
+                      </button>
+                    ))}
+                    {pendingHotelReviewItems.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => openDrawer("review", item.id)}
+                        className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-amber-500/40 dark:bg-amber-500/15"
+                      >
+                        <p className="break-words text-base font-semibold text-slate-900 dark:text-slate-100">
+                          {item.draft.provider || getFriendlyReservationTitle({ ...item.draft, id: item.id, source: "imported" })}
+                        </p>
+                        <p className="mt-1 break-words text-sm text-slate-700 dark:text-slate-300">
+                          Check-in {formatConsumerReservationDate(item.draft.localTime)} •{" "}
+                          {formatConsumerReservationTime(item.draft.localTime)}
+                        </p>
+                        <p className="mt-1 break-words text-sm text-slate-700 dark:text-slate-300">
+                          {item.draft.location || "Location pending"}
+                        </p>
+                        <p className="mt-1 break-words text-xs text-amber-800 dark:text-amber-100">
+                          Pending review — tap to confirm
                         </p>
                       </button>
                     ))}
