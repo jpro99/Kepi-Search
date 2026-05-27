@@ -3318,6 +3318,14 @@ export default function TravelAssistantPage() {
     consumerReservationsSorted.find((reservation) => reservation.type === "flight") ?? null;
   // Destination = arrival airport city of first flight, or hotel city, or stored destination
   const derivedTripDestination = useMemo(() => {
+    // For multi-leg trips use the LAST flight's arrival, not the first leg's arrival
+    const allFlights = consumerReservationsSorted.filter((r) => r.type === "flight");
+    if (allFlights.length > 1) {
+      const lastFlight = allFlights[allFlights.length - 1];
+      if ((lastFlight as Reservation & { flightArrivalAirport?: string }).flightArrivalAirport) {
+        return (lastFlight as Reservation & { flightArrivalAirport?: string }).flightArrivalAirport!;
+      }
+    }
     if (earliestFlightReservation?.flightArrivalAirport) {
       return earliestFlightReservation.flightArrivalAirport;
     }
