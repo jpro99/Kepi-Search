@@ -5,6 +5,9 @@ import { AdminDashboardClient } from "@/components/admin/AdminDashboardClient";
 import { Logo } from "@/components/ui/Logo";
 import { isAdminUserId } from "@/lib/admin/adminAccess";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export const metadata: Metadata = {
   title: "Admin Dashboard",
   robots: {
