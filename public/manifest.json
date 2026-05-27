@@ -1,14 +1,30 @@
 {
-  "name": "kepi",
-  "short_name": "kepi",
-  "description": "Simple travel clarity from bookings to boarding.",
+  "name": "Kepi Travel",
+  "short_name": "Kepi",
+  "description": "Never miss a flight. Never lose a reservation. Your adaptive travel execution assistant.",
   "id": "/travel-assistant",
   "start_url": "/travel-assistant",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
-  "background_color": "#1a1a2e",
-  "theme_color": "#1a1a2e",
+  "background_color": "#0c2461",
+  "theme_color": "#0ea5e9",
+  "orientation": "portrait",
+  "categories": ["travel", "productivity", "lifestyle"],
+  "shortcuts": [
+    {
+      "name": "My Trips",
+      "short_name": "Trips",
+      "url": "/travel-assistant",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Packing List",
+      "short_name": "Packing",
+      "url": "/travel-assistant?tab=packing",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ],
   "icons": [
     {
       "src": "/icons/icon-192.png",
@@ -21,6 +37,20 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/og-image.png",
+      "sizes": "1200x630",
+      "type": "image/png",
+      "label": "Kepi Travel Assistant dashboard"
     }
   ]
 }
