@@ -6799,9 +6799,9 @@ export default function TravelAssistantPage() {
                 <button
                   type="button"
                   onClick={() => openDrawer("reservation", nextUpcomingFlight.id)}
-                  className="w-full rounded-2xl bg-gradient-to-r from-violet-600 to-violet-500 px-4 py-3 text-left shadow-lg shadow-violet-500/20 transition hover:from-violet-500 hover:to-violet-400"
+                  className="w-full rounded-2xl bg-gradient-to-r from-[#0c2461] via-[#1a56b0] to-[#0ea5e9] px-4 py-3 text-left shadow-lg shadow-blue-500/20 transition hover:from-[#1a56b0] hover:to-sky-400"
                 >
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-violet-200">Next flight</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-sky-200">Next flight</p>
                   <div className="mt-1 flex items-center justify-between gap-3">
                     <p className="text-lg font-black text-white">
                       {(nextUpcomingFlight as Reservation & { flightDepartureAirport?: string }).flightDepartureAirport || "DEP"}
@@ -6813,7 +6813,7 @@ export default function TravelAssistantPage() {
                         {(nextUpcomingFlight as Reservation & { flightNumber?: string }).flightNumber ||
                           nextUpcomingFlight.provider}
                       </p>
-                      <p className="text-xs text-violet-200">
+                      <p className="text-xs text-sky-200">
                         {formatConsumerReservationDate(nextUpcomingFlight.localTime)} · {formatConsumerReservationTime(nextUpcomingFlight.localTime)}
                       </p>
                     </div>
