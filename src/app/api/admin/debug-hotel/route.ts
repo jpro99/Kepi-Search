@@ -12,18 +12,31 @@ export async function GET(): Promise<NextResponse> {
   const trip = await getActiveTrip(userId);
   if (!trip) return NextResponse.json({ error: "No active trip" }, { status: 404 });
 
-  const hotels = trip.reservations.filter((r: Record<string, unknown>) => r.type === "hotel");
-  const debug = hotels.map((h: Record<string, unknown>) => ({
-    id: h.id,
-    provider: h.provider,
-    localTime: h.localTime,
-    checkOutDate: h.checkOutDate,
-    checkout_date: h.checkout_date,
-    checkoutDate: h.checkoutDate,
-    endDate: h.endDate,
-    notes: typeof h.notes === "string" ? h.notes.slice(0, 200) : h.notes,
-    allKeys: Object.keys(h),
-  }));
+  const hotels = trip.reservations
+    .filter((r: Record<string, unknown>) => r.type === "hotel")
+    .map((h: Record<string, unknown>) => ({
+      provider: h.provider,
+      localTime: h.localTime,
+      checkOutDate: h.checkOutDate,
+      notes: typeof h.notes === "string" ? h.notes.slice(0, 200) : h.notes,
+      allKeys: Object.keys(h),
+    }));
 
-  return NextResponse.json({ hotels: debug });
+  const flights = trip.reservations
+    .filter((r: Record<string, unknown>) => r.type === "flight")
+    .map((f: Record<string, unknown>) => ({
+      provider: f.provider,
+      flightNumber: f.flightNumber,
+      localTime: f.localTime,
+      timezone: f.timezone,
+      flightDate: f.flightDate,
+      flightDepartureAirport: f.flightDepartureAirport,
+      flightArrivalAirport: f.flightArrivalAirport,
+      flightDepartureTime: f.flightDepartureTime,
+      flightArrivalTime: f.flightArrivalTime,
+      confirmationCode: f.confirmationCode,
+      allKeys: Object.keys(f),
+    }));
+
+  return NextResponse.json({ hotels, flights });
 }
