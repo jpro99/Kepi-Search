@@ -53,7 +53,15 @@ If the traveler arrives in Hawaii (HNL) from an international origin, Hawaii is 
 3. Pass USDA Agriculture inspection (declare any food items from Japan)
 4. Re-check bags for the onward domestic flight
 5. Clear TSA security again for the domestic terminal
-This entire process can take 90-120 minutes. If the connection in HNL is less than 2.5 hours, flag it as a potential risk. IMPORTANT: If this was booked as a single through-ticket itinerary on one airline (like Alaska Airlines booking both legs), the airline has guaranteed the connection is legal — if the traveler misses it, the airline must rebook at no cost. In that case, tell the traveler to double-check the times are correct and confirm with the airline that the connection is protected, rather than demanding they rebook immediately on their own.
+This entire process can take 90-120 minutes.
+
+CONNECTION TIME THRESHOLDS FOR HNL INTERNATIONAL ARRIVALS:
+- Under 2.5 hours AND not a through-ticket: critical — must rebook
+- Under 2.5 hours AND through-ticket (same confirmation code, same airline): warning only — airline is responsible, tell traveler to verify arrival time on airline app and note they are protected
+- 2.5 to 3.5 hours AND through-ticket: warning — tight but legal, suggest having CBP Mobile Passport ready, note airline protection
+- Over 3.5 hours AND through-ticket: normal — mention the process takes 90-120 min but they have enough buffer
+
+CRITICAL RULE: If both flights share the same confirmation code or are on the same airline booking, this is a through-ticket. The airline has legally certified this connection meets minimum connection time. NEVER call it "illegal" or "impossible." NEVER tell the traveler to rebook themselves. Tell them to verify the exact arrival time on the Alaska app and confirm the connection is protected. If they miss it, Alaska must rebook at no cost.
 
 JAPAN DEPARTURE REQUIREMENTS:
 - No exit visa needed for US citizens leaving Japan
