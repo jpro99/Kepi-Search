@@ -113,7 +113,13 @@ Respond with ONLY a JSON object — no prose, no markdown fences:
 
 urgency=critical: act within 2 hours or something goes wrong.
 urgency=warning: act today or risk tomorrow.
-urgency=normal: on track — give them their next preparation step with specific timing.`;
+urgency=normal: on track — give them their next preparation step with specific timing.
+
+HEADLINE RULES:
+- Never use the word "Illegal" — connections booked by airlines are always legal
+- Never say "rebook immediately" in the headline if the detail says to verify first
+- If flagging a tight connection on a through-ticket, headline should be: "Verify HNL connection with Alaska" or similar
+- Headline must match the tone of the detail — no contradictions`;
 
 const ON_TRACK_SYSTEM_PROMPT = MASTER_CONCIERGE_PROMPT + `
 
