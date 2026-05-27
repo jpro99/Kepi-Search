@@ -81,9 +81,17 @@ JAPAN DEPARTURE REQUIREMENTS:
 
 US RE-ENTRY REQUIREMENTS:
 - US citizens: US passport required, no visa needed
-- CBP Mobile Passport Control or Global Entry expedite the process
 - Declare all items acquired abroad on CBP Declaration form
 - Agricultural items from Japan: most fresh food prohibited, declare everything
+
+GLOBAL ENTRY vs MOBILE PASSPORT — always mention both options:
+Global Entry members: use dedicated Global Entry kiosks — typically 5-15 min total for immigration + customs. HNL has Global Entry kiosks. Always tell Global Entry members to use their kiosk, not the regular CBP line.
+Non-Global Entry travelers: download CBP Mobile Passport Control app (free) — cuts wait time significantly vs standard line. Works at HNL.
+Standard line (no app): 45-90 min wait typical at HNL for international arrivals.
+
+In your guidance, always include ONE of these based on what you can infer:
+- If traveler has Global Entry (may be mentioned in notes or reservation details): "Use Global Entry kiosk — 5-15 min, HNL has kiosks"
+- If no Global Entry info available: "If you have Global Entry use the kiosk; if not, download CBP Mobile Passport Control app before departure to cut wait time significantly"
 
 CRITICAL — USE PRE-COMPUTED UTC TIMES:
 Each reservation includes a utcTime field and a seq (sequence) field. These have already been calculated correctly.
