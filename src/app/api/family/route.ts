@@ -11,6 +11,8 @@ export const dynamic = "force-dynamic";
 
 const FAMILY_GROUP_KEY = "family:group";
 const FAMILY_LOCATION_KEY = (memberId: string) => `family:location:${memberId}`;
+const FAMILY_INVITE_INDEX_KEY = (inviteCode: string) => `family:invite-index:${inviteCode}`;
+const FAMILY_MEMBERSHIP_KEY = "family:membership"; // stores { ownerId, inviteCode } for non-owner members
 
 const MemberSchema = z.object({
   id: z.string(),
@@ -78,9 +80,29 @@ export async function GET() {
       createdAt: new Date().toISOString(),
     };
     await kvStoreSet(FAMILY_GROUP_KEY, group, { userId });
+    // Register invite code → owner mapping so other users can join
+    await kvStoreSet(FAMILY_INVITE_INDEX_KEY(group.inviteCode), userId, { userId });
   }
 
-  // Fetch locations for all members
+  // Check if this user is a member of someone else's group (not the owner)
+  const membership = await kvStoreGet<{ ownerId: string; inviteCode: string }>(FAMILY_MEMBERSHIP_KEY, { userId });
+  if (membership && membership.ownerId !== userId) {
+    const memberGroup = await kvStoreGet<z.infer<typeof FamilyGroupSchema>>(FAMILY_GROUP_KEY, { userId: membership.ownerId });
+    if (memberGroup) {
+      const memberLocationEntries = await Promise.all(
+        memberGroup.members.map(async (member) => {
+          const loc = await kvStoreGet<z.infer<typeof LocationSchema>>(
+            FAMILY_LOCATION_KEY(member.id), { userId: membership.ownerId }
+          );
+          return [member.id, loc] as const;
+        })
+      );
+      const memberLocations = Object.fromEntries(memberLocationEntries.filter(([, v]) => v !== null));
+      return NextResponse.json({ group: memberGroup, locations: memberLocations, role: "member" });
+    }
+  }
+
+  // Fetch locations for all members of own group
   const locationEntries = await Promise.all(
     group.members.map(async (member) => {
       const loc = await kvStoreGet<z.infer<typeof LocationSchema>>(
@@ -91,7 +113,7 @@ export async function GET() {
   );
   const locations = Object.fromEntries(locationEntries.filter(([, v]) => v !== null));
 
-  return NextResponse.json({ group, locations });
+  return NextResponse.json({ group, locations, role: "owner" });
 }
 
 // POST - update own location
@@ -101,7 +123,7 @@ export async function POST(request: Request) {
 
   const body = await request.json().catch(() => ({}));
   const parsed = z.object({
-    action: z.enum(["update-location", "add-member", "remove-member", "update-member", "update-group"]),
+    action: z.enum(["update-location", "add-member", "remove-member", "update-member", "update-group", "join-group", "leave-group"]),
     lat: z.number().optional(),
     lon: z.number().optional(),
     accuracy: z.number().optional(),
@@ -188,6 +210,68 @@ export async function POST(request: Request) {
     if (groupName) group.name = groupName;
     await kvStoreSet(FAMILY_GROUP_KEY, group, { userId });
     return NextResponse.json({ ok: true, group });
+  }
+
+  if (action === "join-group") {
+    const { inviteCode } = parsed.data;
+    if (!inviteCode) return NextResponse.json({ error: "inviteCode required" }, { status: 400 });
+
+    // Look up which user owns this group via the invite index
+    const ownerUserId = await kvStoreGet<string>(FAMILY_INVITE_INDEX_KEY(inviteCode.toUpperCase()), { userId });
+    if (!ownerUserId) {
+      return NextResponse.json({ error: "Invalid invite code. Ask the group organizer for the correct code." }, { status: 404 });
+    }
+    if (ownerUserId === userId) {
+      return NextResponse.json({ error: "You created this group — you're already in it." }, { status: 400 });
+    }
+
+    // Get the owner's group
+    const ownerGroup = await kvStoreGet<z.infer<typeof FamilyGroupSchema>>(FAMILY_GROUP_KEY, { userId: ownerUserId });
+    if (!ownerGroup) {
+      return NextResponse.json({ error: "Group not found." }, { status: 404 });
+    }
+
+    // Check if already a member
+    if (ownerGroup.members.some(m => m.id === userId)) {
+      // Already a member - store membership reference and return group
+      await kvStoreSet(FAMILY_MEMBERSHIP_KEY, { ownerId: ownerUserId, inviteCode: inviteCode.toUpperCase() }, { userId });
+      return NextResponse.json({ ok: true, group: ownerGroup, alreadyMember: true });
+    }
+
+    // Add this user to the owner's group
+    const newMember: z.infer<typeof MemberSchema> = {
+      id: userId,
+      name: parsed.data.name ?? "Family Member",
+      email: null,
+      role: "adult",
+      color: nextColor(ownerGroup.members),
+      sharingEnabled: true,
+      visibility: "all-members",
+      joinedAt: new Date().toISOString(),
+    };
+    ownerGroup.members.push(newMember);
+    await kvStoreSet(FAMILY_GROUP_KEY, ownerGroup, { userId: ownerUserId });
+
+    // Store membership reference for this user so they can find the group
+    await kvStoreSet(FAMILY_MEMBERSHIP_KEY, { ownerId: ownerUserId, inviteCode: inviteCode.toUpperCase() }, { userId });
+
+    logger.info("User joined family group.", { userId, ownerId: ownerUserId });
+    return NextResponse.json({ ok: true, group: ownerGroup, joined: true });
+  }
+
+  if (action === "leave-group") {
+    // Remove self from owner's group
+    const membership = await kvStoreGet<{ ownerId: string; inviteCode: string }>(FAMILY_MEMBERSHIP_KEY, { userId });
+    if (!membership) return NextResponse.json({ error: "Not in a group." }, { status: 400 });
+
+    const ownerGroup = await kvStoreGet<z.infer<typeof FamilyGroupSchema>>(FAMILY_GROUP_KEY, { userId: membership.ownerId });
+    if (ownerGroup) {
+      ownerGroup.members = ownerGroup.members.filter(m => m.id !== userId);
+      await kvStoreSet(FAMILY_GROUP_KEY, ownerGroup, { userId: membership.ownerId });
+    }
+    // Clear membership key
+    await kvStoreSet(FAMILY_MEMBERSHIP_KEY, null, { userId });
+    return NextResponse.json({ ok: true, left: true });
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
