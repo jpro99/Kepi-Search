@@ -13,6 +13,8 @@ const routeLogger = logger.withContext({ route: "/api/trip-guidance" });
 const RequestSchema = z.object({
   tripName: z.string().trim().max(200).default("My Trip"),
   nowIso: z.string().trim().max(40),
+  userTimezone: z.string().trim().max(60).optional().default(""),
+  userLocalTime: z.string().trim().max(60).optional().default(""),
   reservationContext: z.string().trim().max(4000),
   mode: z.enum(["guidance", "on-track-check"]).default("guidance"),
 });
@@ -137,7 +139,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const { tripName, nowIso, reservationContext } = parsed.data;
+  const { tripName, nowIso, userTimezone, userLocalTime, reservationContext } = parsed.data;
 
   routeLogger.info("Trip guidance request.", { userId: auth, nowIso });
 
@@ -152,8 +154,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       messages: [{
         role: "user",
         content: isOnTrackCheck
-          ? `Current time: ${nowIso}\nTrip: ${tripName}\n\nReservations:\n${reservationContext}\n\nAm I on track?`
-          : `Current time: ${nowIso}\nTrip: ${tripName}\n\nUpcoming reservations:\n${reservationContext}\n\nWhat does the traveler need to do right now to stay on track?`,
+          ? `Current time (UTC): ${nowIso}${userTimezone ? `\nTraveler local time: ${userLocalTime} (${userTimezone})` : ""}\nTrip: ${tripName}\n\nReservations:\n${reservationContext}\n\nAm I on track?`
+          : `Current time (UTC): ${nowIso}${userTimezone ? `\nTraveler local time: ${userLocalTime} (${userTimezone})` : ""}\nTrip: ${tripName}\n\nUpcoming reservations:\n${reservationContext}\n\nWhat does the traveler need to do right now to stay on track?`,
       }],
     });
 
