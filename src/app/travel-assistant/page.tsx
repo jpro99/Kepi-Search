@@ -592,16 +592,39 @@ const INITIAL_REVIEW_QUEUE: ReviewItem[] = [
   },
 ];
 
-const INITIAL_CHECKLIST: ReadinessItem[] = [
-  { id: "ready-flight", category: "Flights", title: "Flight confirmation codes verified", complete: true, required: true },
-  { id: "ready-hotel", category: "Hotels", title: "Hotel check-in and check-out confirmed", complete: true, required: true },
+const BASE_CHECKLIST: ReadinessItem[] = [
+  { id: "ready-flight", category: "Flights", title: "Flight confirmation codes verified", complete: false, required: true },
+  { id: "ready-hotel", category: "Hotels", title: "Hotel check-in and check-out confirmed", complete: false, required: true },
   { id: "ready-transport", category: "Transportation", title: "Airport transfer planned with fallback", complete: false, required: true },
-  { id: "ready-passport", category: "Passport", title: "Passport validity verified", complete: true, required: true },
+  { id: "ready-passport", category: "Passport", title: "Passport validity verified", complete: false, required: true },
   { id: "ready-checkin", category: "Check-in timing", title: "Online check-in reminders set", complete: false, required: true },
   { id: "ready-arrival", category: "Arrival transfer", title: "Pickup location pinned", complete: false, required: true },
   { id: "ready-essentials", category: "Essentials", title: "Medication and chargers packed", complete: false, required: false },
-  { id: "ready-night", category: "First-night", title: "First meal and sleep plan prepared", complete: true, required: false },
+  { id: "ready-night", category: "First-night", title: "First meal and sleep plan prepared", complete: false, required: false },
 ];
+
+function buildChecklistFromReservations(
+  reservations: { type: string; confirmationCode?: string; checkOutDate?: string; flightNumber?: string }[],
+  savedItems?: ReadinessItem[],
+): ReadinessItem[] {
+  const hasFlights = reservations.some((r) => r.type === "flight" && r.confirmationCode);
+  const hasHotel = reservations.some((r) => r.type === "hotel" && r.confirmationCode);
+  const hasTransport = reservations.some((r) => r.type === "ride" || r.type === "train");
+
+  return BASE_CHECKLIST.map((item) => {
+    // If user has manually toggled this item, preserve their choice
+    const saved = savedItems?.find((s) => s.id === item.id);
+    if (saved) return saved;
+    // Otherwise auto-check based on what's booked
+    let complete = false;
+    if (item.id === "ready-flight") complete = hasFlights;
+    if (item.id === "ready-hotel") complete = hasHotel;
+    if (item.id === "ready-transport") complete = hasTransport;
+    return { ...item, complete };
+  });
+}
+
+const INITIAL_CHECKLIST = BASE_CHECKLIST;
 
 const EMAIL_SAMPLES: EmailSample[] = [
   {
@@ -1660,6 +1683,16 @@ export default function TravelAssistantPage() {
   const [reservations, setReservations] = useState<Reservation[]>(INITIAL_RESERVATIONS);
   const [reviewQueue, setReviewQueue] = useState<ReviewItem[]>(INITIAL_REVIEW_QUEUE);
   const [readinessItems, setReadinessItems] = useState<ReadinessItem[]>(INITIAL_CHECKLIST);
+  // Auto-populate checklist based on reservations once loaded
+  // This runs once when reservations first load
+  const checklistInitialized = useRef(false);
+  useEffect(() => {
+    if (reservations.length > 0 && !checklistInitialized.current) {
+      checklistInitialized.current = true;
+      const savedItems = trip?.readinessItems as ReadinessItem[] | undefined;
+      setReadinessItems(buildChecklistFromReservations(reservations, savedItems?.length ? savedItems : undefined));
+    }
+  }, [reservations, trip]);
   const [airportTransportChoice, setAirportTransportChoice] = useState<AirportTransportChoice | null>(null);
   const [hotelArrivalTime, setHotelArrivalTime] = useState<string | null>(null);
   const [hotelArrivalDraft, setHotelArrivalDraft] = useState("");
@@ -5564,26 +5597,19 @@ export default function TravelAssistantPage() {
   };
 
   const handleChecklistToggle = (id: string): void => {
-    try {
-      // Always update local state first so checklist works offline.
-      pushUndoSnapshot("Readiness checklist changed");
-      setReadinessItems((prev) =>
-        prev.map((item) => (item.id === id ? { ...item, complete: !item.complete } : item)),
-      );
-    } catch {
-      // Preserve interaction even if undo snapshotting fails unexpectedly.
-      setReadinessItems((prev) =>
-        prev.map((item) => (item.id === id ? { ...item, complete: !item.complete } : item)),
-      );
-    }
-
-    window.setTimeout(() => {
-      try {
-        queueMutation("Readiness checklist updated.");
-      } catch {
-        setToast("Checklist updated locally. Changes will sync when storage is available.");
-      }
-    }, 0);
+    // Update local state immediately so UI responds instantly
+    setReadinessItems((prev) => {
+      const updated = prev.map((item) => (item.id === id ? { ...item, complete: !item.complete } : item));
+      // Save to trip in Redis after state update settles
+      window.setTimeout(() => {
+        try {
+          queueMutation("Readiness checklist updated.");
+        } catch {
+          // fail silently - state is updated locally
+        }
+      }, 100);
+      return updated;
+    });
   };
 
   const copyScript = async (text: string): Promise<void> => {
