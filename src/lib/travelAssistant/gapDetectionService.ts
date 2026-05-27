@@ -20,6 +20,7 @@ interface GapReservation {
   type: string;
   provider: string;
   localTime: string;
+  timezone?: string;
   location: string;
   flightDate?: string;
   flightDepartureAirport?: string;
@@ -102,13 +103,34 @@ export function detectTripGaps(reservations: GapReservation[], nowMs = Date.now(
   const todayKey = new Date(nowMs).toISOString().slice(0, 10);
 
   // Use flightDate for flights (localTime may be email receive time, not actual departure)
-  const getReservationMs = (r: GapReservation): number => {
-    if (r.type === "flight" && r.flightDate) {
-      const ms = Date.parse(r.flightDate + "T23:59:00");
-      if (!Number.isNaN(ms)) return ms;
+  // Convert local time + timezone to UTC ms for accurate cross-timezone comparison.
+  // Without this, HND 21:20 JST and HNL 13:41 HST on the same calendar date
+  // cannot be correctly ordered or diffed.
+  const toUtcMs = (r: GapReservation): number => {
+    const local = r.localTime?.trim() ?? "";
+    const tz = (r as GapReservation & { timezone?: string }).timezone?.trim() ?? "Etc/UTC";
+    if (!local) return Number.NaN;
+    try {
+      const [datePart = "", timePart = "00:00"] = local.split(" ");
+      const [year, month, day] = datePart.split("-").map(Number);
+      const [hour, minute] = timePart.split(":").map(Number);
+      if (!year || !month || !day) return Number.NaN;
+      const localDate = new Date(year, (month ?? 1) - 1, day, hour ?? 0, minute ?? 0);
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hour12: false,
+      });
+      const parts = Object.fromEntries(formatter.formatToParts(localDate).map(p => [p.type, p.value]));
+      const tzDate = new Date(`${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:00Z`);
+      const offsetMs = tzDate.getTime() - localDate.getTime();
+      return localDate.getTime() - offsetMs;
+    } catch {
+      return parseMs(local);
     }
-    return parseMs(r.localTime);
   };
+
+  const getReservationMs = (r: GapReservation): number => toUtcMs(r);
 
   const upcoming = reservations
     .filter((r) => getReservationMs(r) > nowMs - 86_400_000)
