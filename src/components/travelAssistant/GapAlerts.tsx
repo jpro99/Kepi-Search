@@ -9,6 +9,7 @@ interface GapAlertsProps {
     type: string;
     provider: string;
     localTime: string;
+    timezone?: string;
     location: string;
     flightDate?: string;
     flightDepartureAirport?: string;
