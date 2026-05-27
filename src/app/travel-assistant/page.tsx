@@ -81,6 +81,7 @@ import { TripOrientationCard } from "@/components/travelAssistant/TripOrientatio
 import { DocumentVault } from "@/components/travelAssistant/DocumentVault";
 import { PackingList } from "@/components/travelAssistant/PackingList";
 import { ShareTripCard } from "@/components/travelAssistant/ShareTripCard";
+import { ShareModal } from "@/components/travelAssistant/ShareModal";
 import { FamilyPanel } from "@/components/travelAssistant/FamilyPanel";
 import { ReferralCard } from "@/components/referral/ReferralCard";
 import { WeatherCard } from "@/components/travelAssistant/WeatherCard";
@@ -1759,6 +1760,10 @@ export default function TravelAssistantPage() {
   const [showAdvancedShortcut] = useState(false);
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [manualReservationModalOpen, setManualReservationModalOpen] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushMessage, setPushMessage] = useState<string | null>(null);
   const [reservationsCalendarView, setReservationsCalendarView] = useState(false);
   const [showCompletedFlights, setShowCompletedFlights] = useState(false);
   const [reservationsRefreshing, setReservationsRefreshing] = useState(false);
@@ -4294,6 +4299,52 @@ export default function TravelAssistantPage() {
     },
     [familyMembers, queueMutation, setToast],
   );
+
+  const handleEnablePush = useCallback(async (): Promise<void> => {
+    if (pushBusy) return;
+    if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+      setPushMessage("Push notifications are not supported on this browser.");
+      return;
+    }
+    setPushBusy(true);
+    setPushMessage(null);
+    try {
+      const permission = Notification.permission === "granted"
+        ? "granted"
+        : await Notification.requestPermission();
+      if (permission !== "granted") {
+        setPushMessage("Notification permission denied. Enable in device settings.");
+        setPushBusy(false);
+        return;
+      }
+      const reg = await navigator.serviceWorker.ready;
+      const vapidKey = document.querySelector("meta[name=vapid-public-key]")?.getAttribute("content");
+      if (!vapidKey) {
+        setPushMessage("Push configuration missing — contact support.");
+        setPushBusy(false);
+        return;
+      }
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: vapidKey,
+      });
+      const res = await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sub.toJSON()),
+      });
+      if (res.ok) {
+        setPushSubscribed(true);
+        setPushMessage("✅ Push alerts enabled! You'll be notified of gate changes and delays.");
+      } else {
+        setPushMessage("Failed to register push subscription.");
+      }
+    } catch {
+      setPushMessage("Could not enable push notifications.");
+    } finally {
+      setPushBusy(false);
+    }
+  }, [pushBusy]);
 
   const handleCopyForwardAddress = useCallback(async (address?: string): Promise<void> => {
     const value = (address ?? emailForwardAddress)?.trim();
@@ -7473,6 +7524,14 @@ export default function TravelAssistantPage() {
             <section className="space-y-3">
               {/* Share trip */}
               <ShareTripCard tripName={activeTrip?.name ?? "My Trip"} />
+              <button
+                type="button"
+                onClick={() => setShareModalOpen(true)}
+                className="w-full rounded-2xl border border-sky-200 bg-sky-50 p-4 text-left shadow-sm transition hover:bg-sky-100 dark:border-sky-500/30 dark:bg-sky-500/10 dark:hover:bg-sky-500/20"
+              >
+                <p className="font-semibold text-sky-800 dark:text-sky-200">🔗 Share trip with family</p>
+                <p className="mt-1 text-xs text-sky-600 dark:text-sky-400">Create a shareable link so family can follow along in real time.</p>
+              </button>
               {/* Invite a friend */}
               <ReferralCard />
               {/* Family tracker */}
@@ -7544,6 +7603,36 @@ export default function TravelAssistantPage() {
                   </>
                 ) : (
                   <p className="mt-1 text-sm text-emerald-900 dark:text-emerald-100">Assigning your forwarding address...</p>
+                )}
+              </article>
+
+              {/* Push notifications */}
+              <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="font-semibold">Flight alerts</h2>
+                  {pushSubscribed && (
+                    <span className="rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-bold text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300">Active</span>
+                  )}
+                </div>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                  Get push alerts for gate changes, delays, and departure reminders — even when the app isn't open.
+                </p>
+                {!pushSubscribed ? (
+                  <button
+                    type="button"
+                    onClick={() => { void handleEnablePush(); }}
+                    disabled={pushBusy}
+                    className="mt-3 w-full rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-60"
+                  >
+                    {pushBusy ? "Enabling..." : "🔔 Enable flight alerts"}
+                  </button>
+                ) : (
+                  <p className="mt-3 text-sm font-semibold text-emerald-600 dark:text-emerald-400">🔔 Alerts are on</p>
+                )}
+                {pushMessage && (
+                  <p className={`mt-2 text-xs ${pushMessage.startsWith("✅") ? "text-emerald-700 dark:text-emerald-300" : "text-rose-600 dark:text-rose-400"}`}>
+                    {pushMessage}
+                  </p>
                 )}
               </article>
 
@@ -7649,6 +7738,14 @@ export default function TravelAssistantPage() {
           currentPlan={billingStatusPlan}
           onClose={closeUpgradeModal}
         />
+        {shareModalOpen && (
+          <ShareModal
+            open={shareModalOpen}
+            tripId={activeTripId}
+            tripName={activeTrip?.name ?? null}
+            onClose={() => setShareModalOpen(false)}
+          />
+        )}
         {manualReservationModalOpen ? (
           <ManualReservationEntryModal
             familyMembers={familyMembers.map((member) => ({ id: member.id, name: member.name }))}
