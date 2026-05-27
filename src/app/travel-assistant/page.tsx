@@ -1689,10 +1689,9 @@ export default function TravelAssistantPage() {
   useEffect(() => {
     if (reservations.length > 0 && !checklistInitialized.current) {
       checklistInitialized.current = true;
-      const savedItems = trip?.readinessItems as ReadinessItem[] | undefined;
-      setReadinessItems(buildChecklistFromReservations(reservations, savedItems?.length ? savedItems : undefined));
+      setReadinessItems(buildChecklistFromReservations(reservations, undefined));
     }
-  }, [reservations, trip]);
+  }, [reservations]);
   const [airportTransportChoice, setAirportTransportChoice] = useState<AirportTransportChoice | null>(null);
   const [hotelArrivalTime, setHotelArrivalTime] = useState<string | null>(null);
   const [hotelArrivalDraft, setHotelArrivalDraft] = useState("");
