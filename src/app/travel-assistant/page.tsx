@@ -118,7 +118,7 @@ type MobileViewPanel = "essentials" | "timeline" | "recovery" | "family" | "all"
 type VisibilityMode = "all-members" | "organizer-only";
 type DisruptionScenario = "none" | "missed-flight" | "train-delay" | "ride-no-show";
 type TimelineSectionTab = "reservations" | "documents" | "packing";
-type ConsumerTab = "trip" | "reservations" | "packing" | "more";
+type ConsumerTab = "trip" | "reservations" | "packing" | "family" | "more";
 type AirportTransportChoice = "driving-myself" | "getting-dropped-off" | "uber-lyft" | "train-bus" | "other";
 
 interface LocationPoint {
@@ -6576,6 +6576,7 @@ export default function TravelAssistantPage() {
               ["trip", "Trip"],
               ["reservations", "Reservations"],
               ["packing", "Packing"],
+              ["family", "Family"],
               ["more", "More"],
             ] as const).map(([tab, label]) => (
               <button
@@ -7520,25 +7521,33 @@ export default function TravelAssistantPage() {
               tripId={activeTripId}
               onCompletionChange={(percent) => setPackingCompletionPercent(percent)}
             />
-          ) : (
-            <section className="space-y-3">
-              {/* Share trip */}
-              <ShareTripCard tripName={activeTrip?.name ?? "My Trip"} />
+          ) : consumerTab === "family" ? (
+            <section className="space-y-4 pb-4">
+              <div>
+                <h2 className="text-lg font-bold">Family</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Location sharing, trip sharing, and referrals</p>
+              </div>
+              {/* Share trip link */}
               <button
                 type="button"
                 onClick={() => setShareModalOpen(true)}
                 className="w-full rounded-2xl border border-sky-200 bg-sky-50 p-4 text-left shadow-sm transition hover:bg-sky-100 dark:border-sky-500/30 dark:bg-sky-500/10 dark:hover:bg-sky-500/20"
               >
                 <p className="font-semibold text-sky-800 dark:text-sky-200">🔗 Share trip with family</p>
-                <p className="mt-1 text-xs text-sky-600 dark:text-sky-400">Create a shareable link so family can follow along in real time.</p>
+                <p className="mt-1 text-xs text-sky-600 dark:text-sky-400">Create a read-only link so family can follow your itinerary in real time.</p>
               </button>
-              {/* Invite a friend */}
-              <ReferralCard />
-              {/* Family tracker */}
+              {/* Life360-style family tracker */}
               <FamilyPanel
                 isPremium={hasProAccess || isLifetime || isTrial}
                 onUpgrade={() => openUpgradeModal("multi-trip", "Upgrade to Pro to unlock Family Tracker — real-time location sharing for your whole group.")}
               />
+              {/* Invite a friend */}
+              <ReferralCard />
+            </section>
+          ) : (
+            <section className="space-y-3">
+              {/* Share trip */}
+              <ShareTripCard tripName={activeTrip?.name ?? "My Trip"} />
               <section
                 id="readiness-checklist-section"
                 ref={readinessChecklistSectionRef}
@@ -7695,11 +7704,12 @@ export default function TravelAssistantPage() {
         </div>
 
         <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--border-default)] bg-[var(--bg-card)]/95 px-3 py-2 shadow-2xl backdrop-blur md:hidden">
-          <div className="mx-auto grid max-w-md grid-cols-4 gap-1 text-xs font-semibold">
+          <div className="mx-auto grid max-w-md grid-cols-5 gap-0.5 text-[11px] font-semibold">
             {([
               ["trip", "Trip"],
               ["reservations", "Reservations"],
               ["packing", "Packing"],
+              ["family", "Family"],
               ["more", "More"],
             ] as const).map(([tab, label]) => (
               <button
