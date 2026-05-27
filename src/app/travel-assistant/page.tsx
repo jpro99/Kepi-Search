@@ -3435,6 +3435,53 @@ export default function TravelAssistantPage() {
         .find((summary): summary is string => Boolean(summary)) ?? null,
     [consumerDisplayReservations, nowMs],
   );
+  const flightConnectionRisk = (() => {
+    const flights = consumerDisplayReservations
+      .filter((reservation): reservation is Reservation => reservation.type === "flight")
+      .map((reservation) => ({
+        reservation,
+        departureMs: parseDateInput(reservation.localTime),
+      }))
+      .filter((entry) => !Number.isNaN(entry.departureMs))
+      .sort((left, right) => left.departureMs - right.departureMs);
+    if (flights.length < 2) {
+      return { summary: null as string | null, riskyReservationIds: [] as string[] };
+    }
+
+    for (let index = 1; index < flights.length; index += 1) {
+      const previous = flights[index - 1];
+      const current = flights[index];
+      const gapMinutes = Math.round((current.departureMs - previous.departureMs) / 60000);
+      if (gapMinutes <= 0 || gapMinutes > 360) {
+        continue;
+      }
+
+      const previousAirports = resolveFlightAirports(previous.reservation);
+      const currentAirports = resolveFlightAirports(current.reservation);
+      const previousArrival = previousAirports.arrivalAirport.trim().toUpperCase();
+      const currentDeparture = currentAirports.departureAirport.trim().toUpperCase();
+      const sameAirport = previousArrival.length > 0 && previousArrival === currentDeparture;
+      const sameLocalDay = formatLocalDateKey(previous.departureMs) === formatLocalDateKey(current.departureMs);
+      const isRiskyConnection = (sameAirport && gapMinutes <= 240) || (!sameAirport && sameLocalDay && gapMinutes <= 360);
+      if (!isRiskyConnection) {
+        continue;
+      }
+
+      const previousFlight = getFlightNumberLabel(previous.reservation);
+      const currentFlight = getFlightNumberLabel(current.reservation);
+      const summary = sameAirport
+        ? `Possible impossible connection — ${previousFlight} to ${currentFlight} has only ${gapMinutes} minutes at ${currentDeparture}. Verify baggage transfer + customs/security timing now.`
+        : `Possible impossible same-day transfer — only ${gapMinutes} minutes between ${previousFlight} and ${currentFlight} across different airports.`;
+      return {
+        summary,
+        riskyReservationIds: [previous.reservation.id, current.reservation.id],
+      };
+    }
+
+    return { summary: null as string | null, riskyReservationIds: [] as string[] };
+  })();
+  const connectionRiskSummary = flightConnectionRisk.summary;
+  const riskyFlightConnectionReservationIds = new Set(flightConnectionRisk.riskyReservationIds);
   const delayedFlight = useMemo(
     () =>
       reservations.find(
@@ -3451,6 +3498,13 @@ export default function TravelAssistantPage() {
         title: "Flight delayed 🔴",
         detail: delayedFlight ? `${delayedFlight.provider} needs attention.` : "Something changed. Kepi can help fix it.",
         tone: "border-red-200 bg-red-50 text-red-950 dark:border-red-500/40 dark:bg-red-500/15 dark:text-red-50",
+      };
+    }
+    if (connectionRiskSummary) {
+      return {
+        title: "Connection risk ⚠️",
+        detail: connectionRiskSummary,
+        tone: "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50",
       };
     }
     if (airportPreparationDetail) {
@@ -3497,6 +3551,7 @@ export default function TravelAssistantPage() {
     activeScenario,
     airportPreparationDetail,
     blockingIssueCount,
+    connectionRiskSummary,
     delayedFlight,
     hotelCheckoutDetail,
     reservationsToday.length,
@@ -3518,6 +3573,7 @@ export default function TravelAssistantPage() {
       unresolvedReviewCount > 0 ||
       unresolvedReadinessCount > 0 ||
       blockingIssueCount > 0 ||
+      Boolean(connectionRiskSummary) ||
       requiresAirportPreparation ||
       hasHotelCheckoutToday
     ) {
@@ -3534,6 +3590,7 @@ export default function TravelAssistantPage() {
     activeScenario,
     airportPreparationDetail,
     blockingIssueCount,
+    connectionRiskSummary,
     delayedFlight,
     hotelCheckoutDetail,
     tripStatus,
@@ -4202,6 +4259,7 @@ export default function TravelAssistantPage() {
   const evaluateStatus = (): void => {
     let targetStatus: TripStatus = "green";
     if (
+      Boolean(connectionRiskSummary) ||
       minutesToDeparture <= 75 ||
       unresolvedReviewCount >= 2 ||
       unresolvedReadinessCount >= 2 ||
@@ -4217,6 +4275,7 @@ export default function TravelAssistantPage() {
       unresolvedReviewCount,
       unresolvedReadinessCount,
       blockingIssueCount,
+      connectionRiskSummary,
       delayedFlightId: delayedFlight?.id ?? null,
       activeScenario,
     });
@@ -4227,6 +4286,8 @@ export default function TravelAssistantPage() {
         ? `${delayedFlight.provider} needs attention.`
         : activeScenario !== "none"
           ? "Something changed. Kepi can help fix it."
+          : connectionRiskSummary
+            ? connectionRiskSummary
           : airportPreparationDetail
             ? airportPreparationDetail
             : hotelCheckoutDetail
@@ -6386,7 +6447,7 @@ export default function TravelAssistantPage() {
   }, [consumerTab, pendingMoreScrollTarget]);
 
   const consumerPrimaryAction = (() => {
-    if (tripStatus === "red" || activeScenario !== "none" || delayedFlight) {
+    if (tripStatus === "red" || activeScenario !== "none" || delayedFlight || connectionRiskSummary) {
       return {
         label: "View reservations",
         targetTab: "reservations" as ConsumerTab,
@@ -6417,14 +6478,19 @@ export default function TravelAssistantPage() {
           consumerReviewQueueSession.total
         }`
       : null;
-  const getConsumerReservationStatus = useCallback(
-    (reservation: Reservation): { label: string; className: string } => {
+  const getConsumerReservationStatus = (reservation: Reservation): { label: string; className: string } => {
       if (reservation.type === "flight") {
         const checkedStatus = flightStatusCheckByReservationId[reservation.id];
         if (checkedStatus?.busy) {
           return {
             label: "Checking...",
             className: "bg-cyan-500/15 text-cyan-700 ring-1 ring-cyan-500/30 dark:text-cyan-100",
+          };
+        }
+        if (riskyFlightConnectionReservationIds.has(reservation.id)) {
+          return {
+            label: "Connection risk",
+            className: "bg-amber-500/15 text-amber-700 ring-1 ring-amber-500/30 dark:text-amber-200",
           };
         }
         if (checkedStatus && !checkedStatus.error) {
@@ -6489,9 +6555,7 @@ export default function TravelAssistantPage() {
         label: "Confirmed",
         className: "bg-slate-900/10 text-slate-700 ring-1 ring-slate-400/30 dark:text-slate-200",
       };
-    },
-    [flightLiveStatusByReservationId, flightStatusCheckByReservationId],
-  );
+  };
 
   const activeDrawerPanel = activeDrawer ? (
     <div className="fixed inset-0 z-[140] flex items-end justify-end bg-slate-950/80 p-3 md:p-6">
