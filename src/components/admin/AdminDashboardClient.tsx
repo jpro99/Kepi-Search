@@ -60,6 +60,8 @@ export function AdminDashboardClient() {
   const [adminBusy, setAdminBusy] = useState(false);
   const [adminMessage, setAdminMessage] = useState<string | null>(null);
   const [inviteNote, setInviteNote] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteSendResult, setInviteSendResult] = useState<{ code: string; redeemUrl: string; emailSent: boolean; warning?: string } | null>(null);
 
   const loadHealth = useCallback(async (): Promise<void> => {
     setLoadingHealth(true);
@@ -176,6 +178,53 @@ export function AdminDashboardClient() {
       }
     },
     [adminBusy, inviteNote, loadInviteCodes],
+  );
+
+  const handleSendInvite = useCallback(
+    async (type: "lifetime" | "trial-30"): Promise<void> => {
+      if (adminBusy) return;
+      const email = inviteEmail.trim();
+      if (!email || !email.includes("@")) {
+        setAdminMessage("Please enter a valid email address.");
+        return;
+      }
+      setAdminBusy(true);
+      setAdminMessage(null);
+      setInviteSendResult(null);
+      try {
+        const response = await fetch("/api/admin/send-invite", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, type, note: inviteNote.trim() || email }),
+        });
+        const payload = (await response.json()) as {
+          ok?: boolean; code?: string; redeemUrl?: string;
+          emailSent?: boolean; warning?: string; error?: string;
+        };
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error ?? `Send invite returned ${response.status}`);
+        }
+        setInviteSendResult({
+          code: payload.code ?? "",
+          redeemUrl: payload.redeemUrl ?? "",
+          emailSent: payload.emailSent ?? false,
+          warning: payload.warning,
+        });
+        setAdminMessage(
+          payload.emailSent
+            ? `✅ Invite sent to ${email} — code: ${payload.code}`
+            : `⚠️ Code generated (${payload.code}) but email not sent. ${payload.warning ?? ""}`,
+        );
+        setInviteEmail("");
+        setInviteNote("");
+        await loadInviteCodes();
+      } catch (error) {
+        setAdminMessage(error instanceof Error ? error.message : "Failed to send invite.");
+      } finally {
+        setAdminBusy(false);
+      }
+    },
+    [adminBusy, inviteEmail, inviteNote, loadInviteCodes],
   );
 
   const handleRevokeInviteForUser = useCallback(
@@ -388,34 +437,63 @@ export function AdminDashboardClient() {
               Refresh
             </button>
           </div>
-          <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/70 sm:grid-cols-[1fr_auto_auto]">
-            <input
-              type="text"
-              value={inviteNote}
-              onChange={(event) => setInviteNote(event.target.value)}
-              placeholder="Optional note (e.g. for John Smith)"
-              className="rounded-md border border-slate-300 bg-white px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
-            />
-            <button
-              type="button"
-              disabled={adminBusy}
-              onClick={() => {
-                void handleGenerateInviteCode("lifetime");
-              }}
-              className="rounded-md bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Generate lifetime
-            </button>
-            <button
-              type="button"
-              disabled={adminBusy}
-              onClick={() => {
-                void handleGenerateInviteCode("trial-30");
-              }}
-              className="rounded-md border border-cyan-500 px-3 py-2 text-xs font-semibold text-cyan-700 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-60 dark:text-cyan-300"
-            >
-              Generate 30-day trial
-            </button>
+          {/* Email invite form */}
+          <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950/70">
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">Send invite by email</p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="recipient@email.com"
+                className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+              />
+              <input
+                type="text"
+                value={inviteNote}
+                onChange={(e) => setInviteNote(e.target.value)}
+                placeholder="Optional note"
+                className="w-40 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={adminBusy || !inviteEmail.includes("@")}
+                onClick={() => { void handleSendInvite("lifetime"); }}
+                className="rounded-lg bg-sky-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                ✉ Send lifetime invite
+              </button>
+              <button
+                type="button"
+                disabled={adminBusy || !inviteEmail.includes("@")}
+                onClick={() => { void handleSendInvite("trial-30"); }}
+                className="rounded-lg border border-sky-600 px-4 py-2.5 text-xs font-bold text-sky-700 hover:bg-sky-600/10 disabled:cursor-not-allowed disabled:opacity-50 dark:text-sky-300"
+              >
+                ✉ Send 30-day trial invite
+              </button>
+              <button
+                type="button"
+                disabled={adminBusy}
+                onClick={() => { void handleGenerateInviteCode("lifetime"); }}
+                className="rounded-lg border border-slate-300 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+              >
+                Generate (no email)
+              </button>
+            </div>
+            {inviteSendResult && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-500/30 dark:bg-emerald-500/10">
+                <p className="text-xs font-semibold text-emerald-800 dark:text-emerald-200">
+                  {inviteSendResult.emailSent ? "Email sent ✓" : "Code generated (email failed)"}
+                </p>
+                <p className="mt-1 font-mono text-xs text-emerald-700 dark:text-emerald-300">{inviteSendResult.code}</p>
+                <p className="mt-1 break-all text-xs text-emerald-600 dark:text-emerald-400">{inviteSendResult.redeemUrl}</p>
+                {inviteSendResult.warning && (
+                  <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{inviteSendResult.warning}</p>
+                )}
+              </div>
+            )}
           </div>
           <div className="overflow-auto">
             <table className="min-w-[900px] text-left text-xs">
