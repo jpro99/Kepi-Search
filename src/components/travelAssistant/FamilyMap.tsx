@@ -40,6 +40,7 @@ function timeAgo(iso: string): string {
 
 export function FamilyMap({ members, locations, maptilerKey, height = 300, onMemberClick }: FamilyMapProps) {
   const FALLBACK_STYLE_URL = "https://demotiles.maplibre.org/style.json";
+  const MAP_LOAD_TIMEOUT_MS = 12_000;
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<import("maplibre-gl").Map | null>(null);
   const markersRef = useRef<Map<string, import("maplibre-gl").Marker>>(new Map());
@@ -102,6 +103,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
     if (!el || mapRef.current) return;
     // Allow empty string key - just try and show error if it fails
     let cancelled = false;
+    let loadTimeout: ReturnType<typeof window.setTimeout> | undefined;
     fallbackAppliedRef.current = false;
     setUsingMaptilerStyle(Boolean(maptilerKey));
 
@@ -138,6 +140,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
 
         map.on("load", () => {
           if (!cancelled) {
+            window.clearTimeout(loadTimeout);
             setReady(true);
             setMapError(null);
           }
@@ -165,8 +168,27 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
             setMapWarning("MapTiler tiles unavailable — showing fallback map style.");
             setMapError(null);
             map.setStyle(FALLBACK_STYLE_URL);
+            return;
+          }
+          if (!cancelled && msg) {
+            setMapError(`Map tiles failed to load: ${msg}`);
           }
         });
+
+        loadTimeout = window.setTimeout(() => {
+          if (cancelled || map.loaded()) return;
+          if (maptilerKey.length > 0 && !fallbackAppliedRef.current) {
+            fallbackAppliedRef.current = true;
+            setUsingMaptilerStyle(false);
+            setMapWarning("Map startup stalled — switching to fallback map style.");
+            setMapError(null);
+            map.setStyle(FALLBACK_STYLE_URL);
+            return;
+          }
+          setMapError(
+            "Map is taking too long to load. Verify network access to map tiles and refresh.",
+          );
+        }, MAP_LOAD_TIMEOUT_MS);
 
         mapRef.current = map;
       } catch (err) {
@@ -176,6 +198,9 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
 
     return () => {
       cancelled = true;
+      if (loadTimeout !== undefined) {
+        window.clearTimeout(loadTimeout);
+      }
       mapRef.current?.remove();
       mapRef.current = null;
       setReady(false);
