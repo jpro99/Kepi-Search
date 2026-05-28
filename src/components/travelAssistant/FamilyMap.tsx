@@ -25,6 +25,8 @@ interface FamilyMapProps {
   members: FamilyMember[];
   locations: Record<string, LocationPoint>;
   maptilerKey: string;
+  fullscreen?: boolean;
+  onFullscreenToggle?: () => void;
   onMemberClick?: (memberId: string) => void;
 }
 
@@ -39,7 +41,7 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 60)}h ago`;
 }
 
-export function FamilyMap({ members, locations, maptilerKey, onMemberClick }: FamilyMapProps) {
+export function FamilyMap({ members, locations, maptilerKey, fullscreen = false, onFullscreenToggle, onMemberClick }: FamilyMapProps) {
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Map<string, Marker>>(new Map());
@@ -184,6 +186,14 @@ export function FamilyMap({ members, locations, maptilerKey, onMemberClick }: Fa
     if (mapRef.current) void syncMarkers(mapRef.current);
   }, [syncMarkers]);
 
+  // Resize map when fullscreen changes
+  useEffect(() => {
+    if (mapRef.current) {
+      // Give DOM time to update then resize
+      setTimeout(() => mapRef.current?.resize(), 50);
+    }
+  }, [fullscreen]);
+
   // Toggle satellite
   useEffect(() => {
     if (!mapRef.current || !maptilerKey) return;
@@ -224,15 +234,18 @@ export function FamilyMap({ members, locations, maptilerKey, onMemberClick }: Fa
         }
       `}</style>
 
-      {/* Map container */}
+      {/* Map container - full screen overlay or inline */}
       <div
         ref={mapEl}
-        className="w-full rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700"
-        style={{ height: 320 }}
+        className={fullscreen
+          ? "fixed inset-0 z-50 rounded-none border-0"
+          : "w-full rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700"
+        }
+        style={{ height: fullscreen ? "100dvh" : 320 }}
       />
 
-      {/* Controls overlay */}
-      <div className="absolute top-3 left-3 flex flex-col gap-1.5">
+      {/* Controls overlay - positioned relative to map */}
+      <div className={`${fullscreen ? "fixed" : "absolute"} top-3 left-3 z-10 flex flex-col gap-1.5`}>
         <button
           type="button"
           onClick={() => setSatellite(v => !v)}
@@ -242,7 +255,7 @@ export function FamilyMap({ members, locations, maptilerKey, onMemberClick }: Fa
               : "bg-white text-slate-700 dark:bg-slate-800 dark:text-slate-200"
           }`}
         >
-          {satellite ? "🛰 Satellite" : "🗺 Map"}
+          {satellite ? "🛰 Satellite" : "🗺 Streets"}
         </button>
         {Object.keys(locations).length > 1 && (
           <button
@@ -253,11 +266,20 @@ export function FamilyMap({ members, locations, maptilerKey, onMemberClick }: Fa
             👁 Show all
           </button>
         )}
+        {onFullscreenToggle && (
+          <button
+            type="button"
+            onClick={onFullscreenToggle}
+            className="rounded-xl bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-md dark:bg-slate-800 dark:text-slate-200"
+          >
+            {fullscreen ? "✕ Close" : "⛶ Expand"}
+          </button>
+        )}
       </div>
 
       {/* Selected member info card */}
       {selectedMember && selectedLoc && (
-        <div className="absolute bottom-3 left-3 right-12 rounded-2xl bg-white shadow-xl p-3 dark:bg-slate-900">
+        <div className={`${fullscreen ? "fixed" : "absolute"} bottom-3 left-3 right-12 z-10 rounded-2xl bg-white shadow-xl p-3 dark:bg-slate-900`}>
           <div className="flex items-center gap-2">
             <div
               className="h-8 w-8 rounded-full flex items-center justify-center text-sm font-bold text-white"
