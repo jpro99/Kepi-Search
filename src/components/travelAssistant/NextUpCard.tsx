@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { detectTripGaps } from "@/lib/travelAssistant/gapDetectionService";
 
 interface NextUpReservation {
   id: string;
@@ -183,6 +184,17 @@ export function NextUpCard({ reservations, tripName, onReservationTap }: NextUpC
 
   const fetchGuidance = useCallback(async () => {
     if (reservations.filter((r) => (parseBestMs(r) - Date.now()) / 3_600_000 > -2).length === 0) return;
+    const topGap = detectTripGaps(reservations).find((gap) => gap.severity === "critical" || gap.severity === "warning");
+    if (topGap) {
+      setGuidance({
+        status: "done",
+        text: `**${topGap.title}**\n${topGap.detail}`,
+        urgency: topGap.severity === "critical" ? "critical" : "warning",
+        proactive_flag: "",
+        action: topGap.actionLabel,
+      });
+      return;
+    }
     setGuidance({ status: "loading" });
     const contextBlock = buildContextBlock(reservations);
 
