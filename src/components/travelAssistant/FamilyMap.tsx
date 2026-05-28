@@ -158,6 +158,24 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
         map.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
         map.addControl(new ml.AttributionControl({ compact: true }), "bottom-right");
 
+        const switchToFallbackStyle = (warning: string): boolean => {
+          if (fallbackAppliedRef.current) {
+            return false;
+          }
+          fallbackAppliedRef.current = true;
+          setUsingMaptilerStyle(false);
+          setSatellite(false);
+          setMapWarning(warning);
+          setMapError(null);
+          map.once("styledata", () => {
+            if (cancelled) return;
+            setReady(true);
+            setMapError(null);
+          });
+          map.setStyle(OPEN_STREET_MAP_FALLBACK_STYLE);
+          return true;
+        };
+
         map.on("load", () => {
           if (!cancelled) {
             window.clearTimeout(loadTimeout);
@@ -173,21 +191,8 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
               ? (eventRecord.error as Record<string, unknown>)
               : null;
           const msg = String(nestedError?.message ?? eventRecord?.message ?? "");
-          const status = Number(nestedError?.status ?? 0);
-          const maptilerFailure =
-            maptilerKey.length > 0 &&
-            (status === 401 ||
-              status === 403 ||
-              msg.includes("401") ||
-              msg.includes("403") ||
-              msg.includes("Unauthorized") ||
-              msg.toLowerCase().includes("maptiler"));
-          if (maptilerFailure && !fallbackAppliedRef.current) {
-            fallbackAppliedRef.current = true;
-            setUsingMaptilerStyle(false);
-            setMapWarning("MapTiler tiles unavailable — showing fallback map style.");
-            setMapError(null);
-            map.setStyle(OPEN_STREET_MAP_FALLBACK_STYLE);
+          if (maptilerKey.length > 0 && !fallbackAppliedRef.current) {
+            switchToFallbackStyle("MapTiler tiles unavailable — showing fallback map style.");
             return;
           }
           if (!cancelled && msg) {
@@ -198,11 +203,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
         loadTimeout = window.setTimeout(() => {
           if (cancelled || map.loaded()) return;
           if (maptilerKey.length > 0 && !fallbackAppliedRef.current) {
-            fallbackAppliedRef.current = true;
-            setUsingMaptilerStyle(false);
-            setMapWarning("Map startup stalled — switching to fallback map style.");
-            setMapError(null);
-            map.setStyle(OPEN_STREET_MAP_FALLBACK_STYLE);
+            switchToFallbackStyle("Map startup stalled — switching to fallback map style.");
             return;
           }
           setMapError(
