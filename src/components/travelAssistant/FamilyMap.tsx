@@ -138,27 +138,9 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
           ? `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`
           : "https://demotiles.maplibre.org/style.json";
 
-        // Validate key first — same pattern as the working VeniceMapClient
-        if (maptilerKey) {
-          let fetchOk = false;
-          try {
-            const res = await fetch(styleUrl, { cache: "no-store" });
-            fetchOk = res.ok;
-            if (!res.ok && !cancelled) {
-              setIsError(true);
-              setStatusMsg(
-                `MapTiler key rejected (HTTP ${res.status}). ` +
-                `Go to cloud.maptiler.com → API Keys → ` +
-                `remove domain restrictions so kepitravel.com is allowed.`
-              );
-              return;
-            }
-          } catch {
-            // fetch failed (network/CORS) — try anyway, map might still work
-            fetchOk = false;
-          }
-          if (!fetchOk && cancelled) return;
-        }
+        // No pre-validation fetch — it runs without Origin header and gets 403
+        // MapLibre fetches style directly from the browser WITH Origin header
+        // so it works correctly. Let MapLibre handle any key errors itself.
 
         if (cancelled || !mapEl.current) return;
 
