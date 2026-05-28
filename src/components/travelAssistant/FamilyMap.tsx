@@ -25,8 +25,6 @@ interface FamilyMapProps {
   members: FamilyMember[];
   locations: Record<string, LocationPoint>;
   maptilerKey: string;
-  fullscreen?: boolean;
-  onFullscreenToggle?: () => void;
   onMemberClick?: (memberId: string) => void;
 }
 
@@ -41,71 +39,52 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 60)}h ago`;
 }
 
-export function FamilyMap({ members, locations, maptilerKey, fullscreen = false, onFullscreenToggle, onMemberClick }: FamilyMapProps) {
-  const mapEl = useRef<HTMLDivElement>(null);
+export function FamilyMap({ members, locations, maptilerKey, onMemberClick }: FamilyMapProps) {
+  const inlineEl = useRef<HTMLDivElement>(null);
+  const fullscreenEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Map<string, Marker>>(new Map());
   const [satellite, setSatellite] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [mapReady, setMapReady] = useState(false);
 
   const createPinEl = useCallback((member: FamilyMember, loc: LocationPoint): HTMLElement => {
     const stale = isStale(loc.updatedAt);
     const wrapper = document.createElement("div");
-    wrapper.style.cssText = "cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:2px;";
+    wrapper.style.cssText = "cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;";
 
-    // Avatar circle with border
     const avatar = document.createElement("div");
     avatar.style.cssText = `
-      width:48px; height:48px; border-radius:50%;
+      width:48px;height:48px;border-radius:50%;
       background:${stale ? "#64748b" : member.color};
       border:3px solid white;
       box-shadow:0 2px 12px rgba(0,0,0,0.35);
-      display:flex; align-items:center; justify-content:center;
-      font-size:18px; font-weight:800; color:white;
-      font-family:system-ui,sans-serif;
-      position:relative;
-      transition: transform 0.2s;
+      display:flex;align-items:center;justify-content:center;
+      font-size:18px;font-weight:800;color:white;
+      font-family:system-ui,sans-serif;position:relative;
     `;
     avatar.textContent = member.name.charAt(0).toUpperCase();
 
-    // Pulse ring for live location
     if (!stale) {
       const ring = document.createElement("div");
       ring.style.cssText = `
-        position:absolute; inset:-5px; border-radius:50%;
+        position:absolute;inset:-5px;border-radius:50%;
         border:2.5px solid ${member.color};
         animation:kepi-pulse 2s ease-out infinite;
       `;
       avatar.appendChild(ring);
     }
 
-    // Accuracy circle (subtle)
-    if (loc.accuracy && loc.accuracy < 500) {
-      const acc = document.createElement("div");
-      acc.style.cssText = `
-        position:absolute; inset:-${Math.min(loc.accuracy/10, 20)}px; border-radius:50%;
-        background:${member.color}22; border:1px solid ${member.color}44;
-        pointer-events:none;
-      `;
-      avatar.appendChild(acc);
-    }
-
-    // Tail pin
     const tail = document.createElement("div");
-    tail.style.cssText = `
-      width:3px; height:10px;
-      background:${stale ? "#64748b" : member.color};
-      border-radius:0 0 3px 3px;
-    `;
+    tail.style.cssText = `width:3px;height:8px;background:${stale ? "#64748b" : member.color};border-radius:0 0 2px 2px;`;
 
-    // Name label
     const label = document.createElement("div");
     label.style.cssText = `
-      background:white; border-radius:8px; padding:3px 8px;
-      font-size:12px; font-weight:700; color:#0f172a;
-      box-shadow:0 1px 6px rgba(0,0,0,0.18);
-      white-space:nowrap; max-width:90px;
-      overflow:hidden; text-overflow:ellipsis;
+      background:white;border-radius:8px;padding:2px 7px;
+      font-size:11px;font-weight:700;color:#0f172a;
+      box-shadow:0 1px 5px rgba(0,0,0,0.15);
+      white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis;
     `;
     label.textContent = member.name;
 
@@ -123,31 +102,26 @@ export function FamilyMap({ members, locations, maptilerKey, fullscreen = false,
 
   const syncMarkers = useCallback(async (map: MapLibreMap) => {
     const maplibre = await import("maplibre-gl");
-
     markersRef.current.forEach(m => m.remove());
     markersRef.current.clear();
-
     members.forEach(member => {
       const loc = locations[member.id];
       if (!loc) return;
-
       const el = createPinEl(member, loc);
       const marker = new maplibre.Marker({ element: el, anchor: "bottom" })
         .setLngLat([loc.lon, loc.lat])
         .addTo(map);
-
       markersRef.current.set(member.id, marker);
     });
   }, [members, locations, createPinEl]);
 
-  // Init map
+  // Init map into inline container
   useEffect(() => {
-    if (!mapEl.current || mapRef.current || !maptilerKey) return;
-
+    if (!inlineEl.current || mapRef.current || !maptilerKey) return;
     let destroyed = false;
     void (async () => {
       const maplibre = await import("maplibre-gl");
-      if (destroyed || !mapEl.current) return;
+      if (destroyed || !inlineEl.current) return;
 
       const knownLocs = members.map(m => locations[m.id]).filter(Boolean);
       const center: [number, number] = knownLocs.length > 0
@@ -155,11 +129,11 @@ export function FamilyMap({ members, locations, maptilerKey, fullscreen = false,
             knownLocs.reduce((s, l) => s + l.lon, 0) / knownLocs.length,
             knownLocs.reduce((s, l) => s + l.lat, 0) / knownLocs.length,
           ]
-        : [-118.2437, 34.0522]; // default LA
-      const zoom = knownLocs.length === 1 ? 14 : knownLocs.length > 1 ? 11 : 4;
+        : [-118.2437, 34.0522];
+      const zoom = knownLocs.length === 1 ? 14 : knownLocs.length > 1 ? 10 : 4;
 
       const map = new maplibre.Map({
-        container: mapEl.current,
+        container: inlineEl.current,
         style: `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`,
         center,
         zoom,
@@ -168,8 +142,7 @@ export function FamilyMap({ members, locations, maptilerKey, fullscreen = false,
 
       map.addControl(new maplibre.NavigationControl({ showCompass: false }), "top-right");
       map.addControl(new maplibre.AttributionControl({ compact: true }), "bottom-right");
-
-      map.on("load", () => { void syncMarkers(map); });
+      map.on("load", () => { setMapReady(true); void syncMarkers(map); });
       mapRef.current = map;
     })();
 
@@ -177,24 +150,34 @@ export function FamilyMap({ members, locations, maptilerKey, fullscreen = false,
       destroyed = true;
       mapRef.current?.remove();
       mapRef.current = null;
+      setMapReady(false);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [maptilerKey]);
 
-  // Update markers on location change
+  // When entering fullscreen: move map canvas into fullscreen container
+  // When leaving: move it back to inline container
   useEffect(() => {
-    if (mapRef.current) void syncMarkers(mapRef.current);
-  }, [syncMarkers]);
+    if (!mapRef.current) return;
+    const map = mapRef.current;
+    const canvas = map.getCanvas().parentElement; // the maplibre container div
+    if (!canvas) return;
 
-  // Resize map when fullscreen changes
-  useEffect(() => {
-    if (mapRef.current) {
-      // Give DOM time to update then resize
-      setTimeout(() => mapRef.current?.resize(), 50);
+    if (fullscreen && fullscreenEl.current) {
+      fullscreenEl.current.appendChild(canvas);
+      map.resize();
+    } else if (!fullscreen && inlineEl.current) {
+      inlineEl.current.appendChild(canvas);
+      map.resize();
     }
   }, [fullscreen]);
 
-  // Toggle satellite
+  // Update markers on data change
+  useEffect(() => {
+    if (mapReady && mapRef.current) void syncMarkers(mapRef.current);
+  }, [syncMarkers, mapReady]);
+
+  // Satellite toggle
   useEffect(() => {
     if (!mapRef.current || !maptilerKey) return;
     const style = satellite
@@ -206,7 +189,6 @@ export function FamilyMap({ members, locations, maptilerKey, fullscreen = false,
     });
   }, [satellite, maptilerKey, syncMarkers]);
 
-  // Fit bounds when locations change
   const fitBounds = useCallback(() => {
     if (!mapRef.current) return;
     const locs = members.map(m => locations[m.id]).filter(Boolean);
@@ -218,15 +200,67 @@ export function FamilyMap({ members, locations, maptilerKey, fullscreen = false,
     import("maplibre-gl").then(({ LngLatBounds }) => {
       const bounds = new LngLatBounds();
       locs.forEach(l => bounds.extend([l.lon, l.lat]));
-      mapRef.current?.fitBounds(bounds, { padding: 60, duration: 800, maxZoom: 15 });
+      mapRef.current?.fitBounds(bounds, { padding: 60, duration: 800, maxZoom: 14 });
     }).catch(() => null);
   }, [members, locations]);
 
   const selectedMember = selected ? members.find(m => m.id === selected) : null;
   const selectedLoc = selected ? locations[selected] : null;
 
+  const Controls = () => (
+    <div className="flex flex-col gap-1.5">
+      <button
+        type="button"
+        onClick={() => setSatellite(v => !v)}
+        className={`rounded-xl px-3 py-1.5 text-xs font-bold shadow-md transition ${
+          satellite ? "bg-sky-600 text-white" : "bg-white text-slate-700"
+        }`}
+      >
+        {satellite ? "🛰 Satellite" : "🗺 Streets"}
+      </button>
+      {Object.keys(locations).length > 0 && (
+        <button
+          type="button"
+          onClick={fitBounds}
+          className="rounded-xl bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-md"
+        >
+          👁 Fit all
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => setFullscreen(v => !v)}
+        className="rounded-xl bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-md"
+      >
+        {fullscreen ? "✕ Close" : "⛶ Expand"}
+      </button>
+    </div>
+  );
+
+  const MemberCard = () => selectedMember && selectedLoc ? (
+    <div className="rounded-2xl bg-white shadow-xl p-3 dark:bg-slate-900">
+      <div className="flex items-center gap-2">
+        <div
+          className="h-8 w-8 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0"
+          style={{ background: selectedMember.color }}
+        >
+          {selectedMember.name.charAt(0).toUpperCase()}
+        </div>
+        <div className="min-w-0">
+          <p className="font-semibold text-sm truncate">{selectedMember.name}</p>
+          <p className="text-xs text-slate-500">
+            {isStale(selectedLoc.updatedAt)
+              ? `⚠ ${timeAgo(selectedLoc.updatedAt)} — may be outdated`
+              : `🟢 Live · ${timeAgo(selectedLoc.updatedAt)}`}
+          </p>
+        </div>
+        <button type="button" onClick={() => setSelected(null)} className="ml-auto text-slate-400 shrink-0 text-lg leading-none">✕</button>
+      </div>
+    </div>
+  ) : null;
+
   return (
-    <div className="relative">
+    <>
       <style>{`
         @keyframes kepi-pulse {
           0% { transform:scale(0.9); opacity:0.7; }
@@ -234,78 +268,43 @@ export function FamilyMap({ members, locations, maptilerKey, fullscreen = false,
         }
       `}</style>
 
-      {/* Map container - full screen overlay or inline */}
-      <div
-        ref={mapEl}
-        className={fullscreen
-          ? "fixed inset-0 z-50 rounded-none border-0"
-          : "w-full rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700"
-        }
-        style={{ height: fullscreen ? "100dvh" : 320 }}
-      />
-
-      {/* Controls overlay - positioned relative to map */}
-      <div className={`${fullscreen ? "fixed" : "absolute"} top-3 left-3 z-10 flex flex-col gap-1.5`}>
-        <button
-          type="button"
-          onClick={() => setSatellite(v => !v)}
-          className={`rounded-xl px-3 py-1.5 text-xs font-bold shadow-md transition ${
-            satellite
-              ? "bg-sky-600 text-white"
-              : "bg-white text-slate-700 dark:bg-slate-800 dark:text-slate-200"
-          }`}
-        >
-          {satellite ? "🛰 Satellite" : "🗺 Streets"}
-        </button>
-        {Object.keys(locations).length > 1 && (
-          <button
-            type="button"
-            onClick={fitBounds}
-            className="rounded-xl bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-md dark:bg-slate-800 dark:text-slate-200"
-          >
-            👁 Show all
-          </button>
-        )}
-        {onFullscreenToggle && (
-          <button
-            type="button"
-            onClick={onFullscreenToggle}
-            className="rounded-xl bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-md dark:bg-slate-800 dark:text-slate-200"
-          >
-            {fullscreen ? "✕ Close" : "⛶ Expand"}
-          </button>
+      {/* Inline map (always rendered so map canvas exists) */}
+      <div className={`relative ${fullscreen ? "hidden" : "block"}`}>
+        <div
+          ref={inlineEl}
+          className="w-full rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700"
+          style={{ height: 300 }}
+        />
+        {/* Inline controls */}
+        <div className="absolute top-3 left-3 z-10">
+          <Controls />
+        </div>
+        {selectedMember && selectedLoc && (
+          <div className="absolute bottom-3 left-3 right-14 z-10">
+            <MemberCard />
+          </div>
         )}
       </div>
 
-      {/* Selected member info card */}
-      {selectedMember && selectedLoc && (
-        <div className={`${fullscreen ? "fixed" : "absolute"} bottom-3 left-3 right-12 z-10 rounded-2xl bg-white shadow-xl p-3 dark:bg-slate-900`}>
-          <div className="flex items-center gap-2">
-            <div
-              className="h-8 w-8 rounded-full flex items-center justify-center text-sm font-bold text-white"
-              style={{ background: selectedMember.color }}
-            >
-              {selectedMember.name.charAt(0).toUpperCase()}
-            </div>
-            <div>
-              <p className="font-semibold text-sm">{selectedMember.name}</p>
-              <p className="text-xs text-slate-500">
-                {isStale(selectedLoc.updatedAt)
-                  ? `⚠ ${timeAgo(selectedLoc.updatedAt)} — location may be outdated`
-                  : `🟢 Live · ${timeAgo(selectedLoc.updatedAt)}`}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setSelected(null)}
-              className="ml-auto text-slate-400 hover:text-slate-600"
-            >✕</button>
+      {/* Fullscreen overlay */}
+      {fullscreen && (
+        <div className="fixed inset-0 z-[9999] bg-black">
+          <div
+            ref={fullscreenEl}
+            className="absolute inset-0"
+            style={{ width: "100dvw", height: "100dvh" }}
+          />
+          {/* Fullscreen controls — always on top */}
+          <div className="absolute top-4 left-4 z-[10000]">
+            <Controls />
           </div>
-          {selectedLoc.label && (
-            <p className="mt-1.5 text-xs text-slate-600 dark:text-slate-300">📍 {selectedLoc.label}</p>
+          {selectedMember && selectedLoc && (
+            <div className="absolute bottom-4 left-4 right-4 z-[10000]">
+              <MemberCard />
+            </div>
           )}
         </div>
       )}
-    </div>
+    </>
   );
 }
