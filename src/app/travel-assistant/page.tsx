@@ -70,12 +70,20 @@ import {
   ManualReservationEntryModal,
   type ManualReservationFormValue,
 } from "@/components/travelAssistant/ManualReservationEntryModal";
+import { TripCalendarView } from "@/components/travelAssistant/TripCalendarView";
+import { NextUpCard } from "@/components/travelAssistant/NextUpCard";
+import { TripTimeline } from "@/components/travelAssistant/TripTimeline";
+import { GapAlerts } from "@/components/travelAssistant/GapAlerts";
+import { OnTrackButton } from "@/components/travelAssistant/OnTrackButton";
 import { TripSearch, type TripSearchSelection } from "@/components/travelAssistant/TripSearch";
 import { TripSwitcher } from "@/components/travelAssistant/TripSwitcher";
 import { TripOrientationCard } from "@/components/travelAssistant/TripOrientationCard";
-import { TripTimeline } from "@/components/travelAssistant/TripTimeline";
 import { DocumentVault } from "@/components/travelAssistant/DocumentVault";
 import { PackingList } from "@/components/travelAssistant/PackingList";
+import { ShareTripCard } from "@/components/travelAssistant/ShareTripCard";
+import { TravelDayView } from "@/components/travelAssistant/TravelDayView";
+import { ShareModal } from "@/components/travelAssistant/ShareModal";
+import { ReferralCard } from "@/components/referral/ReferralCard";
 import { WeatherCard } from "@/components/travelAssistant/WeatherCard";
 import { LocalIntelligencePanel } from "@/components/travelAssistant/LocalIntelligencePanel";
 import { ConciergePanel } from "@/components/travelAssistant/ConciergePanel";
@@ -110,7 +118,7 @@ type MobileViewPanel = "essentials" | "timeline" | "recovery" | "family" | "all"
 type VisibilityMode = "all-members" | "organizer-only";
 type DisruptionScenario = "none" | "missed-flight" | "train-delay" | "ride-no-show";
 type TimelineSectionTab = "reservations" | "documents" | "packing";
-type ConsumerTab = "trip" | "reservations" | "packing" | "more";
+type ConsumerTab = "trip" | "reservations" | "packing" | "family" | "more";
 type AirportTransportChoice = "driving-myself" | "getting-dropped-off" | "uber-lyft" | "train-bus" | "other";
 
 interface LocationPoint {
@@ -159,7 +167,6 @@ interface ReservationDraft {
   checkOutDate?: string;
   roomType?: string;
   trainNumber?: string;
-  airportTransport?: AirportTransportChoice | null;
 }
 
 interface Reservation extends ReservationDraft {
@@ -476,15 +483,6 @@ const INITIAL_FAMILY: FamilyMember[] = [
     visibility: "all-members",
     location: { lat: 40.6428, lon: -73.7808, updatedAt: new Date().toISOString() },
   },
-  {
-    id: "wife",
-    name: "Wife",
-    role: "adult",
-    color: "#a78bfa",
-    sharingEnabled: true,
-    visibility: "all-members",
-    location: { lat: 40.6428, lon: -73.7808, updatedAt: new Date().toISOString() },
-  },
 ];
 
 const INITIAL_RESERVATIONS: Reservation[] = [
@@ -597,16 +595,39 @@ const INITIAL_REVIEW_QUEUE: ReviewItem[] = [
   },
 ];
 
-const INITIAL_CHECKLIST: ReadinessItem[] = [
-  { id: "ready-flight", category: "Flights", title: "Flight confirmation codes verified", complete: true, required: true },
-  { id: "ready-hotel", category: "Hotels", title: "Hotel check-in and check-out confirmed", complete: true, required: true },
+const BASE_CHECKLIST: ReadinessItem[] = [
+  { id: "ready-flight", category: "Flights", title: "Flight confirmation codes verified", complete: false, required: true },
+  { id: "ready-hotel", category: "Hotels", title: "Hotel check-in and check-out confirmed", complete: false, required: true },
   { id: "ready-transport", category: "Transportation", title: "Airport transfer planned with fallback", complete: false, required: true },
-  { id: "ready-passport", category: "Passport", title: "Passport validity verified", complete: true, required: true },
+  { id: "ready-passport", category: "Passport", title: "Passport validity verified", complete: false, required: true },
   { id: "ready-checkin", category: "Check-in timing", title: "Online check-in reminders set", complete: false, required: true },
   { id: "ready-arrival", category: "Arrival transfer", title: "Pickup location pinned", complete: false, required: true },
   { id: "ready-essentials", category: "Essentials", title: "Medication and chargers packed", complete: false, required: false },
-  { id: "ready-night", category: "First-night", title: "First meal and sleep plan prepared", complete: true, required: false },
+  { id: "ready-night", category: "First-night", title: "First meal and sleep plan prepared", complete: false, required: false },
 ];
+
+function buildChecklistFromReservations(
+  reservations: { type: string; confirmationCode?: string; checkOutDate?: string; flightNumber?: string }[],
+  savedItems?: ReadinessItem[],
+): ReadinessItem[] {
+  const hasFlights = reservations.some((r) => r.type === "flight" && r.confirmationCode);
+  const hasHotel = reservations.some((r) => r.type === "hotel" && r.confirmationCode);
+  const hasTransport = reservations.some((r) => r.type === "ride" || r.type === "train");
+
+  return BASE_CHECKLIST.map((item) => {
+    // If user has manually toggled this item, preserve their choice
+    const saved = savedItems?.find((s) => s.id === item.id);
+    if (saved) return saved;
+    // Otherwise auto-check based on what's booked
+    let complete = false;
+    if (item.id === "ready-flight") complete = hasFlights;
+    if (item.id === "ready-hotel") complete = hasHotel;
+    if (item.id === "ready-transport") complete = hasTransport;
+    return { ...item, complete };
+  });
+}
+
+const INITIAL_CHECKLIST = BASE_CHECKLIST;
 
 const EMAIL_SAMPLES: EmailSample[] = [
   {
@@ -811,30 +832,45 @@ function getFriendlyReservationTitle(reservation: Reservation): string {
 }
 
 function getFlightNumberLabel(reservation: Reservation): string {
-  const titleMatch = reservation.title.match(/\b([A-Z0-9]{2,3}\s?\d{1,4})\b/u)?.[1];
-  if (titleMatch) {
-    return titleMatch.replace(/\s+/gu, " ");
-  }
-  const providerMatch = reservation.provider.match(/\b([A-Z0-9]{2,3}\s?\d{1,4})\b/u)?.[1];
-  if (providerMatch) {
-    return providerMatch.replace(/\s+/gu, " ");
-  }
+  // Use the stored flightNumber field first (most reliable)
+  const stored = reservation.flightNumber?.trim();
+  if (stored && stored.length > 0) return stored.toUpperCase();
+  // Fall back to parsing title
+  const titleMatch = reservation.title.match(/\b([A-Z]{2}\s?\d{2,4})\b/u)?.[1];
+  if (titleMatch) return titleMatch.replace(/\s+/gu, "").toUpperCase();
   return "Flight # pending";
 }
 
 function resolveFlightAirports(reservation: Reservation): { departureAirport: string; arrivalAirport: string } {
   const departureAirport = reservation.flightDepartureAirport?.trim() ?? "";
   const arrivalAirport = reservation.flightArrivalAirport?.trim() ?? "";
+
+  // If the stored value looks like a full airport name (contains spaces or >4 chars)
+  // try to extract just the IATA code or abbreviate it for the boarding pass display
+  const toDisplayCode = (raw: string): string => {
+    if (!raw) return "";
+    // Already looks like an IATA code (3-4 uppercase letters)
+    if (/^[A-Z]{3,4}$/.test(raw)) return raw;
+    // Try to find a 3-letter IATA code in parentheses e.g. "Seoul Gimpo (GMP)"
+    const parenMatch = raw.match(/\(([A-Z]{3})\)/u);
+    if (parenMatch?.[1]) return parenMatch[1];
+    // First word if ≤4 chars and all caps
+    const firstWord = raw.split(/[\s\-–]/u)[0] ?? "";
+    if (/^[A-Z]{3,4}$/.test(firstWord)) return firstWord;
+    // Truncate to first meaningful word (city name)
+    return raw.split(/[\s,\-–]/u)[0]?.slice(0, 6).toUpperCase() ?? raw.slice(0, 3).toUpperCase();
+  };
+
   if (departureAirport || arrivalAirport) {
     return {
-      departureAirport: departureAirport || "DEP",
-      arrivalAirport: arrivalAirport || "ARR",
+      departureAirport: toDisplayCode(departureAirport) || "DEP",
+      arrivalAirport: toDisplayCode(arrivalAirport) || "ARR",
     };
   }
   const route = reservation.location.split(/->|→/u).map((part) => part.trim());
   return {
-    departureAirport: route[0] || "DEP",
-    arrivalAirport: route[1] || "ARR",
+    departureAirport: toDisplayCode(route[0] ?? "") || "DEP",
+    arrivalAirport: toDisplayCode(route[1] ?? "") || "ARR",
   };
 }
 
@@ -879,102 +915,8 @@ function formatCompactMeridiemTime(valueMs: number): string {
   }).format(new Date(valueMs));
   const normalized = formatted.replace(/\s+/gu, "").toLowerCase();
   return normalized.endsWith(":00am") || normalized.endsWith(":00pm")
-    ? normalized.replace(":00", "").replace(/(am|pm)$/u, " $1")
-    : normalized.replace(/(am|pm)$/u, " $1");
-}
-
-function parseTimeToMinutes(value: string): number | null {
-  const normalized = value.trim();
-  if (!normalized) {
-    return null;
-  }
-  const twelveHourMatch = /^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/iu.exec(normalized);
-  if (twelveHourMatch) {
-    let hour = Number.parseInt(twelveHourMatch[1] ?? "", 10);
-    const minute = Number.parseInt(twelveHourMatch[2] ?? "0", 10);
-    const period = (twelveHourMatch[3] ?? "").toUpperCase();
-    if (Number.isNaN(hour) || Number.isNaN(minute)) {
-      return null;
-    }
-    if (period === "PM" && hour < 12) {
-      hour += 12;
-    }
-    if (period === "AM" && hour === 12) {
-      hour = 0;
-    }
-    return hour * 60 + minute;
-  }
-  const twentyFourHourMatch = /^(\d{1,2})(?::(\d{2}))?$/u.exec(normalized);
-  if (!twentyFourHourMatch) {
-    return null;
-  }
-  const hour = Number.parseInt(twentyFourHourMatch[1] ?? "", 10);
-  const minute = Number.parseInt(twentyFourHourMatch[2] ?? "0", 10);
-  if (Number.isNaN(hour) || Number.isNaN(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-    return null;
-  }
-  return hour * 60 + minute;
-}
-
-function formatMinutesAsMeridiem(minutes: number): string {
-  const bounded = ((minutes % (24 * 60)) + (24 * 60)) % (24 * 60);
-  const hour24 = Math.floor(bounded / 60);
-  const minute = bounded % 60;
-  const period = hour24 >= 12 ? "pm" : "am";
-  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
-  if (minute === 0) {
-    return `${hour12} ${period}`;
-  }
-  return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
-}
-
-function resolveHotelCheckoutStatusSummary(reservation: Reservation, nowMs: number): string | null {
-  const reservationRecord = reservation as Reservation & Record<string, unknown>;
-  const extractString = (...values: unknown[]): string => {
-    for (const value of values) {
-      if (typeof value === "string" && value.trim().length > 0) {
-        return value.trim();
-      }
-    }
-    return "";
-  };
-  const checkoutDateRaw = extractString(
-    reservationRecord.checkOutDate,
-    reservationRecord.check_out_date,
-    reservationRecord.checkoutDate,
-    reservationRecord.checkout_date,
-    reservationRecord.checkOut,
-    reservationRecord.check_out,
-    reservationRecord.checkout,
-    reservationRecord.endDate,
-  );
-  const checkoutDate = getReservationLocalDateKey(checkoutDateRaw);
-  if (!checkoutDate || checkoutDate !== formatLocalDateKey(nowMs)) {
-    return null;
-  }
-  const lateCheckoutMatch =
-    reservation.notes.match(/late\s+check-?out(?:\s*(?:until|at))?\s*[:\-]?\s*([0-2]?\d(?::[0-5]\d)?\s*(?:AM|PM)?)?/iu) ??
-    null;
-  const lateCheckoutRequested = lateCheckoutMatch !== null;
-  const explicitCheckoutTimeRaw =
-    extractString(
-      reservationRecord.checkOutTime,
-      reservationRecord.check_out_time,
-      reservationRecord.checkoutTime,
-      reservationRecord.checkout_time,
-      reservationRecord.endTime,
-    ) ||
-    reservation.notes.match(/check-?out(?:\s*time)?\s*[:\-]\s*([0-2]?\d(?::[0-5]\d)?\s*(?:AM|PM)?)/iu)?.[1] ||
-    lateCheckoutMatch?.[1] ||
-    "";
-  const explicitCheckoutMinutes = parseTimeToMinutes(explicitCheckoutTimeRaw);
-  if (explicitCheckoutMinutes !== null) {
-    return `Hotel check out is at ${formatMinutesAsMeridiem(explicitCheckoutMinutes)}.`;
-  }
-  if (lateCheckoutRequested) {
-    return "Hotel check out is later than 10 am (late checkout requested).";
-  }
-  return "Hotel check out is at 10 am unless you requested a later checkout time.";
+    ? normalized.replace(":00", "")
+    : normalized;
 }
 
 function buildHotelCheckInStatusSummary(reservation: Reservation, nowMs = Date.now()): string {
@@ -994,11 +936,44 @@ function buildHotelCheckInStatusSummary(reservation: Reservation, nowMs = Date.n
   return `Check-in on ${reservation.localTime || "date pending"} — ${confirmationCode}`;
 }
 
+function parseCheckoutFromNotes(notes: string): string {
+  // Match patterns like "check out May 29", "checkout: 2026-05-29", "check-out the 29th", "checking out 29th"
+  const patterns = [
+    /check[\s-]?out\s+(?:on\s+|the\s+|by\s+)?(\w+\s+\d{1,2}(?:th|st|nd|rd)?(?:[,\s]+\d{4})?)/iu,
+    /check[\s-]?out\s*[:\-]\s*(\d{4}-\d{2}-\d{2})/iu,
+    /(?:checking out|checks? out)\s+(?:on\s+|the\s+)?(\w+\s+\d{1,2}(?:th|st|nd|rd)?(?:[,\s]+\d{4})?)/iu,
+    /depart(?:ure|s|ing)?\s+(?:on\s+)?(\w+\s+\d{1,2}(?:th|st|nd|rd)?(?:[,\s]+\d{4})?)/iu,
+    /(\d{4}-\d{2}-\d{2})\s*(?:checkout|check.out|departure)/iu,
+  ];
+  for (const pattern of patterns) {
+    const match = notes.match(pattern);
+    if (match?.[1]) {
+      const cleaned = match[1].replace(/(\d+)(?:th|st|nd|rd)/gu, "$1").trim();
+      const ms = Date.parse(cleaned);
+      if (!Number.isNaN(ms)) return new Date(ms).toISOString().slice(0, 10);
+    }
+  }
+  // Handle ordinal-only: "the 29th", "29th", "on the 29" — infer current month/year
+  const ordinalOnly = notes.match(/(?:check[\s-]?out|checkout|checking out|depart)[^0-9]*(\d{1,2})(?:th|st|nd|rd)?(?:\s|$)/iu);
+  if (ordinalOnly?.[1]) {
+    const day = parseInt(ordinalOnly[1], 10);
+    if (day >= 1 && day <= 31) {
+      const now = new Date();
+      // Use current month, but if day has passed use next month
+      const candidate = new Date(now.getFullYear(), now.getMonth(), day);
+      if (candidate < now) candidate.setMonth(candidate.getMonth() + 1);
+      return candidate.toISOString().slice(0, 10);
+    }
+  }
+  return "";
+}
+
 function resolveHotelCardData(reservation: Reservation): {
   hotelName: string;
   checkInDate: string;
   checkOutDate: string;
   roomType: string;
+  confirmationCode: string;
 } {
   const reservationRecord = reservation as Reservation & Record<string, unknown>;
   const extractString = (...values: unknown[]): string => {
@@ -1018,7 +993,8 @@ function resolveHotelCardData(reservation: Reservation): {
     reservationRecord.check_out,
     reservationRecord.checkout,
     reservationRecord.endDate,
-  );
+  ) || parseCheckoutFromNotes(reservation.notes);
+
   const roomTypeCandidate = extractString(
     reservationRecord.roomType,
     reservationRecord.room_type,
@@ -1027,11 +1003,18 @@ function resolveHotelCardData(reservation: Reservation): {
     reservationRecord.room_category,
   );
   const roomTypeFromNotes = reservation.notes.match(/room(?:\s*type)?\s*[:\-]\s*([^\n|]+)/iu)?.[1]?.trim() ?? "";
+
+  // Extract confirmation code from notes if not stored directly
+  const confFromNotes = reservation.notes.match(
+    /(?:confirmation|conf(?:irmation)?\s*(?:number|code|#)?|booking\s*(?:ref|number|code)|record\s*locator)\s*[:\-#]?\s*([A-Z0-9]{4,20})/iu
+  )?.[1]?.trim() ?? "";
+
   return {
     hotelName: reservation.provider.trim() || reservation.title.trim() || "Hotel",
     checkInDate: formatHotelDate(reservation.localTime),
     checkOutDate: formatHotelDate(checkOutCandidate || ""),
     roomType: roomTypeCandidate || roomTypeFromNotes || "Not set",
+    confirmationCode: reservation.confirmationCode.trim() || confFromNotes || "Not set",
   };
 }
 
@@ -1119,14 +1102,6 @@ function extractFlightLookupInput(reservation: Reservation): {
     (typeof reservationRecord.local_time === "string" ? reservationRecord.local_time : "");
   const flightDate =
     extractDateFromReservationLocalTime(flightDateRaw) || extractDateFromReservationLocalTime(reservation.localTime) || "";
-  console.log("[travel-assistant] Flight lookup input extraction.", {
-    reservationId: reservation.id,
-    inferredFlightNumber,
-    normalizedFlightNumber: flightNumber,
-    airline,
-    flightDateRaw,
-    flightDate,
-  });
   if (!flightNumber || !flightDate) {
     return null;
   }
@@ -1152,100 +1127,20 @@ function isOnboardingPlaceholderReservation(reservation: Reservation): boolean {
   return provider === "onboarding setup" || notes.includes("created during onboarding");
 }
 
+function isTripNamePlaceholder(name: string | null | undefined): boolean {
+  if (!name) return true;
+  const normalized = name.trim().toLowerCase();
+  return normalized.length === 0 ||
+    normalized === "my first trip" ||
+    normalized === "my trip" ||
+    normalized === "new trip" ||
+    normalized === "untitled trip";
+}
+
 function isTripDestinationPlaceholder(destination: string | null | undefined): boolean {
   if (!destination) return true;
   const normalized = destination.trim().toLowerCase();
   return normalized.length === 0 || normalized === "set destination" || normalized === "destination pending";
-}
-
-function isTripNamePlaceholder(name: string | null | undefined): boolean {
-  if (!name) return true;
-  const normalized = name.trim().toLowerCase();
-  if (!normalized) return true;
-  return (
-    normalized === "my first trip" ||
-    normalized === "first trip" ||
-    normalized === "your next trip" ||
-    normalized === "my trip" ||
-    /^trip\s+\d+$/u.test(normalized)
-  );
-}
-
-function resolveTripDisplayName(name: string | null | undefined, destination: string | null | undefined): string {
-  const normalizedName = name?.trim() ?? "";
-  const normalizedDestination = destination?.trim() ?? "";
-  if (!isTripNamePlaceholder(normalizedName)) {
-    return normalizedName;
-  }
-  if (!isTripDestinationPlaceholder(normalizedDestination)) {
-    return normalizedDestination;
-  }
-  return normalizedName || "Your next trip";
-}
-
-function formatLocalDateKey(valueMs: number): string {
-  const date = new Date(valueMs);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function getReservationLocalDateKey(localTime: string): string | null {
-  const parsed = parseDateInput(localTime);
-  if (!Number.isNaN(parsed)) {
-    return formatLocalDateKey(parsed);
-  }
-  return extractDateFromReservationLocalTime(localTime);
-}
-
-function pickPrimaryFlightReservation(reservations: readonly Reservation[], nowMs: number): Reservation | null {
-  const flights = reservations
-    .filter((reservation) => reservation.type === "flight")
-    .map((reservation) => ({
-      reservation,
-      dateMs: parseDateInput(reservation.localTime),
-    }))
-    .filter((candidate) => !Number.isNaN(candidate.dateMs))
-    .sort((left, right) => left.dateMs - right.dateMs);
-  if (flights.length === 0) {
-    return null;
-  }
-  const upcoming = flights.find((candidate) => candidate.dateMs >= nowMs - 2 * 60 * 60 * 1000);
-  return upcoming?.reservation ?? flights[0]?.reservation ?? null;
-}
-
-function deriveTripDateBounds(reservations: readonly Reservation[]): { startDate: string | null; endDate: string | null } {
-  const dates = reservations
-    .map((reservation) => extractDateFromReservationLocalTime(reservation.localTime))
-    .filter((value): value is string => Boolean(value))
-    .sort((left, right) => left.localeCompare(right));
-  if (dates.length === 0) {
-    return { startDate: null, endDate: null };
-  }
-  return {
-    startDate: dates[0] ?? null,
-    endDate: dates[dates.length - 1] ?? null,
-  };
-}
-
-function getReservationAirportTransportChoice(reservation: Reservation): AirportTransportChoice | null {
-  const reservationRecord = reservation as Reservation & Record<string, unknown>;
-  const candidates = [
-    reservationRecord.airportTransport,
-    reservationRecord.airport_transport,
-    reservationRecord.flightAirportTransport,
-    reservationRecord.flight_airport_transport,
-  ];
-  for (const candidate of candidates) {
-    if (
-      candidate === "driving-myself" ||
-      candidate === "getting-dropped-off" ||
-      candidate === "uber-lyft" ||
-      candidate === "train-bus" ||
-      candidate === "other"
-    ) {
-      return candidate;
-    }
-  }
-  return null;
 }
 
 function extractDestinationFromReservationLocation(location: string): string | null {
@@ -1556,23 +1451,6 @@ function getEmailHandleFromCookie(): string | null {
   return sanitizeEmailHandle(readCookieValue(EMAIL_HANDLE_COOKIE_NAME));
 }
 
-function normalizeReservationTypeValue(value: unknown): ReservationType {
-  if (typeof value !== "string") {
-    return "ride";
-  }
-  const normalized = value.trim().toLowerCase();
-  if (
-    normalized === "flight" ||
-    normalized === "hotel" ||
-    normalized === "train" ||
-    normalized === "ride" ||
-    normalized === "dinner"
-  ) {
-    return normalized;
-  }
-  return "ride";
-}
-
 function normalizeManagedTrip(trip: unknown): ManagedTrip | null {
   if (!trip || typeof trip !== "object") {
     return null;
@@ -1591,36 +1469,6 @@ function normalizeManagedTrip(trip: unknown): ManagedTrip | null {
     return null;
   }
 
-  const normalizedReservations = candidate.reservations
-    .filter(
-      (reservation): reservation is Record<string, unknown> =>
-        Boolean(reservation) && typeof reservation === "object" && !Array.isArray(reservation),
-    )
-    .map((reservation) => ({
-      ...(reservation as Reservation),
-      type: normalizeReservationTypeValue(reservation.type),
-    }));
-  const normalizedReviewQueue = Array.isArray(candidate.reviewQueue)
-    ? candidate.reviewQueue
-        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
-        .map((item) => {
-          const rawDraft =
-            item.draft && typeof item.draft === "object" && !Array.isArray(item.draft)
-              ? (item.draft as Record<string, unknown>)
-              : null;
-          if (!rawDraft) {
-            return item as ReviewItem;
-          }
-          return {
-            ...(item as ReviewItem),
-            draft: {
-              ...(rawDraft as ReservationDraft),
-              type: normalizeReservationTypeValue(rawDraft.type),
-            },
-          };
-        })
-    : [];
-
   return {
     id: candidate.id,
     name: candidate.name,
@@ -1628,7 +1476,7 @@ function normalizeManagedTrip(trip: unknown): ManagedTrip | null {
     startDate: candidate.startDate,
     endDate: candidate.endDate,
     stage: candidate.stage as TripStage,
-    reservations: normalizedReservations,
+    reservations: candidate.reservations as Reservation[],
     createdAt: candidate.createdAt,
     tripStatus:
       candidate.tripStatus === "green" || candidate.tripStatus === "yellow" || candidate.tripStatus === "red"
@@ -1643,7 +1491,7 @@ function normalizeManagedTrip(trip: unknown): ManagedTrip | null {
       candidate.activeScenario === "ride-no-show"
         ? candidate.activeScenario
         : "none",
-    reviewQueue: normalizedReviewQueue,
+    reviewQueue: Array.isArray(candidate.reviewQueue) ? (candidate.reviewQueue as ReviewItem[]) : [],
     readinessItems: Array.isArray(candidate.readinessItems) ? (candidate.readinessItems as ReadinessItem[]) : [],
     updateFeed: Array.isArray(candidate.updateFeed) ? (candidate.updateFeed as UpdateFeedItem[]) : [],
     airportTransport:
@@ -1707,21 +1555,12 @@ function defaultTripFromCurrentState(input: {
   hotelArrivalTime: string | null;
 } {
   const fallbackDate = new Date().toISOString().slice(0, 10);
-  const primaryFlightReservation = pickPrimaryFlightReservation(input.reservations, Date.now());
-  const derivedDestination =
-    (primaryFlightReservation ? extractDestinationFromReservationLocation(primaryFlightReservation.location) : null) ??
-    extractDestinationFromReservationLocation(input.reservations[0]?.location ?? "") ??
-    "Set destination";
-  const dateBounds = deriveTripDateBounds(input.reservations);
-  const startDate =
-    (primaryFlightReservation ? extractDateFromReservationLocalTime(primaryFlightReservation.localTime) : null) ??
-    dateBounds.startDate ??
-    fallbackDate;
-  const endDate = dateBounds.endDate ?? startDate;
-  const nextTripName = isTripDestinationPlaceholder(derivedDestination) ? "My Trip" : derivedDestination;
+  const firstReservationDate = input.reservations[0]?.localTime?.slice(0, 10) || fallbackDate;
+  const startDate = firstReservationDate;
+  const endDate = input.reservations[1]?.localTime?.slice(0, 10) || firstReservationDate;
   return {
-    name: nextTripName,
-    destination: derivedDestination,
+    name: "My First Trip",
+    destination: input.reservations[0]?.location || "Set destination",
     startDate,
     endDate,
     stage: input.tripStage,
@@ -1838,13 +1677,28 @@ export default function TravelAssistantPage() {
     kind: "reservation" | "review";
     id: string;
     startX: number;
+    startY: number;
     startingOffset: number;
+    locked: boolean;
   } | null>(null);
 
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(INITIAL_FAMILY);
   const [reservations, setReservations] = useState<Reservation[]>(INITIAL_RESERVATIONS);
   const [reviewQueue, setReviewQueue] = useState<ReviewItem[]>(INITIAL_REVIEW_QUEUE);
   const [readinessItems, setReadinessItems] = useState<ReadinessItem[]>(INITIAL_CHECKLIST);
+  // Track readinessItems that came from server so we can pass as savedItems
+  const serverReadinessItemsRef = useRef<ReadinessItem[]>([]);
+  // Auto-populate checklist based on reservations once loaded
+  // Only runs if server hasn't provided saved items yet
+  const checklistInitialized = useRef(false);
+  useEffect(() => {
+    if (reservations.length > 0 && !checklistInitialized.current) {
+      checklistInitialized.current = true;
+      // Pass server-saved items so manual toggles are preserved
+      const saved = serverReadinessItemsRef.current.length > 0 ? serverReadinessItemsRef.current : undefined;
+      setReadinessItems(buildChecklistFromReservations(reservations, saved));
+    }
+  }, [reservations]);
   const [airportTransportChoice, setAirportTransportChoice] = useState<AirportTransportChoice | null>(null);
   const [hotelArrivalTime, setHotelArrivalTime] = useState<string | null>(null);
   const [hotelArrivalDraft, setHotelArrivalDraft] = useState("");
@@ -1906,6 +1760,13 @@ export default function TravelAssistantPage() {
   const [showAdvancedShortcut] = useState(false);
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [manualReservationModalOpen, setManualReservationModalOpen] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [travelDayOpen, setTravelDayOpen] = useState(false);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushMessage, setPushMessage] = useState<string | null>(null);
+  const [reservationsCalendarView, setReservationsCalendarView] = useState(false);
+  const [showCompletedFlights, setShowCompletedFlights] = useState(false);
   const [reservationsRefreshing, setReservationsRefreshing] = useState(false);
   const [ticketScanBusy, setTicketScanBusy] = useState(false);
 
@@ -1943,55 +1804,6 @@ export default function TravelAssistantPage() {
     () => emailSamples.find((sample) => sample.id === selectedEmailId) ?? emailSamples[0],
     [emailSamples, selectedEmailId],
   );
-
-  useEffect(() => {
-    const wifeMember = familyMembers.find((member) => member.id === "wife" || member.name.trim().toLowerCase() === "wife");
-    if (!wifeMember) {
-      return;
-    }
-    const timeout = window.setTimeout(() => {
-      setReservations((previous) => {
-        let changed = false;
-        const nextReservations = previous.map((reservation) => {
-          if (reservation.type !== "flight") {
-            return reservation;
-          }
-          if (reservation.assignedTo.includes(wifeMember.id)) {
-            return reservation;
-          }
-          changed = true;
-          return {
-            ...reservation,
-            assignedTo: [...reservation.assignedTo, wifeMember.id],
-          };
-        });
-        return changed ? nextReservations : previous;
-      });
-      setReviewQueue((previous) => {
-        let changed = false;
-        const nextQueue = previous.map((item) => {
-          if (item.draft.type !== "flight") {
-            return item;
-          }
-          if (item.draft.assignedTo.includes(wifeMember.id)) {
-            return item;
-          }
-          changed = true;
-          return {
-            ...item,
-            draft: {
-              ...item.draft,
-              assignedTo: [...item.draft.assignedTo, wifeMember.id],
-            },
-          };
-        });
-        return changed ? nextQueue : previous;
-      });
-    }, 0);
-    return () => {
-      window.clearTimeout(timeout);
-    };
-  }, [familyMembers]);
 
   const refreshEmailForwardSetup = useCallback(async (): Promise<void> => {
     const handleFromCookie = getEmailHandleFromCookie();
@@ -2345,6 +2157,11 @@ export default function TravelAssistantPage() {
     setReservations((previous) => (areSnapshotsEqual(previous, trip.reservations) ? previous : trip.reservations));
     setReviewQueue((previous) => (areSnapshotsEqual(previous, trip.reviewQueue) ? previous : trip.reviewQueue));
     setReadinessItems((previous) => (areSnapshotsEqual(previous, trip.readinessItems) ? previous : trip.readinessItems));
+    // Mark checklist as initialized from server — prevents useEffect from overwriting with auto-computed values
+    if (Array.isArray(trip.readinessItems) && trip.readinessItems.length > 0) {
+      checklistInitialized.current = true;
+      serverReadinessItemsRef.current = trip.readinessItems as ReadinessItem[];
+    }
     setUpdateFeed((previous) => (areSnapshotsEqual(previous, trip.updateFeed) ? previous : trip.updateFeed));
     setAirportTransportChoice((previous) =>
       previous === (trip.airportTransport ?? null) ? previous : (trip.airportTransport ?? null),
@@ -2494,6 +2311,35 @@ export default function TravelAssistantPage() {
     };
   }, [refreshTripsFromServer, tripsLoading]);
 
+  // Auto-poll flight status for upcoming flights within 24 hours
+  useEffect(() => {
+    if (!activeTripId || !reservations.length) return;
+    const nowMs = Date.now();
+    const upcomingFlights = reservations.filter((r) => {
+      if (r.type !== "flight") return false;
+      const local = (r as Record<string, unknown>).localTime as string | undefined;
+      if (!local) return false;
+      const depMs = Date.parse(local.replace("T", " ").slice(0, 16));
+      const hoursUntil = (depMs - nowMs) / 3_600_000;
+      return hoursUntil > -1 && hoursUntil < 24;
+    });
+    if (!upcomingFlights.length) return;
+    // Poll every 5 minutes for flights within 24 hours
+    const pollFlight = async () => {
+      for (const flight of upcomingFlights) {
+        try {
+          await handleCheckFlightStatus(flight.id);
+        } catch {
+          // Fail silently
+        }
+      }
+    };
+    void pollFlight();
+    const interval = window.setInterval(() => { void pollFlight(); }, 5 * 60_000);
+    return () => window.clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTripId, reservations.length]);
+
   useEffect(() => {
     if (!tripsHydratedRef.current) return;
     if (!activeTripId) return;
@@ -2520,7 +2366,7 @@ export default function TravelAssistantPage() {
           setTrips(parsedTrips);
         }
       });
-    }, 10_000);
+    }, 2_000);
     return () => {
       window.clearTimeout(timeout);
     };
@@ -2687,40 +2533,9 @@ export default function TravelAssistantPage() {
         return [onboardingReservation, ...previous];
       });
 
-      if (activeTripId) {
-        setTrips((previous) =>
-          previous.map((trip) =>
-            trip.id === activeTripId
-              ? {
-                  ...trip,
-                  name: tripName,
-                  destination,
-                  startDate: departureDate,
-                  endDate: trip.endDate.trim() || departureDate,
-                }
-              : trip,
-          ),
-        );
-        void fetch(TRIP_API_ROUTE, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "update",
-            id: activeTripId,
-            patch: {
-              name: tripName,
-              destination,
-              startDate: departureDate,
-            },
-          }),
-        }).catch(() => {
-          // Keep local onboarding state even if persistence temporarily fails.
-        });
-      }
-
       setToast(`Trip "${tripName}" was added to your timeline.`);
     },
-    [activeTripId, pushUndoSnapshot, selectedFamilyMember.id, setToast],
+    [pushUndoSnapshot, selectedFamilyMember.id, setToast],
   );
 
   useEffect(() => {
@@ -3381,107 +3196,10 @@ export default function TravelAssistantPage() {
   );
 
   const advancedWorkspaceEnabled = advancedModeEnabled;
+  const tripDaysAway = getTripDaysAway(minutesToDeparture);
   const consumerDisplayReservations = useMemo(() => {
     return reservations.filter((reservation) => !isOnboardingPlaceholderReservation(reservation));
   }, [reservations]);
-  const todayDateKey = useMemo(() => formatLocalDateKey(nowMs), [nowMs]);
-  const reservationsToday = useMemo(
-    () =>
-      consumerDisplayReservations.filter((reservation) => getReservationLocalDateKey(reservation.localTime) === todayDateKey),
-    [consumerDisplayReservations, todayDateKey],
-  );
-  const nextUpcomingFlightWithin24h = useMemo(() => {
-    const nextUpcomingFlight =
-      consumerDisplayReservations
-        .filter((reservation): reservation is Reservation => reservation.type === "flight")
-        .map((reservation) => ({
-          reservation,
-          dateMs: parseDateInput(reservation.localTime),
-        }))
-        .filter((candidate) => !Number.isNaN(candidate.dateMs) && candidate.dateMs >= nowMs)
-        .sort((left, right) => left.dateMs - right.dateMs)[0] ?? null;
-    if (!nextUpcomingFlight) {
-      return null;
-    }
-    const hoursUntilDeparture = (nextUpcomingFlight.dateMs - nowMs) / (60 * 60 * 1000);
-    if (hoursUntilDeparture > 24) {
-      return null;
-    }
-    return nextUpcomingFlight;
-  }, [consumerDisplayReservations, nowMs]);
-  const airportPreparationDetail = useMemo(() => {
-    if (!nextUpcomingFlightWithin24h) {
-      return null;
-    }
-    const leaveByMs = nextUpcomingFlightWithin24h.dateMs - 2 * 60 * 60 * 1000;
-    const leaveByDateLabel =
-      formatLocalDateKey(leaveByMs) === todayDateKey
-        ? formatCompactMeridiemTime(leaveByMs)
-        : `${new Intl.DateTimeFormat(undefined, {
-            month: "short",
-            day: "numeric",
-          }).format(new Date(leaveByMs))} at ${formatCompactMeridiemTime(leaveByMs)}`;
-    const transportChoice = getReservationAirportTransportChoice(nextUpcomingFlightWithin24h.reservation);
-    const transportLabel = transportChoice ? AIRPORT_TRANSPORT_LABEL[transportChoice] : null;
-    return `Prepare for getting to airport due to traffic — leave by ${leaveByDateLabel} for ${getFlightNumberLabel(nextUpcomingFlightWithin24h.reservation)} (${getReservationRouteLabel(nextUpcomingFlightWithin24h.reservation)}). ${
-      transportLabel ? `Current transport: ${transportLabel}.` : "Please select how you are getting to this airport."
-    }`;
-  }, [nextUpcomingFlightWithin24h, todayDateKey]);
-  const hotelCheckoutDetail = useMemo(
-    () =>
-      consumerDisplayReservations
-        .filter((reservation) => reservation.type === "hotel")
-        .map((reservation) => resolveHotelCheckoutStatusSummary(reservation, nowMs))
-        .find((summary): summary is string => Boolean(summary)) ?? null,
-    [consumerDisplayReservations, nowMs],
-  );
-  const flightConnectionRisk = (() => {
-    const flights = consumerDisplayReservations
-      .filter((reservation): reservation is Reservation => reservation.type === "flight")
-      .map((reservation) => ({
-        reservation,
-        departureMs: parseDateInput(reservation.localTime),
-      }))
-      .filter((entry) => !Number.isNaN(entry.departureMs))
-      .sort((left, right) => left.departureMs - right.departureMs);
-    if (flights.length < 2) {
-      return { summary: null as string | null, riskyReservationIds: [] as string[] };
-    }
-
-    for (let index = 1; index < flights.length; index += 1) {
-      const previous = flights[index - 1];
-      const current = flights[index];
-      const gapMinutes = Math.round((current.departureMs - previous.departureMs) / 60000);
-      if (gapMinutes <= 0 || gapMinutes > 360) {
-        continue;
-      }
-
-      const previousAirports = resolveFlightAirports(previous.reservation);
-      const currentAirports = resolveFlightAirports(current.reservation);
-      const previousArrival = previousAirports.arrivalAirport.trim().toUpperCase();
-      const currentDeparture = currentAirports.departureAirport.trim().toUpperCase();
-      const sameAirport = previousArrival.length > 0 && previousArrival === currentDeparture;
-      const sameLocalDay = formatLocalDateKey(previous.departureMs) === formatLocalDateKey(current.departureMs);
-      const isRiskyConnection = (sameAirport && gapMinutes <= 240) || (!sameAirport && sameLocalDay && gapMinutes <= 360);
-      if (!isRiskyConnection) {
-        continue;
-      }
-
-      const previousFlight = getFlightNumberLabel(previous.reservation);
-      const currentFlight = getFlightNumberLabel(current.reservation);
-      const summary = sameAirport
-        ? `Possible impossible connection — ${previousFlight} to ${currentFlight} has only ${gapMinutes} minutes at ${currentDeparture}. Verify baggage transfer + customs/security timing now.`
-        : `Possible impossible same-day transfer — only ${gapMinutes} minutes between ${previousFlight} and ${currentFlight} across different airports.`;
-      return {
-        summary,
-        riskyReservationIds: [previous.reservation.id, current.reservation.id],
-      };
-    }
-
-    return { summary: null as string | null, riskyReservationIds: [] as string[] };
-  })();
-  const connectionRiskSummary = flightConnectionRisk.summary;
-  const riskyFlightConnectionReservationIds = new Set(flightConnectionRisk.riskyReservationIds);
   const delayedFlight = useMemo(
     () =>
       reservations.find(
@@ -3500,27 +3218,6 @@ export default function TravelAssistantPage() {
         tone: "border-red-200 bg-red-50 text-red-950 dark:border-red-500/40 dark:bg-red-500/15 dark:text-red-50",
       };
     }
-    if (connectionRiskSummary) {
-      return {
-        title: "Connection risk ⚠️",
-        detail: connectionRiskSummary,
-        tone: "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50",
-      };
-    }
-    if (airportPreparationDetail) {
-      return {
-        title: "Airport timing plan ✈️",
-        detail: airportPreparationDetail,
-        tone: "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50",
-      };
-    }
-    if (hotelCheckoutDetail) {
-      return {
-        title: "Hotel checkout reminder 🏨",
-        detail: hotelCheckoutDetail,
-        tone: "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50",
-      };
-    }
     if (unresolvedReviewCount > 0 || unresolvedReadinessCount > 0 || blockingIssueCount > 0 || tripStatus === "yellow") {
       return {
         title: "Action needed ⚠️",
@@ -3535,48 +3232,27 @@ export default function TravelAssistantPage() {
         tone: "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-50",
       };
     }
-    if (reservationsToday.length === 0) {
-      return {
-        title: "You're on track ✅",
-        detail: "You are already checked in and do not have anything scheduled today.",
-        tone: "border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50",
-      };
-    }
     return {
       title: "You're ready ✅",
-      detail: "You are already checked in and on track for today.",
+      detail: "Everything important looks set.",
       tone: "border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-50",
     };
   }, [
     activeScenario,
-    airportPreparationDetail,
     blockingIssueCount,
-    connectionRiskSummary,
     delayedFlight,
-    hotelCheckoutDetail,
-    reservationsToday.length,
     tripStatus,
     unresolvedReadinessCount,
     unresolvedReviewCount,
   ]);
   const consumerHeroStatus = useMemo(() => {
-    const requiresAirportPreparation = Boolean(airportPreparationDetail);
-    const hasHotelCheckoutToday = Boolean(hotelCheckoutDetail);
     if (tripStatus === "red" || activeScenario !== "none" || delayedFlight) {
       return {
         label: "Urgent",
         className: "bg-red-500/15 text-red-700 ring-1 ring-red-500/30 dark:text-red-200",
       };
     }
-    if (
-      tripStatus === "yellow" ||
-      unresolvedReviewCount > 0 ||
-      unresolvedReadinessCount > 0 ||
-      blockingIssueCount > 0 ||
-      Boolean(connectionRiskSummary) ||
-      requiresAirportPreparation ||
-      hasHotelCheckoutToday
-    ) {
+    if (tripStatus === "yellow" || unresolvedReviewCount > 0 || unresolvedReadinessCount > 0 || blockingIssueCount > 0) {
       return {
         label: "Action needed",
         className: "bg-amber-500/15 text-amber-700 ring-1 ring-amber-500/30 dark:text-amber-200",
@@ -3586,34 +3262,63 @@ export default function TravelAssistantPage() {
       label: "All good",
       className: "bg-emerald-500/15 text-emerald-700 ring-1 ring-emerald-500/30 dark:text-emerald-200",
     };
-  }, [
-    activeScenario,
-    airportPreparationDetail,
-    blockingIssueCount,
-    connectionRiskSummary,
-    delayedFlight,
-    hotelCheckoutDetail,
-    tripStatus,
-    unresolvedReadinessCount,
-    unresolvedReviewCount,
-  ]);
+  }, [activeScenario, blockingIssueCount, delayedFlight, tripStatus, unresolvedReadinessCount, unresolvedReviewCount]);
   const consumerReservationsSorted = useMemo(() => {
+    // Convert local departure time + timezone to UTC ms for correct ordering.
+    // Without this, HND 21:20 JST sorts after HNL 13:41 HST even though
+    // the Tokyo flight actually departs first in real time.
+    const toUtcMs = (r: { localTime?: string; timezone?: string }): number => {
+      const local = r.localTime?.trim() ?? "";
+      const tz = r.timezone?.trim() ?? "Etc/UTC";
+      if (!local) return Number.NaN;
+      try {
+        // Parse the local time string as if it were in the given timezone
+        const [datePart, timePart = "00:00"] = local.split(" ");
+        const [year, month, day] = (datePart ?? "").split("-").map(Number);
+        const [hour, minute] = (timePart ?? "").split(":").map(Number);
+        if (!year || !month || !day) return Number.NaN;
+        // Use Intl to find UTC offset for this timezone at this moment
+        const localDate = new Date(year, (month ?? 1) - 1, day, hour ?? 0, minute ?? 0);
+        const formatter = new Intl.DateTimeFormat("en-US", {
+          timeZone: tz,
+          year: "numeric", month: "2-digit", day: "2-digit",
+          hour: "2-digit", minute: "2-digit", hour12: false,
+        });
+        const parts = Object.fromEntries(formatter.formatToParts(localDate).map(p => [p.type, p.value]));
+        const tzDate = new Date(`${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:00Z`);
+        const offsetMs = tzDate.getTime() - localDate.getTime();
+        return localDate.getTime() - offsetMs;
+      } catch {
+        return parseDateInput(local);
+      }
+    };
     return [...consumerDisplayReservations].sort((left, right) => {
-      const leftMs = parseDateInput(left.localTime);
-      const rightMs = parseDateInput(right.localTime);
+      const leftMs = toUtcMs(left);
+      const rightMs = toUtcMs(right);
       if (Number.isNaN(leftMs) && Number.isNaN(rightMs)) return 0;
       if (Number.isNaN(leftMs)) return 1;
       if (Number.isNaN(rightMs)) return -1;
       return leftMs - rightMs;
     });
   }, [consumerDisplayReservations]);
+  const nextUpcomingFlight = useMemo(() => {
+    const nowMs = new Date().getTime();
+    return consumerReservationsSorted.find((r) => {
+      if (r.type !== "flight") return false;
+      const rr = r as Reservation & { flightDepartureTime?: string };
+      const fromFlightDate = r.flightDate ? parseDateInput(r.flightDate + " 23:59") : Number.NaN;
+      const fromDepTime = rr.flightDepartureTime ? parseDateInput(rr.flightDepartureTime) : Number.NaN;
+      const fromLocal = parseDateInput(r.localTime ?? "");
+      const candidates = [fromFlightDate, fromDepTime, fromLocal].filter(v => !Number.isNaN(v));
+      const depMs = candidates.length > 0 ? Math.max(...candidates) : Number.NaN;
+      return !Number.isNaN(depMs) && depMs > nowMs - 4 * 3_600_000;
+    }) ?? null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consumerReservationsSorted]);
+
   const forwardedReviewItems = useMemo(
     () => reviewQueue.filter((item) => item.sourceChannel === "email-forward"),
     [reviewQueue],
-  );
-  const pendingHotelReviewItems = useMemo(
-    () => forwardedReviewItems.filter((item) => item.draft.type === "hotel"),
-    [forwardedReviewItems],
   );
   const firstForwardedReviewItem = forwardedReviewItems[0] ?? null;
   const pendingForwardedReservations = useMemo(
@@ -3645,38 +3350,7 @@ export default function TravelAssistantPage() {
   );
   const hasDetectedFlight = tripTabFlightReservations.length > 0 || pendingFlightReservations.length > 0;
   const hasDetectedHotel = tripTabHotelReservations.length > 0 || pendingHotelReservations.length > 0;
-  const flightAirportTransportChoices = useMemo(
-    () =>
-      tripTabFlightReservations.map((reservation) => ({
-        reservationId: reservation.id,
-        choice: getReservationAirportTransportChoice(reservation),
-      })),
-    [tripTabFlightReservations],
-  );
-  const flightsMissingAirportTransport = useMemo(
-    () => flightAirportTransportChoices.filter((entry) => entry.choice === null).length,
-    [flightAirportTransportChoices],
-  );
   const emptyStateForwardAddress = emailForwardAddress?.trim() || "jpro99@trips.kepitravel.com";
-  const saveAirportTransportForFlight = useCallback(
-    (reservationId: string, choice: AirportTransportChoice): void => {
-      const targetReservation = tripTabFlightReservations.find((reservation) => reservation.id === reservationId) ?? null;
-      setReservations((previous) =>
-        previous.map((reservation) =>
-          reservation.id === reservationId
-            ? {
-                ...reservation,
-                airportTransport: choice,
-              }
-            : reservation,
-        ),
-      );
-      setAirportTransportChoice(choice);
-      const flightLabel = targetReservation ? getFlightNumberLabel(targetReservation) : "flight";
-      setToast(`Airport transport saved for ${flightLabel}: ${AIRPORT_TRANSPORT_LABEL[choice]}.`);
-    },
-    [setToast, tripTabFlightReservations],
-  );
   const saveHotelArrivalExpectation = useCallback((): void => {
     const trimmed = hotelArrivalDraft.trim();
     if (!trimmed) {
@@ -3686,31 +3360,38 @@ export default function TravelAssistantPage() {
     setHotelArrivalTime(trimmed);
     setToast("Hotel arrival expectation saved.");
   }, [hotelArrivalDraft, setToast]);
-  const primaryFlightReservation = pickPrimaryFlightReservation(consumerReservationsSorted, nowMs);
-  const derivedTripDestination = primaryFlightReservation
-    ? extractDestinationFromReservationLocation(primaryFlightReservation.location)
-    : null;
-  const derivedTripStartDate = primaryFlightReservation
-    ? extractDateFromReservationLocalTime(primaryFlightReservation.localTime)
-    : null;
-  const derivedTripDateBounds = deriveTripDateBounds(consumerReservationsSorted);
-  const derivedTripEndDate = derivedTripDateBounds.endDate;
-  const derivedTripName =
-    derivedTripDestination && !isTripDestinationPlaceholder(derivedTripDestination) ? derivedTripDestination : null;
-  const consumerTripDestination = useMemo(() => {
-    const persistedDestination = activeTrip?.destination?.trim() ?? "";
-    if (!isTripDestinationPlaceholder(persistedDestination)) {
-      return persistedDestination;
+  const earliestFlightReservation =
+    consumerReservationsSorted.find((reservation) => reservation.type === "flight") ?? null;
+  // Destination = arrival airport city of first flight, or hotel city, or stored destination
+  const derivedTripDestination = useMemo(() => {
+    // For multi-leg trips use the LAST flight's arrival, not the first leg's arrival
+    const allFlights = consumerReservationsSorted.filter((r) => r.type === "flight");
+    if (allFlights.length > 1) {
+      const lastFlight = allFlights[allFlights.length - 1];
+      if ((lastFlight as Reservation & { flightArrivalAirport?: string }).flightArrivalAirport) {
+        return (lastFlight as Reservation & { flightArrivalAirport?: string }).flightArrivalAirport!;
+      }
     }
+    if (earliestFlightReservation?.flightArrivalAirport) {
+      return earliestFlightReservation.flightArrivalAirport;
+    }
+    if (earliestFlightReservation?.location) {
+      return extractDestinationFromReservationLocation(earliestFlightReservation.location);
+    }
+    const firstHotel = consumerReservationsSorted.find((r) => r.type === "hotel");
+    if (firstHotel?.provider) return firstHotel.provider;
+    return null;
+  }, [earliestFlightReservation, consumerReservationsSorted]);
+  const derivedTripStartDate = earliestFlightReservation
+    ? (earliestFlightReservation.flightDate?.slice(0, 10) ||
+       extractDateFromReservationLocalTime(earliestFlightReservation.localTime))
+    : null;
+  const consumerTripDestination = useMemo(() => {
     if (derivedTripDestination) {
       return derivedTripDestination;
     }
-    return persistedDestination || null;
+    return activeTrip?.destination ?? null;
   }, [activeTrip?.destination, derivedTripDestination]);
-  const consumerTripName = useMemo(
-    () => resolveTripDisplayName(activeTrip?.name, consumerTripDestination ?? activeTrip?.destination),
-    [activeTrip?.destination, activeTrip?.name, consumerTripDestination],
-  );
   const consumerTripStartDate = useMemo(() => {
     if (derivedTripStartDate) {
       return derivedTripStartDate;
@@ -3718,57 +3399,71 @@ export default function TravelAssistantPage() {
     const currentStartDate = activeTrip?.startDate?.trim() ?? "";
     return currentStartDate || null;
   }, [activeTrip?.startDate, derivedTripStartDate]);
-  const consumerTripDaysAway = useMemo(() => {
-    if (consumerTripStartDate) {
-      const departureMs = Date.parse(`${consumerTripStartDate}T09:00:00`);
-      if (!Number.isNaN(departureMs)) {
-        return Math.max(0, Math.ceil((departureMs - nowMs) / 86_400_000));
-      }
-    }
-    return getTripDaysAway(minutesToDeparture);
-  }, [consumerTripStartDate, minutesToDeparture, nowMs]);
   useEffect(() => {
     if (!tripsHydratedRef.current) return;
     if (!activeTripId) return;
+    if (!earliestFlightReservation) return;
+
     const normalizedCurrentDestination = activeTrip?.destination?.trim() ?? "";
     const normalizedDerivedDestination = derivedTripDestination?.trim() ?? "";
     const destinationNeedsUpdate =
       Boolean(normalizedDerivedDestination) &&
-      isTripDestinationPlaceholder(normalizedCurrentDestination);
-    const normalizedCurrentName = activeTrip?.name?.trim() ?? "";
-    const resolvedNameCandidate =
-      derivedTripName ||
-      (!isTripDestinationPlaceholder(normalizedCurrentDestination) ? normalizedCurrentDestination : null);
-    const nameNeedsUpdate = Boolean(resolvedNameCandidate) && isTripNamePlaceholder(normalizedCurrentName);
+      (isTripDestinationPlaceholder(normalizedCurrentDestination) ||
+        normalizedCurrentDestination.toLowerCase() !== normalizedDerivedDestination.toLowerCase());
     const normalizedStartDate = activeTrip?.startDate?.trim() ?? "";
-    const normalizedEndDate = activeTrip?.endDate?.trim() ?? "";
-    const currentStartMs =
-      normalizedStartDate.length > 0 ? Date.parse(`${normalizedStartDate}T00:00:00`) : Number.NaN;
-    const startDateNeedsUpdate =
-      Boolean(derivedTripStartDate) &&
-      normalizedStartDate !== derivedTripStartDate &&
-      (normalizedStartDate.length === 0 || Number.isNaN(currentStartMs) || currentStartMs < nowMs - 12 * 60 * 60 * 1000);
-    const endDateNeedsUpdate =
-      Boolean(derivedTripEndDate) &&
-      normalizedEndDate !== derivedTripEndDate &&
-      (normalizedEndDate.length === 0 || normalizedEndDate < derivedTripEndDate);
+    const startDateNeedsUpdate = Boolean(derivedTripStartDate) && normalizedStartDate !== derivedTripStartDate;
 
-    if (!destinationNeedsUpdate && !startDateNeedsUpdate && !nameNeedsUpdate && !endDateNeedsUpdate) {
+
+
+    // Auto-generate trip name from destination + departure month
+    const derivedTripName = derivedTripStartDate
+      ? (() => {
+          const cityMap: Record<string, string> = {
+            HNL: "Honolulu", NRT: "Tokyo", HND: "Tokyo", LAX: "Los Angeles",
+            JFK: "New York", LHR: "London", CDG: "Paris", SYD: "Sydney",
+            SIN: "Singapore", HKG: "Hong Kong", GMP: "Seoul", ICN: "Seoul",
+            ORD: "Chicago", MIA: "Miami", SFO: "San Francisco", DEN: "Denver",
+            SEA: "Seattle", DFW: "Dallas", BOS: "Boston", LAS: "Las Vegas",
+            ONT: "Ontario", SNA: "Orange County", SAN: "San Diego",
+          };
+          // Get ALL flights sorted by date to understand the full itinerary
+          const allFlights = consumerReservationsSorted
+            .filter((r) => r.type === "flight")
+            .sort((a, b) => {
+              const aMs = Date.parse(((a as Reservation & { flightDate?: string }).flightDate ?? a.localTime) + "T00:00:00");
+              const bMs = Date.parse(((b as Reservation & { flightDate?: string }).flightDate ?? b.localTime) + "T00:00:00");
+              return aMs - bMs;
+            });
+          const firstFlight = allFlights[0];
+          const lastFlight = allFlights[allFlights.length - 1];
+          const origin = (firstFlight as Reservation & { flightDepartureAirport?: string })?.flightDepartureAirport ?? "";
+          const finalDest = (lastFlight as Reservation & { flightArrivalAirport?: string })?.flightArrivalAirport ?? derivedTripDestination ?? "";
+          const originCity = cityMap[origin.toUpperCase()] ?? origin;
+          const destCity = cityMap[finalDest.toUpperCase()] ?? finalDest;
+          const month = new Date(derivedTripStartDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          // Multi-leg: show origin → final destination
+          if (originCity && destCity && originCity !== destCity && allFlights.length > 1) {
+            return `${originCity} → ${destCity} · ${month}`;
+          }
+          return destCity ? `${destCity} · ${month}` : `Trip · ${month}`;
+        })()
+      : null;
+    const nameNeedsUpdate = Boolean(derivedTripName) &&
+      isTripNamePlaceholder(activeTrip?.name);
+
+    if (!destinationNeedsUpdate && !startDateNeedsUpdate && !nameNeedsUpdate) {
       return;
     }
 
-    const patch: { name?: string; destination?: string; startDate?: string; endDate?: string } = {};
-    if (nameNeedsUpdate && resolvedNameCandidate) {
-      patch.name = resolvedNameCandidate;
+    const patch: { name?: string; destination?: string; startDate?: string } = {};
+    if (nameNeedsUpdate && derivedTripName) {
+      patch.name = derivedTripName;
     }
     if (destinationNeedsUpdate && derivedTripDestination) {
       patch.destination = derivedTripDestination;
     }
     if (startDateNeedsUpdate && derivedTripStartDate) {
       patch.startDate = derivedTripStartDate;
-    }
-    if (endDateNeedsUpdate && derivedTripEndDate) {
-      patch.endDate = derivedTripEndDate;
     }
 
     const timeout = window.setTimeout(() => {
@@ -3799,15 +3494,11 @@ export default function TravelAssistantPage() {
     };
   }, [
     activeTrip?.destination,
-    activeTrip?.endDate,
-    activeTrip?.name,
     activeTrip?.startDate,
     activeTripId,
-    derivedTripEndDate,
-    derivedTripName,
     derivedTripDestination,
     derivedTripStartDate,
-    nowMs,
+    earliestFlightReservation,
   ]);
   const applyGovernedStatus = useCallback(
     (desiredStatus: TripStatus, source: "manual" | "auto"): void => {
@@ -4257,55 +3948,20 @@ export default function TravelAssistantPage() {
   };
 
   const evaluateStatus = (): void => {
-    let targetStatus: TripStatus = "green";
     if (
-      Boolean(connectionRiskSummary) ||
       minutesToDeparture <= 75 ||
       unresolvedReviewCount >= 2 ||
       unresolvedReadinessCount >= 2 ||
       blockingIssueCount > 0
     ) {
-      targetStatus = "red";
-    } else if (minutesToDeparture <= 160 || unresolvedReadinessCount > 0) {
-      targetStatus = "yellow";
+      applyGovernedStatus("red", "auto");
+      return;
     }
-    console.log("[OnTrack] evaluateStatus triggered", {
-      targetStatus,
-      minutesToDeparture,
-      unresolvedReviewCount,
-      unresolvedReadinessCount,
-      blockingIssueCount,
-      connectionRiskSummary,
-      delayedFlightId: delayedFlight?.id ?? null,
-      activeScenario,
-    });
-    applyGovernedStatus(targetStatus, "auto");
-
-    const detail =
-      delayedFlight
-        ? `${delayedFlight.provider} needs attention.`
-        : activeScenario !== "none"
-          ? "Something changed. Kepi can help fix it."
-          : connectionRiskSummary
-            ? connectionRiskSummary
-          : airportPreparationDetail
-            ? airportPreparationDetail
-            : hotelCheckoutDetail
-              ? hotelCheckoutDetail
-              : unresolvedReviewCount > 0
-                ? `${unresolvedReviewCount} email${unresolvedReviewCount === 1 ? "" : "s"} to review.`
-                : unresolvedReadinessCount > 0
-                  ? `${unresolvedReadinessCount} checklist item${unresolvedReadinessCount === 1 ? "" : "s"} left.`
-                  : blockingIssueCount > 0
-                    ? `${blockingIssueCount} blocker${blockingIssueCount === 1 ? "" : "s"} to clear.`
-                    : reservationsToday.length === 0
-                      ? "You are already checked in and do not have anything scheduled today."
-                      : "You are already checked in and on track for today.";
-    const headline =
-      targetStatus === "red" ? "Action needed" : targetStatus === "yellow" ? "Heads up" : "You're on track";
-    const evaluationSummary = `${headline}: ${detail}`;
-    console.log("[OnTrack] evaluation summary", evaluationSummary);
-    setToast(evaluationSummary);
+    if (minutesToDeparture <= 160 || unresolvedReadinessCount > 0) {
+      applyGovernedStatus("yellow", "auto");
+      return;
+    }
+    applyGovernedStatus("green", "auto");
   };
 
   const advanceTripStage = (): void => {
@@ -4511,17 +4167,48 @@ export default function TravelAssistantPage() {
         confidence: "high",
         notes: [notesPrefix, value.notes.trim()].filter((entry) => entry.length > 0).join(" "),
         source: "manual",
+        checkOutDate: mappedType === "hotel" ? value.checkOutDate.trim() : undefined,
+        roomType: mappedType === "hotel" ? value.roomType.trim() : undefined,
+        flightNumber: mappedType === "flight" ? value.flightNumber.trim() : undefined,
+        flightAirline: mappedType === "flight" ? value.provider.trim() : undefined,
+        flightDate: mappedType === "flight" ? localTime.slice(0, 10) : undefined,
       };
       pushUndoSnapshot("Manual reservation added");
-      setReservations((prev) => [reservation, ...prev]);
+      // Build the new list first, then set state AND save in one step
+      const existingReservations = trips.find((t) => t.id === (activeTripId ?? trips[0]?.id))?.reservations ?? [];
+      const nextReservations = [reservation, ...existingReservations];
+      setReservations(nextReservations);
+      // Force immediate server write with the correct new list
+      const targetTripId = activeTripId ?? trips[0]?.id ?? null;
+      if (targetTripId) {
+        void fetch(TRIP_API_ROUTE, {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "update",
+            id: targetTripId,
+            patch: { reservations: nextReservations },
+          }),
+        }).then(async (res) => {
+          if (!res.ok) return;
+          const payload = (await res.json()) as { trips?: unknown[] };
+          if (Array.isArray(payload.trips)) {
+            const parsedTrips = payload.trips
+              .map((t) => normalizeManagedTrip(t))
+              .filter((t): t is ManagedTrip => t !== null);
+            setTrips(parsedTrips);
+          }
+        });
+      }
       queueMutation("Manual reservation added to live timeline.", {
         key: "manual-reservation-add",
         reservationId: reservation.id,
       });
       setManualReservationModalOpen(false);
-      setToast("Reservation added");
+      setToast("Reservation added ✓");
     },
-    [pushUndoSnapshot, queueMutation, setToast],
+    [activeTripId, pushUndoSnapshot, queueMutation, setToast, trips],
   );
 
   const handleImportParsedReservations = useCallback(
@@ -4613,6 +4300,52 @@ export default function TravelAssistantPage() {
     },
     [familyMembers, queueMutation, setToast],
   );
+
+  const handleEnablePush = useCallback(async (): Promise<void> => {
+    if (pushBusy) return;
+    if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+      setPushMessage("Push notifications are not supported on this browser.");
+      return;
+    }
+    setPushBusy(true);
+    setPushMessage(null);
+    try {
+      const permission = Notification.permission === "granted"
+        ? "granted"
+        : await Notification.requestPermission();
+      if (permission !== "granted") {
+        setPushMessage("Notification permission denied. Enable in device settings.");
+        setPushBusy(false);
+        return;
+      }
+      const reg = await navigator.serviceWorker.ready;
+      const vapidKey = document.querySelector("meta[name=vapid-public-key]")?.getAttribute("content");
+      if (!vapidKey) {
+        setPushMessage("Push configuration missing — contact support.");
+        setPushBusy(false);
+        return;
+      }
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: vapidKey,
+      });
+      const res = await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sub.toJSON()),
+      });
+      if (res.ok) {
+        setPushSubscribed(true);
+        setPushMessage("✅ Push alerts enabled! You'll be notified of gate changes and delays.");
+      } else {
+        setPushMessage("Failed to register push subscription.");
+      }
+    } catch {
+      setPushMessage("Could not enable push notifications.");
+    } finally {
+      setPushBusy(false);
+    }
+  }, [pushBusy]);
 
   const handleCopyForwardAddress = useCallback(async (address?: string): Promise<void> => {
     const value = (address ?? emailForwardAddress)?.trim();
@@ -4723,11 +4456,6 @@ export default function TravelAssistantPage() {
         return;
       }
       setTicketScanBusy(true);
-      console.log("[travel-assistant] Ticket scan upload started.", {
-        fileName: file.name,
-        fileType: file.type,
-        fileSize: file.size,
-      });
       try {
         const formData = new FormData();
         formData.append("image", file);
@@ -4741,10 +4469,6 @@ export default function TravelAssistantPage() {
           error?: string;
           draft?: ReservationDraft;
         };
-        console.log("[travel-assistant] Ticket scan API response.", {
-          status: response.status,
-          payload,
-        });
         if (!response.ok || !payload.draft) {
           throw new Error(payload.error ?? `Ticket scan failed (${response.status})`);
         }
@@ -4786,14 +4510,9 @@ export default function TravelAssistantPage() {
         setFlightLookupBusy(false);
         setActiveDrawer({ kind: "review", id: reviewItem.id });
         setConsumerTab("reservations");
-        console.log("[travel-assistant] Ticket scan queued review item.", {
-          reviewId: reviewItem.id,
-          reservationDraft: reviewItem.draft,
-        });
         setToast("Ticket scanned. Review and confirm before saving.");
       } catch (error) {
         const message = error instanceof Error ? error.message : "Ticket scan failed.";
-        console.error("[travel-assistant] Ticket scan failed.", { error: message });
         setToast(message);
       } finally {
         setTicketScanBusy(false);
@@ -4904,7 +4623,6 @@ export default function TravelAssistantPage() {
             checkOutDate: reservation.checkOutDate,
             roomType: reservation.roomType,
             trainNumber: reservation.trainNumber,
-            airportTransport: reservation.airportTransport ?? null,
           });
         }
       } else {
@@ -5190,7 +4908,7 @@ export default function TravelAssistantPage() {
           .filter((entry) => entry.length > 0)
           .join(" | "),
       }));
-      setToast("Flight details populated from AviationStack.");
+      setToast("Flight details populated from AeroDataBox.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to look up flight.";
       setFlightLookupError(message);
@@ -5204,20 +4922,8 @@ export default function TravelAssistantPage() {
     (nextQueue: ReviewItem[], context: { reviewId: string; source: string }): void => {
       const targetTripId = activeTripId ?? trips[0]?.id ?? null;
       if (!targetTripId) {
-        console.log("[travel-assistant] Review delete persistence skipped: no target trip id.", {
-          reviewId: context.reviewId,
-          source: context.source,
-          activeTripId,
-          tripIds: trips.map((trip) => trip.id),
-        });
         return;
       }
-      console.log("[travel-assistant] Review delete API call sent.", {
-        reviewId: context.reviewId,
-        source: context.source,
-        targetTripId,
-        nextQueueLength: nextQueue.length,
-      });
       void fetch(TRIP_API_ROUTE, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -5245,26 +4951,10 @@ export default function TravelAssistantPage() {
             }
             const parsedErrorMessage = extractApiErrorMessage(payload);
             const responseErrorMessage = parsedErrorMessage || rawErrorBody.trim() || `Request failed with ${response.status}`;
-            console.log("[travel-assistant] Review delete API failed.", {
-              reviewId: context.reviewId,
-              source: context.source,
-              targetTripId,
-              status: response.status,
-              payload,
-              rawErrorBody: rawErrorBody || null,
-              responseErrorMessage,
-            });
             setToast(`Review delete failed: ${responseErrorMessage}`);
             return;
           }
           const payload = (await response.json()) as { trip?: ManagedTrip; trips?: unknown[]; activeTripId?: string | null };
-          console.log("[travel-assistant] Review delete API response received.", {
-            reviewId: context.reviewId,
-            source: context.source,
-            targetTripId,
-            persistedTripId: payload.trip?.id ?? null,
-            activeTripId: payload.activeTripId ?? null,
-          });
           if (Array.isArray(payload.trips)) {
             const parsedTrips = payload.trips
               .map((trip) => normalizeManagedTrip(trip))
@@ -5274,13 +4964,7 @@ export default function TravelAssistantPage() {
             setTrips((previous) => previous.map((trip) => (trip.id === payload.trip?.id ? payload.trip : trip)));
           }
         })
-        .catch((error) => {
-          console.log("[travel-assistant] Review delete API threw.", {
-            reviewId: context.reviewId,
-            source: context.source,
-            targetTripId,
-            error: error instanceof Error ? error.message : "unknown",
-          });
+        .catch(() => {
           setToast("Network error while deleting review item.");
         });
     },
@@ -5289,26 +4973,12 @@ export default function TravelAssistantPage() {
 
   const handleDeleteReservation = useCallback(
     (reservationId: string): void => {
-      console.log("[travel-assistant] Delete click received.", {
-        reservationId,
-        activeTripId,
-        tripCount: trips.length,
-      });
       const reservation = reservations.find((item) => item.id === reservationId);
       if (!reservation) {
-        console.log("[travel-assistant] Delete aborted: reservation not found in local state.", {
-          reservationId,
-          availableReservationIds: reservations.map((item) => item.id),
-        });
         setToast("Reservation not found.");
         return;
       }
       const nextReservations = reservations.filter((item) => item.id !== reservationId);
-      console.log("[travel-assistant] Delete local state update prepared.", {
-        reservationId,
-        beforeCount: reservations.length,
-        afterCount: nextReservations.length,
-      });
       pushUndoSnapshot("Reservation deleted");
       setReservations(nextReservations);
       const targetTripId = activeTripId ?? trips[0]?.id ?? null;
@@ -5324,16 +4994,7 @@ export default function TravelAssistantPage() {
           ),
         );
       }
-      console.log("[travel-assistant] Delete UI updated immediately.", {
-        reservationId,
-        targetTripId,
-      });
       if (targetTripId) {
-        console.log("[travel-assistant] Delete API call sent.", {
-          reservationId,
-          targetTripId,
-          reservationCount: nextReservations.length,
-        });
         void fetch(TRIP_API_ROUTE, {
           method: "DELETE",
           credentials: "include",
@@ -5360,14 +5021,6 @@ export default function TravelAssistantPage() {
               }
               const parsedErrorMessage = extractApiErrorMessage(payload);
               const responseErrorMessage = parsedErrorMessage || rawErrorBody.trim() || `Request failed with ${response.status}`;
-              console.log("[travel-assistant] Delete persistence request failed.", {
-                reservationId,
-                targetTripId,
-                status: response.status,
-                payload,
-                rawErrorBody: rawErrorBody || null,
-                responseErrorMessage,
-              });
               setToast(`Delete failed: ${responseErrorMessage}`);
               return;
             }
@@ -5378,14 +5031,6 @@ export default function TravelAssistantPage() {
               activeTripId?: string | null;
               removedReservationId?: string;
             };
-            console.log("[travel-assistant] Delete API response received.", {
-              reservationId,
-              targetTripId,
-              action: payload.action ?? null,
-              persistedTripId: payload.trip?.id ?? null,
-              removedReservationId: payload.removedReservationId ?? null,
-              activeTripId: payload.activeTripId ?? null,
-            });
             if (Array.isArray(payload.trips)) {
               const parsedTrips = payload.trips
                 .map((trip) => normalizeManagedTrip(trip))
@@ -5395,20 +5040,10 @@ export default function TravelAssistantPage() {
               setTrips((previous) => previous.map((trip) => (trip.id === payload.trip?.id ? payload.trip : trip)));
             }
           })
-          .catch((error) => {
-            console.log("[travel-assistant] Delete persistence request threw.", {
-              reservationId,
-              targetTripId,
-              error: error instanceof Error ? error.message : "unknown",
-            });
+          .catch(() => {
             setToast("Network error while deleting reservation.");
           });
       } else {
-        console.log("[travel-assistant] Delete persistence skipped: no target trip id resolved.", {
-          reservationId,
-          activeTripId,
-          tripIds: trips.map((trip) => trip.id),
-        });
       }
       setExpandedConsumerReservationId((prev) => (prev === reservationId ? null : prev));
       setHighlightedReservationId((prev) => (prev === reservationId ? null : prev));
@@ -5424,15 +5059,50 @@ export default function TravelAssistantPage() {
         key: "reservation-delete",
         reservationId,
       });
-      console.log("[travel-assistant] Delete flow finished.", {
-        reservationId,
-      });
     },
     [activeTripId, pushUndoSnapshot, queueMutation, reservations, setToast, trips],
   );
 
+  const handleMoveReservationToTrip = useCallback(
+    async (reservationId: string, targetTripId: string): Promise<void> => {
+      if (!activeTripId || targetTripId === activeTripId) return;
+      const reservation = reservations.find((item) => item.id === reservationId);
+      if (!reservation) { setToast("Reservation not found."); return; }
+      const targetTrip = trips.find((t) => t.id === targetTripId);
+      if (!targetTrip) { setToast("Target trip not found."); return; }
+      pushUndoSnapshot("Reservation moved to another trip");
+      // Remove from current trip locally
+      setReservations((prev) => prev.filter((item) => item.id !== reservationId));
+      closeDrawer();
+      try {
+        // Remove from current trip on server
+        await fetch(TRIP_API_ROUTE, {
+          method: "DELETE",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "delete-reservation", tripId: activeTripId, reservationId }),
+        });
+        // Add to target trip on server
+        await fetch(TRIP_API_ROUTE, {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "update",
+            id: targetTripId,
+            patch: { reservations: [{ ...reservation, id: nextId("res-moved") }, ...targetTrip.reservations] },
+          }),
+        });
+        await refreshTripsFromServer();
+        setToast(`Moved to "${targetTrip.name}".`);
+      } catch {
+        setToast("Move failed — please try again.");
+      }
+    },
+    [activeTripId, closeDrawer, pushUndoSnapshot, refreshTripsFromServer, reservations, setToast, trips],
+  );
+
   const requestDeleteConfirmation = useCallback((target: PendingDeleteConfirmation): void => {
-    console.log("[travel-assistant] Delete confirmation requested.", target);
     if (target.kind === "reservation") {
       setSwipeOffsetByReservationId((previous) => ({ ...previous, [target.id]: 0 }));
     } else {
@@ -5453,18 +5123,15 @@ export default function TravelAssistantPage() {
         kind,
         id,
         startX,
+        startY: event.touches[0]?.clientY ?? 0,
         startingOffset,
+        locked: false,
       };
       if (kind === "reservation") {
         setSwipeOffsetByReviewId({});
       } else {
         setSwipeOffsetByReservationId({});
       }
-      console.log("[travel-assistant] Swipe start.", {
-        kind,
-        id,
-        startingOffset,
-      });
     },
     [swipeOffsetByReservationId, swipeOffsetByReviewId],
   );
@@ -5478,7 +5145,16 @@ export default function TravelAssistantPage() {
     if (typeof touchX !== "number") {
       return;
     }
+    const touchY = event.touches[0]?.clientY ?? 0;
     const deltaX = gesture.startX - touchX;
+    const deltaY = Math.abs((touchY) - (gesture.startY ?? 0));
+    // Require clearly horizontal gesture (2:1 ratio) before activating swipe
+    if (!gesture.locked && Math.abs(deltaX) < 8) return;
+    if (!gesture.locked && deltaY > Math.abs(deltaX) * 0.6) {
+      swipeGestureRef.current = null;
+      return;
+    }
+    gesture.locked = true;
     const nextOffset = Math.max(0, Math.min(SWIPE_DELETE_REVEAL_PX, gesture.startingOffset + deltaX));
     if (nextOffset > 0) {
       event.preventDefault();
@@ -5517,30 +5193,16 @@ export default function TravelAssistantPage() {
         [gesture.id]: finalOffset,
       }));
     }
-    console.log("[travel-assistant] Swipe end.", {
-      kind: gesture.kind,
-      id: gesture.id,
-      currentOffset,
-      finalOffset,
-    });
     swipeGestureRef.current = null;
   }, [swipeOffsetByReservationId, swipeOffsetByReviewId]);
 
   const handleCheckFlightStatus = useCallback(
     async (reservationId: string): Promise<void> => {
-      console.log("[travel-assistant] Check status click received.", {
-        reservationId,
-      });
       const reservation = reservations.find((item) => item.id === reservationId);
       if (!reservation) {
-        console.log("[travel-assistant] Check status aborted: reservation not found.", {
-          reservationId,
-          availableReservationIds: reservations.map((item) => item.id),
-        });
         setToast("Reservation not found.");
         return;
       }
-      console.log("[travel-assistant] Check status full reservation object.", reservation);
       if (reservation.type === "hotel") {
         const hotelSummary = buildHotelCheckInStatusSummary(reservation);
         console.info("[travel-assistant] Hotel check status summary.", {
@@ -5586,43 +5248,6 @@ export default function TravelAssistantPage() {
       });
       if (!lookupInput) {
         const errorMessage = "Add flight number, airline, and date before checking status.";
-        console.log("[travel-assistant] Check status lookup input missing.", {
-          reservationId,
-          reservationObject: reservation,
-          flightNumberCandidates: [
-            reservationRecord.flightNumber,
-            reservationRecord.flight_number,
-            reservationRecord.flightNo,
-            reservationRecord.flight_no,
-            reservationRecord.operatingFlightNumber,
-            reservationRecord.operating_flight_number,
-            reservationRecord.marketingFlightNumber,
-            reservationRecord.marketing_flight_number,
-            reservation.title,
-            reservation.provider,
-          ],
-          airlineCandidates: [
-            reservationRecord.flightAirline,
-            reservationRecord.flight_airline,
-            reservationRecord.airline,
-            reservationRecord.carrier,
-            reservationRecord.carrier_name,
-            reservationRecord.operator,
-            reservation.provider,
-          ],
-          dateCandidates: [
-            reservationRecord.flightDate,
-            reservationRecord.flight_date,
-            reservationRecord.departureDate,
-            reservationRecord.departure_date,
-            reservationRecord.travelDate,
-            reservationRecord.travel_date,
-            reservationRecord.departureTime,
-            reservationRecord.departure_time,
-            reservationRecord.localTime,
-            reservationRecord.local_time,
-          ],
-        });
         setFlightStatusCheckByReservationId((prev) => ({
           ...prev,
           [reservationId]: {
@@ -5927,16 +5552,7 @@ export default function TravelAssistantPage() {
   const handleRejectReview = useCallback(
     (reviewId: string, options?: { source?: "review-card" | "review-drawer" | "skip-review" }): void => {
       const source = options?.source ?? "review-card";
-      console.log("[travel-assistant] Review delete requested.", {
-        reviewId,
-        source,
-      });
       if (!reviewQueue.some((item) => item.id === reviewId)) {
-        console.log("[travel-assistant] Review delete aborted: item not found.", {
-          reviewId,
-          source,
-          availableReviewIds: reviewQueue.map((item) => item.id),
-        });
         setToast("Review item not found.");
         return;
       }
@@ -5956,13 +5572,6 @@ export default function TravelAssistantPage() {
           ),
         );
       }
-      console.log("[travel-assistant] Review delete UI updated.", {
-        reviewId,
-        source,
-        targetTripId,
-        beforeCount: reviewQueue.length,
-        afterCount: nextQueue.length,
-      });
       persistReviewQueueToTrip(nextQueue, { reviewId, source });
       queueMutation("Review item archived.");
       if (activeDrawer?.kind === "review" && activeDrawer.id === reviewId) {
@@ -5995,7 +5604,6 @@ export default function TravelAssistantPage() {
     if (!pendingDeleteConfirmation) {
       return;
     }
-    console.log("[travel-assistant] Delete confirmation accepted.", pendingDeleteConfirmation);
     if (pendingDeleteConfirmation.kind === "reservation") {
       handleDeleteReservation(pendingDeleteConfirmation.id);
     } else {
@@ -6010,7 +5618,6 @@ export default function TravelAssistantPage() {
     if (!pendingDeleteConfirmation) {
       return;
     }
-    console.log("[travel-assistant] Delete confirmation cancelled.", pendingDeleteConfirmation);
     setPendingDeleteConfirmation(null);
   }, [pendingDeleteConfirmation]);
 
@@ -6089,26 +5696,27 @@ export default function TravelAssistantPage() {
   };
 
   const handleChecklistToggle = (id: string): void => {
-    try {
-      // Always update local state first so checklist works offline.
-      pushUndoSnapshot("Readiness checklist changed");
-      setReadinessItems((prev) =>
-        prev.map((item) => (item.id === id ? { ...item, complete: !item.complete } : item)),
-      );
-    } catch {
-      // Preserve interaction even if undo snapshotting fails unexpectedly.
-      setReadinessItems((prev) =>
-        prev.map((item) => (item.id === id ? { ...item, complete: !item.complete } : item)),
-      );
-    }
-
-    window.setTimeout(() => {
-      try {
-        queueMutation("Readiness checklist updated.");
-      } catch {
-        setToast("Checklist updated locally. Changes will sync when storage is available.");
+    setReadinessItems((prev) => {
+      const updated = prev.map((item) => (item.id === id ? { ...item, complete: !item.complete } : item));
+      // Save directly to Redis after state settles — do not rely on queueMutation
+      // which doesn't include readinessItems in its payload
+      if (activeTripId) {
+        window.setTimeout(() => {
+          void fetch(TRIP_API_ROUTE, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "update",
+              id: activeTripId,
+              patch: { readinessItems: updated },
+            }),
+          }).catch(() => {
+            // fail silently - autosave will retry
+          });
+        }, 300);
       }
-    }, 0);
+      return updated;
+    });
   };
 
   const copyScript = async (text: string): Promise<void> => {
@@ -6365,6 +5973,17 @@ export default function TravelAssistantPage() {
     );
   };
 
+  // Auto-close the review session card once all items have been processed.
+  useEffect(() => {
+    if (consumerReviewQueueSession.open && reviewQueue.length === 0) {
+      const timer = window.setTimeout(() => {
+        setConsumerReviewQueueSession({ open: false, processed: 0, total: 0 });
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+    return undefined;
+  }, [consumerReviewQueueSession.open, reviewQueue.length]);
+
   const navigateToConsumerTab = useCallback((nextTab: ConsumerTab): void => {
     setConsumerTab(nextTab);
     const params = new URLSearchParams(window.location.search);
@@ -6447,7 +6066,7 @@ export default function TravelAssistantPage() {
   }, [consumerTab, pendingMoreScrollTarget]);
 
   const consumerPrimaryAction = (() => {
-    if (tripStatus === "red" || activeScenario !== "none" || delayedFlight || connectionRiskSummary) {
+    if (tripStatus === "red" || activeScenario !== "none" || delayedFlight) {
       return {
         label: "View reservations",
         targetTab: "reservations" as ConsumerTab,
@@ -6478,19 +6097,14 @@ export default function TravelAssistantPage() {
           consumerReviewQueueSession.total
         }`
       : null;
-  const getConsumerReservationStatus = (reservation: Reservation): { label: string; className: string } => {
+  const getConsumerReservationStatus = useCallback(
+    (reservation: Reservation): { label: string; className: string } => {
       if (reservation.type === "flight") {
         const checkedStatus = flightStatusCheckByReservationId[reservation.id];
         if (checkedStatus?.busy) {
           return {
             label: "Checking...",
             className: "bg-cyan-500/15 text-cyan-700 ring-1 ring-cyan-500/30 dark:text-cyan-100",
-          };
-        }
-        if (riskyFlightConnectionReservationIds.has(reservation.id)) {
-          return {
-            label: "Connection risk",
-            className: "bg-amber-500/15 text-amber-700 ring-1 ring-amber-500/30 dark:text-amber-200",
           };
         }
         if (checkedStatus && !checkedStatus.error) {
@@ -6527,6 +6141,19 @@ export default function TravelAssistantPage() {
             className: "bg-emerald-500/15 text-emerald-700 ring-1 ring-emerald-500/30 dark:text-emerald-200",
           };
         }
+        // Past flight — use flightDate (most reliable) to avoid misclassifying future flights
+        const _depCandidates = [
+          reservation.flightDate ? parseDateInput(reservation.flightDate + " 23:59") : Number.NaN,
+          reservation.flightDepartureTime ? parseDateInput(reservation.flightDepartureTime) : Number.NaN,
+          parseDateInput(reservation.localTime ?? ""),
+        ].filter(v => !Number.isNaN(v));
+        const depMs = _depCandidates.length > 0 ? Math.max(..._depCandidates) : Number.NaN;
+        if (!Number.isNaN(depMs) && Date.now() - depMs > 4 * 3_600_000) {
+          return {
+            label: "Completed",
+            className: "bg-slate-400/20 text-slate-500 ring-1 ring-slate-400/20 dark:text-slate-400",
+          };
+        }
         return {
           label: "Check status",
           className: "bg-slate-900/10 text-slate-700 ring-1 ring-slate-400/30 dark:text-slate-200",
@@ -6555,17 +6182,19 @@ export default function TravelAssistantPage() {
         label: "Confirmed",
         className: "bg-slate-900/10 text-slate-700 ring-1 ring-slate-400/30 dark:text-slate-200",
       };
-  };
+    },
+    [flightLiveStatusByReservationId, flightStatusCheckByReservationId],
+  );
 
   const activeDrawerPanel = activeDrawer ? (
-    <div className="fixed inset-0 z-[140] flex items-end justify-end bg-slate-950/80 p-3 md:p-6">
+    <div className="fixed inset-0 z-[140] flex items-end justify-end bg-slate-950/70 p-3 md:p-6">
       <div
         ref={drawerContainerRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="travel-assistant-drawer-title"
         tabIndex={-1}
-        className="h-full w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-4 text-slate-100 md:max-h-[92vh]"
+        className="h-full w-full max-w-xl overflow-y-auto rounded-2xl border border-[var(--border-default)] bg-[var(--bg-card)] p-4 text-[var(--text-primary)] md:max-h-[92vh]"
       >
         <div className="flex items-center justify-between">
           <h2 id="travel-assistant-drawer-title" className="text-lg font-semibold">
@@ -6576,7 +6205,7 @@ export default function TravelAssistantPage() {
             type="button"
             onClick={closeDrawer}
             aria-label="Close details drawer"
-            className="rounded-md bg-slate-800 px-2 py-1 text-sm ring-1 ring-slate-700 hover:bg-slate-700"
+            className="rounded-md border border-[var(--border-default)] bg-[var(--bg-muted)] px-2 py-1 text-sm hover:opacity-80"
           >
             Close
           </button>
@@ -6587,7 +6216,7 @@ export default function TravelAssistantPage() {
             <input
               value={drawerDraft.title}
               onChange={(event) => setDrawerDraft((prev) => ({ ...prev, title: event.target.value }))}
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
+              className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)]"
             />
           </label>
           <div className="grid gap-3 md:grid-cols-2">
@@ -6598,7 +6227,7 @@ export default function TravelAssistantPage() {
                 onChange={(event) =>
                   setDrawerDraft((prev) => ({ ...prev, type: event.target.value as ReservationType }))
                 }
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
+                className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)]"
               >
                 {(Object.keys(RESERVATION_TYPE_LABEL) as ReservationType[]).map((type) => (
                   <option key={type} value={type}>
@@ -6612,7 +6241,7 @@ export default function TravelAssistantPage() {
               <input
                 value={drawerDraft.provider}
                 onChange={(event) => setDrawerDraft((prev) => ({ ...prev, provider: event.target.value }))}
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
+                className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)]"
               />
             </label>
             <label className="block">
@@ -6620,7 +6249,7 @@ export default function TravelAssistantPage() {
               <input
                 value={drawerDraft.localTime}
                 onChange={(event) => setDrawerDraft((prev) => ({ ...prev, localTime: event.target.value }))}
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
+                className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)]"
               />
             </label>
             <label className="block">
@@ -6629,7 +6258,7 @@ export default function TravelAssistantPage() {
                 value={formatTimezoneForDisplay(drawerDraft.timezone) === "Not set" ? "" : drawerDraft.timezone}
                 onChange={(event) => setDrawerDraft((prev) => ({ ...prev, timezone: event.target.value }))}
                 placeholder="Not set"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
+                className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)]"
               />
             </label>
           </div>
@@ -6638,7 +6267,7 @@ export default function TravelAssistantPage() {
             <input
               value={drawerDraft.location}
               onChange={(event) => setDrawerDraft((prev) => ({ ...prev, location: event.target.value }))}
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
+              className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)]"
             />
           </label>
           <label className="block">
@@ -6648,7 +6277,7 @@ export default function TravelAssistantPage() {
               onChange={(event) =>
                 setDrawerDraft((prev) => ({ ...prev, confirmationCode: event.target.value }))
               }
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
+              className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)]"
             />
           </label>
           {activeDrawer.kind === "review" &&
@@ -6666,7 +6295,7 @@ export default function TravelAssistantPage() {
                       setDrawerDraft((prev) => ({ ...prev, flightNumber: event.target.value.trim().toUpperCase() }))
                     }
                     placeholder="AA123"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)] text-sm"
                   />
                 </label>
                 <label className="block">
@@ -6677,7 +6306,7 @@ export default function TravelAssistantPage() {
                       setDrawerDraft((prev) => ({ ...prev, flightAirline: event.target.value }))
                     }
                     placeholder="American Airlines"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)] text-sm"
                   />
                 </label>
                 <label className="block">
@@ -6688,7 +6317,7 @@ export default function TravelAssistantPage() {
                     onChange={(event) =>
                       setDrawerDraft((prev) => ({ ...prev, flightDate: event.target.value }))
                     }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)] text-sm"
                   />
                 </label>
               </div>
@@ -6725,7 +6354,7 @@ export default function TravelAssistantPage() {
           ) : null}
           <label className="block">
             <span className="mb-1 block text-slate-300">Assigned people</span>
-            <div className="grid gap-2 rounded-lg border border-slate-700 bg-slate-950 p-3 text-xs">
+            <div className="grid gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--bg-muted)] p-3 text-xs">
               {assignmentTravelerOptions.map((member) => (
                 <label key={member.id} className="flex items-center gap-2">
                   <input
@@ -6753,7 +6382,7 @@ export default function TravelAssistantPage() {
             <textarea
               value={drawerDraft.notes}
               onChange={(event) => setDrawerDraft((prev) => ({ ...prev, notes: event.target.value }))}
-              className="h-24 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"
+              className="h-24 w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)]"
             />
           </label>
         </div>
@@ -6776,6 +6405,20 @@ export default function TravelAssistantPage() {
             >
               Delete reservation
             </button>
+          ) : null}
+          {activeDrawer.kind === "reservation" && trips.filter((trip) => trip.id !== activeTripId).length > 0 ? (
+            <select
+              defaultValue=""
+              onChange={(e) => {
+                if (e.target.value) void handleMoveReservationToTrip(activeDrawer.id, e.target.value);
+              }}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+            >
+              <option value="" disabled>Move to trip…</option>
+              {trips.filter((trip) => trip.id !== activeTripId).map((trip) => (
+                <option key={trip.id} value={trip.id}>{trip.name}</option>
+              ))}
+            </select>
           ) : null}
           {activeDrawer.kind === "review" ? (
             <button
@@ -6804,9 +6447,6 @@ export default function TravelAssistantPage() {
             <button
               type="button"
               onClick={() => {
-                console.log("[travel-assistant] Review drawer delete button clicked.", {
-                  reviewId: activeDrawer.id,
-                });
                 requestDeleteConfirmation({
                   kind: "review",
                   id: activeDrawer.id,
@@ -6825,7 +6465,7 @@ export default function TravelAssistantPage() {
 
   const deleteConfirmationDialog = pendingDeleteConfirmation ? (
     <div className="fixed inset-0 z-[170] flex items-center justify-center bg-slate-950/70 px-4">
-      <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900 p-4 text-slate-100 shadow-2xl">
+      <div className="w-full max-w-sm rounded-2xl border border-[var(--border-default)] bg-[var(--bg-card)] p-4 text-[var(--text-primary)] shadow-2xl">
         <h2 className="text-base font-semibold">Delete this reservation? This cannot be undone.</h2>
         <p className="mt-2 text-sm text-slate-300">
           {pendingDeleteConfirmation.kind === "review"
@@ -6854,7 +6494,7 @@ export default function TravelAssistantPage() {
 
   if (!advancedWorkspaceEnabled) {
     return (
-      <main className="relative min-h-screen overflow-x-hidden bg-slate-50 pb-24 text-slate-950 dark:bg-slate-950 dark:text-slate-100">
+      <main className="relative min-h-screen overflow-x-hidden bg-[var(--bg-base)] pb-24 text-[var(--text-primary)]">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_0%,rgba(14,165,233,0.12),transparent_38%),radial-gradient(circle_at_80%_10%,rgba(34,197,94,0.10),transparent_35%)]" />
         <div className="relative z-10 mx-auto max-w-3xl space-y-4 px-4 py-4 sm:py-6">
           <header className="sticky top-0 z-30 -mx-4 border-b border-slate-200/70 bg-slate-50/90 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90">
@@ -6937,6 +6577,7 @@ export default function TravelAssistantPage() {
               ["trip", "Trip"],
               ["reservations", "Reservations"],
               ["packing", "Packing"],
+              ["family", "Family"],
               ["more", "More"],
             ] as const).map(([tab, label]) => (
               <button
@@ -6964,12 +6605,41 @@ export default function TravelAssistantPage() {
             </section>
           ) : consumerTab === "trip" ? (
             <section className="space-y-4">
+              <NextUpCard
+                reservations={consumerReservationsSorted}
+                tripName={activeTrip?.name ?? "Your trip"}
+                onReservationTap={(id) => openDrawer("reservation", id)}
+              />
+
+              <OnTrackButton
+                reservations={consumerReservationsSorted}
+                tripName={activeTrip?.name ?? "Your trip"}
+              />
+              {tripDaysAway !== null && tripDaysAway <= 1 && (
+                <button
+                  type="button"
+                  onClick={() => setTravelDayOpen(true)}
+                  className="w-full rounded-2xl bg-gradient-to-r from-[#0c2461] via-[#1a56b0] to-[#0ea5e9] px-4 py-3.5 text-left shadow-lg shadow-blue-900/40 transition"
+                >
+                  <p className="text-xs font-bold uppercase tracking-widest text-sky-200">Today&apos;s travel plan</p>
+                  <div className="mt-1 flex items-center justify-between">
+                    <p className="text-lg font-bold text-white">Travel Day →</p>
+                    <span className="text-2xl">✈️</span>
+                  </div>
+                  <p className="text-xs text-sky-100 mt-0.5">Timeline · Leave by time · What to expect</p>
+                </button>
+              )}
+
+              <GapAlerts
+                reservations={consumerReservationsSorted}
+                onActionTap={(tab) => navigateToConsumerTab(tab as ConsumerTab)}
+              />
               <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Trip</p>
                     <h1 className="mt-1 text-2xl font-bold text-slate-950 dark:text-slate-100">
-                      {consumerTripName}
+                      {activeTrip?.name ?? "Your next trip"}
                     </h1>
                     <p className="mt-1 text-base text-slate-600 dark:text-slate-300">
                       {consumerTripDestination ?? "Destination pending"}
@@ -6981,11 +6651,7 @@ export default function TravelAssistantPage() {
                 </div>
                 <p className="mt-4 text-sm text-slate-700 dark:text-slate-300">
                   Departure {formatTripDepartureDate(consumerTripStartDate)} •{" "}
-                  {consumerTripDaysAway === 0
-                    ? "Today"
-                    : consumerTripDaysAway === 1
-                      ? "1 day away"
-                      : `${consumerTripDaysAway} days away`}
+                  {tripDaysAway === 0 ? "Today" : tripDaysAway === 1 ? "1 day away" : `${tripDaysAway} days away`}
                 </p>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{consumerStatus.detail}</p>
                 {consumerPrimaryAction?.targetTab ? (
@@ -7009,9 +6675,17 @@ export default function TravelAssistantPage() {
                 <button
                   type="button"
                   onClick={() => openDrawer("review", firstForwardedReviewItem.id)}
-                  className="w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900 shadow-sm transition hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-100 dark:hover:bg-amber-500/20"
+                  className="w-full rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-left shadow-sm transition hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/15 dark:hover:bg-amber-500/20"
                 >
-                  New reservation found — tap to review
+                  <p className="text-sm font-bold text-amber-900 dark:text-amber-100">
+                    ✋ We need your help with a reservation
+                  </p>
+                  <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-200">
+                    {firstForwardedReviewItem.reasons[0] ?? "Tap to review and confirm the details."}
+                  </p>
+                  <p className="mt-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                    Tap to fill in missing info →
+                  </p>
                 </button>
               ) : reviewQueue.length > 0 ? (
                 <button
@@ -7019,189 +6693,19 @@ export default function TravelAssistantPage() {
                   onClick={() => navigateToConsumerTab("reservations")}
                   className="w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900 shadow-sm transition hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-100 dark:hover:bg-amber-500/20"
                 >
-                  You have {reviewQueue.length} reservation{reviewQueue.length === 1 ? "" : "s"} waiting in your review queue — tap to review
+                  {reviewQueue.length} reservation{reviewQueue.length === 1 ? "" : "s"} need{reviewQueue.length === 1 ? "s" : ""} your input — tap to review
                 </button>
               ) : null}
 
-              <section className="space-y-3">
-                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Flight reservations</h2>
-                {tripTabFlightReservations.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                    No flight reservations yet.
-                  </div>
-                ) : (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {tripTabFlightReservations.map((reservation) => {
-                      const statusMeta = getConsumerReservationStatus(reservation);
-                      const flightAirports = resolveFlightAirports(reservation);
-                      const departureTerminal = reservation.flightDepartureTerminal?.trim() ?? "";
-                      const departureGate = reservation.flightDepartureGate?.trim() ?? "";
-                      const arrivalTerminal = reservation.flightArrivalTerminal?.trim() ?? "";
-                      const arrivalGate = reservation.flightArrivalGate?.trim() ?? "";
-                      const departureTimeLabel = formatBoardingPassClock(
-                        reservation.flightDepartureTime ?? reservation.localTime,
-                      );
-                      const arrivalTimeLabel = formatBoardingPassClock(
-                        reservation.flightArrivalTime ?? reservation.localTime,
-                      );
-                      return (
-                        <button
-                          key={reservation.id}
-                          type="button"
-                          onClick={() => openDrawer("reservation", reservation.id)}
-                          className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
-                              {reservation.provider || "Airline pending"} • {getFlightNumberLabel(reservation)}
-                            </p>
-                            <span
-                              className={`max-w-24 rounded-full px-2 py-1 text-center text-[11px] font-semibold leading-tight ${statusMeta.className}`}
-                            >
-                              {statusMeta.label}
-                            </span>
-                          </div>
-                          <p className="mt-2 break-words text-base font-semibold text-slate-900 dark:text-slate-100">
-                            {getReservationRouteLabel(reservation)}
-                          </p>
-                          <p className="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
-                            {flightAirports.departureAirport} → {flightAirports.arrivalAirport} • {departureTimeLabel} to{" "}
-                            {arrivalTimeLabel}
-                          </p>
-                          <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">
-                            {formatConsumerReservationDate(reservation.localTime)} • {formatConsumerReservationTime(reservation.localTime)}
-                          </p>
-                          <p className="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
-                            Depart T{departureTerminal || "--"} / Gate {departureGate || "--"} • Arrive T
-                            {arrivalTerminal || "--"} / Gate {arrivalGate || "--"}
-                          </p>
-                          <p className="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
-                            Confirmation: {reservation.confirmationCode || "Not set"}
-                          </p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
+              <TripTimeline
+                reservations={consumerReservationsSorted}
+                tripName={activeTrip?.name ?? "Your trip"}
+                tripStartDate={consumerTripStartDate}
+                tripDaysAway={tripDaysAway}
+                onReservationTap={(id) => openDrawer("reservation", id)}
+              />
 
-              <section className="space-y-3">
-                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Hotel reservations</h2>
-                {tripTabHotelReservations.length === 0 && pendingHotelReviewItems.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                    No hotel reservations yet.
-                  </div>
-                ) : (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {tripTabHotelReservations.map((reservation) => (
-                      <button
-                        key={reservation.id}
-                        type="button"
-                        onClick={() => openDrawer("reservation", reservation.id)}
-                        className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
-                      >
-                        <p className="break-words text-base font-semibold text-slate-900 dark:text-slate-100">
-                          {reservation.provider || getFriendlyReservationTitle(reservation)}
-                        </p>
-                        <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">
-                          Check-in {formatConsumerReservationDate(reservation.localTime)} • {formatConsumerReservationTime(reservation.localTime)}
-                        </p>
-                        <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">
-                          {reservation.location || "Location pending"}
-                        </p>
-                        <p className="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
-                          Confirmation: {reservation.confirmationCode || "Not set"}
-                        </p>
-                      </button>
-                    ))}
-                    {pendingHotelReviewItems.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => openDrawer("review", item.id)}
-                        className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-amber-500/40 dark:bg-amber-500/15"
-                      >
-                        <p className="break-words text-base font-semibold text-slate-900 dark:text-slate-100">
-                          {item.draft.provider || getFriendlyReservationTitle({ ...item.draft, id: item.id, source: "imported" })}
-                        </p>
-                        <p className="mt-1 break-words text-sm text-slate-700 dark:text-slate-300">
-                          Check-in {formatConsumerReservationDate(item.draft.localTime)} •{" "}
-                          {formatConsumerReservationTime(item.draft.localTime)}
-                        </p>
-                        <p className="mt-1 break-words text-sm text-slate-700 dark:text-slate-300">
-                          {item.draft.location || "Location pending"}
-                        </p>
-                        <p className="mt-1 break-words text-xs text-amber-800 dark:text-amber-100">
-                          Pending review — tap to confirm
-                        </p>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </section>
-
-              {forwardedReviewItems.length > 0 ? (
-                <section className="space-y-3">
-                  <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">Awaiting your review</h2>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {forwardedReviewItems.map((item) => {
-                      const reviewSwipeOffset = swipeOffsetByReviewId[item.id] ?? 0;
-                      return (
-                        <div key={item.id} className="relative overflow-hidden rounded-2xl">
-                          <div className="absolute inset-y-0 right-0 flex w-[92px] items-stretch">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                console.log("[travel-assistant] Swipe delete review button clicked.", {
-                                  reviewId: item.id,
-                                });
-                                requestDeleteConfirmation({
-                                  kind: "review",
-                                  id: item.id,
-                                  source: "review-card",
-                                });
-                              }}
-                              className="w-full bg-rose-600 px-3 text-sm font-semibold text-white hover:bg-rose-500"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                          <div
-                            className="relative z-10 transition-transform duration-200 ease-out"
-                            style={{ transform: `translateX(-${reviewSwipeOffset}px)` }}
-                            onTouchStart={(event) => handleCardTouchStart("review", item.id, event)}
-                            onTouchMove={handleCardTouchMove}
-                            onTouchEnd={handleCardTouchEnd}
-                            onTouchCancel={handleCardTouchEnd}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => openDrawer("review", item.id)}
-                              className="w-full rounded-2xl border border-amber-200 bg-amber-50 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-amber-500/40 dark:bg-amber-500/15"
-                            >
-                              <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">Pending review</p>
-                              <p className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
-                                {item.draft.type === "flight"
-                                  ? getReservationRouteLabel({ ...item.draft, id: item.id, source: "imported" })
-                                  : getFriendlyReservationTitle({ ...item.draft, id: item.id, source: "imported" })}
-                              </p>
-                              <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">{item.draft.provider}</p>
-                              <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                                {formatConsumerReservationDate(item.draft.localTime)} •{" "}
-                                {formatConsumerReservationTime(item.draft.localTime)}
-                              </p>
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              ) : null}
-
-              {tripTabFlightReservations.length === 0 &&
-              tripTabHotelReservations.length === 0 &&
-              forwardedReviewItems.length === 0 ? (
+              {consumerReservationsSorted.length === 0 ? (
                 <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                   <p className="font-semibold text-slate-900 dark:text-slate-100">No reservations yet</p>
                   <p className="mt-1">Forward any booking confirmation email to {emptyStateForwardAddress}</p>
@@ -7217,68 +6721,30 @@ export default function TravelAssistantPage() {
               ) : null}
 
               {hasDetectedFlight ? (
-                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                    Plan airport transport for each flight
-                  </p>
-                  <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
-                    Recommended buffer: arrive at least 2 hours before departure.
-                  </p>
-                  {flightsMissingAirportTransport > 0 ? (
-                    <p className="mt-2 text-xs font-semibold text-amber-700 dark:text-amber-200">
-                      {flightsMissingAirportTransport} flight
-                      {flightsMissingAirportTransport === 1 ? "" : "s"} still need airport transport selected.
-                    </p>
-                  ) : (
-                    <p className="mt-2 text-xs font-semibold text-emerald-700 dark:text-emerald-200">
-                      Airport transport saved for all current flights.
-                    </p>
-                  )}
-                  <div className="mt-3 space-y-3">
-                    {tripTabFlightReservations.map((reservation) => {
-                      const selectedTransport = getReservationAirportTransportChoice(reservation);
-                      return (
-                        <div
-                          key={`airport-transport-${reservation.id}`}
-                          className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/60"
+                airportTransportChoice ? (
+                  <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-100">
+                    Airport transport: {AIRPORT_TRANSPORT_LABEL[airportTransportChoice]} ✓
+                  </section>
+                ) : (
+                  <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">How are you getting to the airport?</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {AIRPORT_TRANSPORT_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => {
+                            setAirportTransportChoice(option.value);
+                            setToast(`Airport transport saved: ${AIRPORT_TRANSPORT_LABEL[option.value]}.`);
+                          }}
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
                         >
-                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                            {reservation.provider || "Airline pending"} • {getFlightNumberLabel(reservation)}
-                          </p>
-                          <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
-                            {getReservationRouteLabel(reservation)} • {formatConsumerReservationDate(reservation.localTime)} •{" "}
-                            {formatConsumerReservationTime(reservation.localTime)}
-                          </p>
-                          {selectedTransport ? (
-                            <p className="mt-2 text-xs font-semibold text-emerald-700 dark:text-emerald-200">
-                              Transport: {AIRPORT_TRANSPORT_LABEL[selectedTransport]} ✓
-                            </p>
-                          ) : (
-                            <p className="mt-2 text-xs font-semibold text-amber-700 dark:text-amber-200">
-                              How are you getting to this airport?
-                            </p>
-                          )}
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {AIRPORT_TRANSPORT_OPTIONS.map((option) => (
-                              <button
-                                key={`${reservation.id}-${option.value}`}
-                                type="button"
-                                onClick={() => saveAirportTransportForFlight(reservation.id, option.value)}
-                                className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${
-                                  selectedTransport === option.value
-                                    ? "border-emerald-400 bg-emerald-100 text-emerald-900 dark:border-emerald-400/60 dark:bg-emerald-500/20 dark:text-emerald-100"
-                                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-                                }`}
-                              >
-                                {option.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                )
               ) : null}
 
               {hasDetectedHotel ? (
@@ -7331,13 +6797,25 @@ export default function TravelAssistantPage() {
                 </div>
               </div>
               <div className="flex items-center justify-between gap-2">
-                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">All reservations</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">All reservations</h2>
+                  <button
+                    type="button"
+                    onClick={() => setReservationsCalendarView((v) => !v)}
+                    className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                      reservationsCalendarView
+                        ? "bg-cyan-500 text-white"
+                        : "border border-slate-300 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                    }`}
+                  >
+                    {reservationsCalendarView ? "📅 Calendar" : "📅 Calendar"}
+                  </button>
+                </div>
                 <div className="flex items-center gap-2">
                   <input
                     ref={ticketScanInputRef}
                     type="file"
                     accept="image/*"
-                    capture="environment"
                     onChange={handleTicketScanFileSelected}
                     className="hidden"
                   />
@@ -7370,13 +6848,17 @@ export default function TravelAssistantPage() {
                     className="w-full rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900 shadow-sm transition hover:bg-amber-100 dark:border-amber-500/50 dark:bg-amber-500/15 dark:text-amber-100 dark:hover:bg-amber-500/20"
                   >
                     <div className="flex items-start gap-2">
-                      <span aria-hidden className="mt-0.5 text-base">
-                        ⚠️
-                      </span>
-                      <span className="block break-words leading-snug">
-                        {reviewQueue.length} reservation{reviewQueue.length === 1 ? "" : "s"} are waiting in your review queue —
-                        tap to review now
-                      </span>
+                      <span aria-hidden className="mt-0.5 text-base">✋</span>
+                      <div>
+                        <p className="font-semibold leading-snug">
+                          {reviewQueue.length === 1 ? "A reservation needs your input" : `${reviewQueue.length} reservations need your input`}
+                        </p>
+                        {reviewQueue[0]?.reasons[0] ? (
+                          <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-200">
+                            {reviewQueue[0].reasons[0]}
+                          </p>
+                        ) : null}
+                      </div>
                     </div>
                   </button>
                   {consumerReviewQueueSession.open && activeConsumerReviewItem ? (
@@ -7427,7 +6909,39 @@ export default function TravelAssistantPage() {
                 </div>
               ) : null}
 
-              {consumerReservationsSorted.length === 0 ? (
+              {/* Next flight banner */}
+              {nextUpcomingFlight && !reservationsCalendarView ? (
+                <button
+                  type="button"
+                  onClick={() => openDrawer("reservation", nextUpcomingFlight.id)}
+                  className="w-full rounded-2xl bg-gradient-to-r from-[#0c2461] via-[#1a56b0] to-[#0ea5e9] px-4 py-3 text-left shadow-lg shadow-blue-500/20 transition hover:from-[#1a56b0] hover:to-sky-400"
+                >
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-sky-200">Next flight</p>
+                  <div className="mt-1 flex items-center justify-between gap-3">
+                    <p className="text-lg font-black text-white">
+                      {(nextUpcomingFlight as Reservation & { flightDepartureAirport?: string }).flightDepartureAirport || "DEP"}
+                      {" → "}
+                      {(nextUpcomingFlight as Reservation & { flightArrivalAirport?: string }).flightArrivalAirport || "ARR"}
+                    </p>
+                    <div className="text-right">
+                      <p className="text-sm font-bold text-white">
+                        {(nextUpcomingFlight as Reservation & { flightNumber?: string }).flightNumber ||
+                          nextUpcomingFlight.provider}
+                      </p>
+                      <p className="text-xs text-sky-200">
+                        {formatConsumerReservationDate(nextUpcomingFlight.localTime)} · {formatConsumerReservationTime(nextUpcomingFlight.localTime)}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              ) : null}
+
+              {reservationsCalendarView ? (
+                <TripCalendarView
+                  reservations={consumerReservationsSorted}
+                  onReservationTap={(id) => openDrawer("reservation", id)}
+                />
+              ) : consumerReservationsSorted.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                   <p className="text-xl font-semibold text-slate-900 dark:text-slate-100">No reservations yet</p>
                   <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-500/40 dark:bg-emerald-500/10">
@@ -7467,10 +6981,37 @@ export default function TravelAssistantPage() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {consumerReservationsSorted.map((reservation) => {
-                    const expanded = expandedConsumerReservationId === reservation.id;
-                    const statusMeta = getConsumerReservationStatus(reservation);
-                    const flightStatusCheck = flightStatusCheckByReservationId[reservation.id] ?? null;
+                  {(() => {
+                    const nowMs = new Date().getTime();
+                    const getFlightDepMs = (r: Reservation): number => {
+                      // Use flightDate (most reliable) > flightDepartureTime > localTime
+                      const rr = r as Reservation & { flightDepartureTime?: string };
+                      const fromFlightDate = r.flightDate ? parseDateInput(r.flightDate + " 23:59") : Number.NaN;
+                      const fromDepTime = rr.flightDepartureTime ? parseDateInput(rr.flightDepartureTime) : Number.NaN;
+                      const fromLocal = parseDateInput(r.localTime ?? "");
+                      // Pick the latest of the valid ones (most future = most correct)
+                      const candidates = [fromFlightDate, fromDepTime, fromLocal].filter(v => !Number.isNaN(v));
+                      return candidates.length > 0 ? Math.max(...candidates) : Number.NaN;
+                    };
+                    const active = consumerReservationsSorted.filter((r) => {
+                      if (r.type !== "flight") return true;
+                      const depMs = getFlightDepMs(r);
+                      return Number.isNaN(depMs) || nowMs - depMs <= 4 * 3_600_000;
+                    });
+                    const completed = consumerReservationsSorted.filter((r) => {
+                      if (r.type !== "flight") return false;
+                      const depMs = getFlightDepMs(r);
+                      return !Number.isNaN(depMs) && nowMs - depMs > 4 * 3_600_000;
+                    });
+                    const visibleList = showCompletedFlights ? consumerReservationsSorted : active;
+                    return (
+                      <>
+                        {visibleList.map((reservation) => {
+                          const expanded = expandedConsumerReservationId === reservation.id;
+                          const statusMeta = getConsumerReservationStatus(reservation);
+                          const flightStatusCheck = flightStatusCheckByReservationId[reservation.id] ?? null;
+                          const depMs = getFlightDepMs(reservation);
+                          const isPastFlight = reservation.type === "flight" && !Number.isNaN(depMs) && new Date().getTime() - depMs > 4 * 3_600_000;
                     const inlineFlightStatus =
                       reservation.type === "flight"
                         ? {
@@ -7513,7 +7054,9 @@ export default function TravelAssistantPage() {
                         : "";
                     const arrivalTimeLabel =
                       reservation.type === "flight"
-                        ? formatBoardingPassClock(reservation.flightArrivalTime ?? reservation.localTime)
+                        ? (reservation.flightArrivalTime
+                            ? formatBoardingPassClock(reservation.flightArrivalTime)
+                            : "")
                         : "";
                     const flightStatusLabel =
                       reservation.type === "flight"
@@ -7530,14 +7073,14 @@ export default function TravelAssistantPage() {
                     const hotelData = reservation.type === "hotel" ? resolveHotelCardData(reservation) : null;
                     const reservationSwipeOffset = swipeOffsetByReservationId[reservation.id] ?? 0;
                     return (
-                      <div key={reservation.id} className="relative overflow-hidden rounded-2xl">
-                        <div className="absolute inset-y-0 right-0 flex w-[92px] items-stretch">
+                      <div key={reservation.id} className={`relative overflow-hidden rounded-2xl transition-opacity ${isPastFlight ? "opacity-50" : ""}`}>
+                        <div
+                          className="absolute inset-y-0 right-0 flex w-[92px] items-stretch"
+                          style={{ opacity: reservationSwipeOffset > 0 ? 1 : 0 }}
+                        >
                           <button
                             type="button"
                             onClick={() => {
-                              console.log("[travel-assistant] Swipe delete button clicked.", {
-                                reservationId: reservation.id,
-                              });
                               requestDeleteConfirmation({
                                 kind: "reservation",
                                 id: reservation.id,
@@ -7560,7 +7103,7 @@ export default function TravelAssistantPage() {
                           <article
                             className={`overflow-hidden rounded-2xl border shadow-sm ${
                               reservation.type === "flight"
-                                ? "border-slate-700 bg-slate-950 text-slate-100"
+                                ? "border-slate-200 bg-slate-900 text-slate-100 dark:border-slate-700"
                                 : reservation.type === "hotel"
                                   ? "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50"
                                 : "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
@@ -7660,13 +7203,112 @@ export default function TravelAssistantPage() {
                                     Confirmation
                                   </span>
                                   <span className="font-semibold text-amber-950 dark:text-amber-50">
-                                    {reservation.confirmationCode || "Not set"}
+                                    {hotelData.confirmationCode}
                                   </span>
                                 </p>
                               </div>
                               <p className="mt-3 truncate text-xs text-amber-800 dark:text-amber-100">
                                 {reservation.location || "Location not set"}
                               </p>
+                            </div>
+                          ) : reservation.type === "dinner" ? (
+                            <div className="rounded-2xl border border-rose-200 bg-gradient-to-br from-rose-50 via-rose-50 to-white p-4 shadow-[0_8px_24px_-16px_rgba(190,18,60,0.4)] dark:border-rose-500/40 dark:from-rose-500/15 dark:via-rose-500/10 dark:to-slate-900">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate text-lg font-semibold text-rose-950 dark:text-rose-100">
+                                    {reservation.provider || reservation.title || "Restaurant"}
+                                  </p>
+                                  <p className="mt-1 text-xs font-semibold uppercase tracking-[0.16em] text-rose-600 dark:text-rose-300">
+                                    Dinner reservation
+                                  </p>
+                                </div>
+                                <span className={`max-w-24 rounded-full px-2 py-1 text-center text-[11px] font-semibold leading-tight ${statusMeta.className}`}>
+                                  <span className="block truncate">{statusMeta.label}</span>
+                                </span>
+                              </div>
+                              <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                                <p className="rounded-lg border border-rose-200 bg-white/70 px-3 py-2 dark:border-rose-400/40 dark:bg-slate-950/50">
+                                  <span className="block uppercase tracking-[0.13em] text-rose-600 dark:text-rose-300">Date</span>
+                                  <span className="font-semibold text-rose-950 dark:text-rose-50">{formatConsumerReservationDate(reservation.localTime)}</span>
+                                </p>
+                                <p className="rounded-lg border border-rose-200 bg-white/70 px-3 py-2 dark:border-rose-400/40 dark:bg-slate-950/50">
+                                  <span className="block uppercase tracking-[0.13em] text-rose-600 dark:text-rose-300">Time</span>
+                                  <span className="font-semibold text-rose-950 dark:text-rose-50">{formatConsumerReservationTime(reservation.localTime)}</span>
+                                </p>
+                              </div>
+                              <p className="mt-3 truncate text-xs text-rose-800 dark:text-rose-200">{reservation.location || "Location not set"}</p>
+                              {reservation.confirmationCode ? (
+                                <p className="mt-1 text-xs text-rose-700 dark:text-rose-300">Confirmation: <span className="font-semibold">{reservation.confirmationCode}</span></p>
+                              ) : null}
+                            </div>
+                          ) : reservation.type === "train" ? (
+                            <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 via-emerald-50 to-white p-4 shadow-[0_8px_24px_-16px_rgba(5,150,105,0.4)] dark:border-emerald-500/40 dark:from-emerald-500/15 dark:via-emerald-500/10 dark:to-slate-900">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate text-lg font-semibold text-emerald-950 dark:text-emerald-100">
+                                    {reservation.provider || "Train"}
+                                  </p>
+                                  <p className="mt-1 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">
+                                    Train ticket
+                                  </p>
+                                </div>
+                                <span className={`max-w-24 rounded-full px-2 py-1 text-center text-[11px] font-semibold leading-tight ${statusMeta.className}`}>
+                                  <span className="block truncate">{statusMeta.label}</span>
+                                </span>
+                              </div>
+                              <div className="mt-4 flex items-center gap-3">
+                                <p className="min-w-0 flex-1 truncate text-2xl font-bold text-emerald-950 dark:text-emerald-50">
+                                  {reservation.location.split("→")[0]?.trim() || "Origin"}
+                                </p>
+                                <span className="text-lg text-emerald-600 dark:text-emerald-400">→</span>
+                                <p className="min-w-0 flex-1 truncate text-right text-2xl font-bold text-emerald-950 dark:text-emerald-50">
+                                  {reservation.location.split("→")[1]?.trim() || "Destination"}
+                                </p>
+                              </div>
+                              <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 p-2 text-xs dark:border-emerald-500/30 dark:bg-emerald-500/10">
+                                <p className="truncate">
+                                  <span className="block text-[10px] uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-300">Departs</span>
+                                  <span className="font-semibold text-emerald-950 dark:text-emerald-50">{formatConsumerReservationTime(reservation.localTime)}</span>
+                                </p>
+                                <p className="truncate">
+                                  <span className="block text-[10px] uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-300">Train</span>
+                                  <span className="font-semibold text-emerald-950 dark:text-emerald-50">{(reservation as Reservation & { trainNumber?: string }).trainNumber || "--"}</span>
+                                </p>
+                                <p className="truncate text-right">
+                                  <span className="block text-[10px] uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-300">Ref</span>
+                                  <span className="font-semibold text-emerald-950 dark:text-emerald-50">{reservation.confirmationCode || "--"}</span>
+                                </p>
+                              </div>
+                            </div>
+                          ) : reservation.type === "ride" ? (
+                            <div className="rounded-2xl border border-sky-200 bg-gradient-to-br from-sky-50 via-sky-50 to-white p-4 shadow-[0_8px_24px_-16px_rgba(2,132,199,0.3)] dark:border-sky-500/40 dark:from-sky-500/15 dark:via-sky-500/10 dark:to-slate-900">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate text-lg font-semibold text-sky-950 dark:text-sky-100">
+                                    {reservation.provider || "Car service"}
+                                  </p>
+                                  <p className="mt-1 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700 dark:text-sky-300">
+                                    {reservation.provider?.toLowerCase().includes("rental") || reservation.title?.toLowerCase().includes("rental") ? "Car rental" : "Ride / Transfer"}
+                                  </p>
+                                </div>
+                                <span className={`max-w-24 rounded-full px-2 py-1 text-center text-[11px] font-semibold leading-tight ${statusMeta.className}`}>
+                                  <span className="block truncate">{statusMeta.label}</span>
+                                </span>
+                              </div>
+                              <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                                <p className="rounded-lg border border-sky-200 bg-white/70 px-3 py-2 dark:border-sky-400/40 dark:bg-slate-950/50">
+                                  <span className="block uppercase tracking-[0.13em] text-sky-700 dark:text-sky-300">Pickup</span>
+                                  <span className="font-semibold text-sky-950 dark:text-sky-50">{formatConsumerReservationDate(reservation.localTime)}</span>
+                                </p>
+                                <p className="rounded-lg border border-sky-200 bg-white/70 px-3 py-2 dark:border-sky-400/40 dark:bg-slate-950/50">
+                                  <span className="block uppercase tracking-[0.13em] text-sky-700 dark:text-sky-300">Time</span>
+                                  <span className="font-semibold text-sky-950 dark:text-sky-50">{formatConsumerReservationTime(reservation.localTime)}</span>
+                                </p>
+                              </div>
+                              <p className="mt-3 truncate text-xs text-sky-800 dark:text-sky-200">{reservation.location || "Location not set"}</p>
+                              {reservation.confirmationCode ? (
+                                <p className="mt-1 text-xs text-sky-700 dark:text-sky-300">Confirmation: <span className="font-semibold">{reservation.confirmationCode}</span></p>
+                              ) : null}
                             </div>
                           ) : (
                             <div className="flex items-center justify-between gap-3">
@@ -7700,9 +7342,6 @@ export default function TravelAssistantPage() {
                             <button
                               type="button"
                               onClick={() => {
-                                console.log("[travel-assistant] Check status button clicked.", {
-                                  reservationId: reservation.id,
-                                });
                                 void handleCheckFlightStatus(reservation.id);
                               }}
                               disabled={inlineFlightStatus?.busy === true}
@@ -7714,9 +7353,6 @@ export default function TravelAssistantPage() {
                             <button
                               type="button"
                               onClick={() => {
-                                console.log("[travel-assistant] Hotel check status button clicked.", {
-                                  reservationId: reservation.id,
-                                });
                                 void handleCheckFlightStatus(reservation.id);
                               }}
                               className="rounded-lg bg-cyan-500 px-3 py-1.5 font-semibold text-white transition hover:bg-cyan-400"
@@ -7727,9 +7363,6 @@ export default function TravelAssistantPage() {
                           <button
                             type="button"
                             onClick={() => {
-                              console.log("[travel-assistant] Delete button clicked.", {
-                                reservationId: reservation.id,
-                              });
                               requestDeleteConfirmation({
                                 kind: "reservation",
                                 id: reservation.id,
@@ -7756,8 +7389,15 @@ export default function TravelAssistantPage() {
                                 <span className="font-semibold">Status:</span> {hotelStatusSummary}
                               </p>
                             ) : inlineFlightStatus?.error ? (
-                              <p className="break-words text-rose-700 dark:text-rose-300">
-                                Status error: {inlineFlightStatus.error}
+                              <p className="break-words text-slate-500 dark:text-slate-400">
+                                {(() => {
+                                  const flightDateMs = Date.parse(reservation.flightDate ?? reservation.localTime ?? "");
+                                  const hoursUntilFlight = Number.isNaN(flightDateMs) ? 0 : (flightDateMs - Date.now()) / 3_600_000;
+                                  if (hoursUntilFlight > 36) {
+                                    return `Gate and live status appear 24–48 hrs before departure. Scheduled: ${formatConsumerReservationDate(reservation.localTime)} at ${formatConsumerReservationTime(reservation.localTime)}.`;
+                                  }
+                                  return `Status unavailable: ${inlineFlightStatus.error}`;
+                                })()}
                               </p>
                             ) : (
                               <div className="grid gap-1 sm:grid-cols-2">
@@ -7872,7 +7512,21 @@ export default function TravelAssistantPage() {
                         </div>
                       </div>
                     );
-                  })}
+                        })}
+                        {completed.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setShowCompletedFlights((v) => !v)}
+                            className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-800/50"
+                          >
+                            {showCompletedFlights
+                              ? `Hide ${completed.length} completed flight${completed.length === 1 ? '' : 's'}`
+                              : `Show ${completed.length} completed flight${completed.length === 1 ? '' : 's'}`}
+                          </button>
+                        ) : null}
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </section>
@@ -7882,8 +7536,36 @@ export default function TravelAssistantPage() {
               tripId={activeTripId}
               onCompletionChange={(percent) => setPackingCompletionPercent(percent)}
             />
+          ) : consumerTab === "family" ? (
+            <section className="space-y-4 pb-4">
+              <div>
+                <h2 className="text-lg font-bold">Family</h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Location sharing, trip sharing, and referrals</p>
+              </div>
+              {/* Share trip link */}
+              <button
+                type="button"
+                onClick={() => setShareModalOpen(true)}
+                className="w-full rounded-2xl border border-sky-200 bg-sky-50 p-4 text-left shadow-sm transition hover:bg-sky-100 dark:border-sky-500/30 dark:bg-sky-500/10 dark:hover:bg-sky-500/20"
+              >
+                <p className="font-semibold text-sky-800 dark:text-sky-200">🔗 Share trip with family</p>
+                <p className="mt-1 text-xs text-sky-600 dark:text-sky-400">Create a read-only link so family can follow your itinerary in real time.</p>
+              </button>
+              {/* Life360-style family tracker */}
+              <Suspense fallback={<div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 animate-pulse">Loading Family Tracker...</div>}>
+                <FamilyPanel
+                  isPremium={hasProAccess || isLifetime || isTrial}
+                  onUpgrade={() => openUpgradeModal("multi-trip", "Upgrade to Pro to unlock Family Tracker — real-time location sharing for your whole group.")}
+                  maptilerKey={process.env.NEXT_PUBLIC_MAPTILER_KEY ?? ""}
+                />
+              </Suspense>
+              {/* Invite a friend */}
+              <ReferralCard />
+            </section>
           ) : (
             <section className="space-y-3">
+              {/* Share trip */}
+              <ShareTripCard tripName={activeTrip?.name ?? "My Trip"} />
               <section
                 id="readiness-checklist-section"
                 ref={readinessChecklistSectionRef}
@@ -7897,27 +7579,31 @@ export default function TravelAssistantPage() {
                 </div>
                 <div className="mt-3 space-y-2">
                   {readinessItems.map((item) => (
-                    <label
+                    <div
                       key={item.id}
+                      role="checkbox"
+                      aria-checked={item.complete}
+                      tabIndex={0}
+                      onClick={() => handleChecklistToggle(item.id)}
+                      onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); handleChecklistToggle(item.id); } }}
                       className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 ${
                         item.complete
                           ? "border-emerald-500/40 bg-emerald-500/10"
                           : "border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-950/60"
                       }`}
                     >
-                      <input
-                        type="checkbox"
-                        checked={item.complete}
-                        onChange={() => handleChecklistToggle(item.id)}
-                        className="mt-1"
-                      />
+                      <div className={`mt-1 h-4 w-4 shrink-0 rounded border-2 flex items-center justify-center ${
+                        item.complete ? "border-emerald-500 bg-emerald-500" : "border-slate-400"
+                      }`}>
+                        {item.complete && <span className="text-white text-[10px] font-bold">✓</span>}
+                      </div>
                       <span className="flex-1">
                         <span className="block text-sm font-medium">{item.title}</span>
                         <span className="text-xs text-slate-500 dark:text-slate-400">
                           {item.category} {item.required ? "• Required" : "• Optional"}
                         </span>
                       </span>
-                    </label>
+                    </div>
                   ))}
                 </div>
               </section>
@@ -7944,6 +7630,36 @@ export default function TravelAssistantPage() {
                   </>
                 ) : (
                   <p className="mt-1 text-sm text-emerald-900 dark:text-emerald-100">Assigning your forwarding address...</p>
+                )}
+              </article>
+
+              {/* Push notifications */}
+              <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="font-semibold">Flight alerts</h2>
+                  {pushSubscribed && (
+                    <span className="rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-bold text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300">Active</span>
+                  )}
+                </div>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                  Get push alerts for gate changes, delays, and departure reminders — even when the app isn't open.
+                </p>
+                {!pushSubscribed ? (
+                  <button
+                    type="button"
+                    onClick={() => { void handleEnablePush(); }}
+                    disabled={pushBusy}
+                    className="mt-3 w-full rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-60"
+                  >
+                    {pushBusy ? "Enabling..." : "🔔 Enable flight alerts"}
+                  </button>
+                ) : (
+                  <p className="mt-3 text-sm font-semibold text-emerald-600 dark:text-emerald-400">🔔 Alerts are on</p>
+                )}
+                {pushMessage && (
+                  <p className={`mt-2 text-xs ${pushMessage.startsWith("✅") ? "text-emerald-700 dark:text-emerald-300" : "text-rose-600 dark:text-rose-400"}`}>
+                    {pushMessage}
+                  </p>
                 )}
               </article>
 
@@ -8005,12 +7721,13 @@ export default function TravelAssistantPage() {
           )}
         </div>
 
-        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-3 py-2 shadow-2xl backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 md:hidden">
-          <div className="mx-auto grid max-w-md grid-cols-4 gap-1 text-xs font-semibold">
+        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--border-default)] bg-[var(--bg-card)]/95 px-3 py-2 shadow-2xl backdrop-blur md:hidden">
+          <div className="mx-auto grid max-w-md grid-cols-5 gap-0.5 text-[11px] font-semibold">
             {([
               ["trip", "Trip"],
               ["reservations", "Reservations"],
               ["packing", "Packing"],
+              ["family", "Family"],
               ["more", "More"],
             ] as const).map(([tab, label]) => (
               <button
@@ -8049,6 +7766,45 @@ export default function TravelAssistantPage() {
           currentPlan={billingStatusPlan}
           onClose={closeUpgradeModal}
         />
+        {travelDayOpen && reservations.length > 0 && (
+          <TravelDayView
+            flights={reservations
+              .filter(r => r.type === "flight")
+              .sort((a, b) => {
+                const aMs = Date.parse((a as Record<string,unknown>).localTime as string ?? "");
+                const bMs = Date.parse((b as Record<string,unknown>).localTime as string ?? "");
+                return aMs - bMs;
+              })
+              .map(r => ({
+                id: r.id,
+                flightNumber: (r as Record<string,unknown>).flightNumber as string | undefined,
+                flightAirline: (r as Record<string,unknown>).flightAirline as string | undefined,
+                flightDepartureAirport: (r as Record<string,unknown>).flightDepartureAirport as string | undefined,
+                flightArrivalAirport: (r as Record<string,unknown>).flightArrivalAirport as string | undefined,
+                localTime: (r as Record<string,unknown>).localTime as string,
+                timezone: (r as Record<string,unknown>).timezone as string | undefined,
+                flightArrivalTime: (r as Record<string,unknown>).flightArrivalTime as string | undefined,
+                confirmationCode: (r as Record<string,unknown>).confirmationCode as string | undefined,
+                provider: (r as Record<string,unknown>).provider as string | undefined,
+              }))}
+            departureDate={activeTrip?.startDate ?? new Date().toISOString().slice(0, 10)}
+            tripName={activeTrip?.name ?? "My Trip"}
+            transport={airportTransportChoice}
+            onTransportChange={(t) => {
+              setAirportTransportChoice(t);
+              queueMutation("Airport transport updated.");
+            }}
+            onClose={() => setTravelDayOpen(false)}
+          />
+        )}
+        {shareModalOpen && (
+          <ShareModal
+            open={shareModalOpen}
+            tripId={activeTripId}
+            tripName={activeTrip?.name ?? null}
+            onClose={() => setShareModalOpen(false)}
+          />
+        )}
         {manualReservationModalOpen ? (
           <ManualReservationEntryModal
             familyMembers={familyMembers.map((member) => ({ id: member.id, name: member.name }))}
@@ -8078,7 +7834,7 @@ export default function TravelAssistantPage() {
   }
 
   return (
-    <main className="relative min-h-screen overflow-x-hidden bg-slate-950 text-slate-100">
+    <main className="relative min-h-screen overflow-x-hidden bg-[var(--bg-base)] text-[var(--text-primary)]">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_10%,rgba(56,189,248,0.14),transparent_45%),radial-gradient(circle_at_85%_25%,rgba(129,140,248,0.18),transparent_42%),radial-gradient(circle_at_50%_100%,rgba(34,197,94,0.08),transparent_45%)]" />
       <div className="relative z-10 mx-auto max-w-[1400px] space-y-5 px-3 py-5 sm:space-y-6 sm:px-4 sm:py-6 md:px-6">
         <header className="space-y-3">
@@ -8086,7 +7842,7 @@ export default function TravelAssistantPage() {
             <TripSwitcher
               trips={trips.map((trip) => ({
                 id: trip.id,
-                name: resolveTripDisplayName(trip.name, trip.destination),
+                name: trip.name,
                 destination: trip.destination,
                 startDate: trip.startDate,
                 endDate: trip.endDate,
@@ -8117,7 +7873,7 @@ export default function TravelAssistantPage() {
               <TripSearch
                 trips={trips.map((trip) => ({
                   id: trip.id,
-                  name: resolveTripDisplayName(trip.name, trip.destination),
+                  name: trip.name,
                   destination: trip.destination,
                   startDate: trip.startDate,
                   endDate: trip.endDate,
@@ -8180,8 +7936,8 @@ export default function TravelAssistantPage() {
         />
         <TripOrientationCard
           travelerName={viewerDisplayName}
-          destination={consumerTripDestination ?? activeTrip?.destination ?? "your trip"}
-          tripDaysAway={consumerTripDaysAway}
+          destination={activeTrip?.destination ?? "your trip"}
+          tripDaysAway={tripDaysAway}
           statusTitle={consumerStatus.title}
           statusDetail={consumerStatus.detail}
           nextActionLabel={consumerPrimaryAction?.label ?? nextStageAction}
@@ -8224,8 +7980,8 @@ export default function TravelAssistantPage() {
         {shouldRenderMobilePanel("essentials") ? (
           <ConciergePanel
             tripId={activeTripId}
-            tripName={consumerTripName}
-            destination={consumerTripDestination ?? activeTrip?.destination ?? ""}
+            tripName={activeTrip?.name ?? "Current trip"}
+            destination={activeTrip?.destination ?? ""}
             billingPlan={billingBasePlan}
             showUpsellWhenUnavailable={!hasProAccess}
             reservations={reservations}
@@ -8832,27 +8588,7 @@ export default function TravelAssistantPage() {
             </p>
           </article>
 
-          <Suspense fallback={<LazyPanelSkeleton label="Loading family panel..." />}>
-            <FamilyPanel
-              showFamilyMap={showFamilyMap}
-              onShowFamilyMapChange={setShowFamilyMap}
-              selectedFamilyMemberId={selectedFamilyMember.id}
-              onSelectedFamilyMemberIdChange={setSelectedFamilyMemberId}
-              selectedFamilyMember={selectedFamilyMember}
-              familyMembers={familyMembers}
-              canViewerSeeMember={canViewerSeeMember}
-              nowMs={nowMs}
-              canSendLocationNow={canSendLocationNow}
-              onToggleMemberSharing={toggleMemberSharing}
-              onToggleMemberVisibility={toggleMemberVisibility}
-              visibleFamilyMarkers={visibleFamilyMarkers}
-              formatClock={formatClock}
-              onSyncGoogleCalendar={handleManualCalendarSync}
-              calendarSyncInFlight={calendarSyncInFlight}
-              calendarSyncMessage={calendarSyncMessage}
-              calendarSyncTone={calendarSyncTone}
-            />
-          </Suspense>
+          {/* FamilyPanel now lives in the More tab with real location sharing */}
           </section>
         ) : (
           <section className="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 text-xs text-slate-400">

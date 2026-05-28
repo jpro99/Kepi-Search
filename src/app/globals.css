@@ -1,32 +1,51 @@
 @import "tailwindcss";
 
+/* ─── Kepi Design Tokens ─────────────────────────────────────────────────── */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg-base:        #f8f9fc;
+  --bg-card:        #ffffff;
+  --bg-muted:       #f0f2f7;
+  --text-primary:   #0f1623;
+  --text-secondary: #4a5568;
+  --text-muted:     #8892a4;
+  --border-default: #e2e8f3;
+  --brand:          #06b6d4;
+  --background:     var(--bg-base);
+  --foreground:     var(--text-primary);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+.dark {
+  --bg-base:        #0d1117;
+  --bg-card:        #161b22;
+  --bg-muted:       #1c2330;
+  --text-primary:   #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted:     #6e7681;
+  --border-default: #30363d;
+  --brand:          #22d3ee;
+  --background:     var(--bg-base);
+  --foreground:     var(--text-primary);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* ─── Base ──────────────────────────────────────────────────────────────── */
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  /* Use next/font Geist so preloaded woff2 files are applied immediately (avoids preload warnings). */
+  background: var(--bg-base);
+  color: var(--text-primary);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
+/* ─── Focus ─────────────────────────────────────────────────────────────── */
+
 :focus-visible {
-  outline: 2px solid #22d3ee;
+  outline: 2px solid var(--brand);
   outline-offset: 2px;
 }
+
+/* ─── Scrollbar (dark mode) ─────────────────────────────────────────────── */
+
+.dark ::-webkit-scrollbar { width: 4px; height: 4px; }
+.dark ::-webkit-scrollbar-track { background: transparent; }
+.dark ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }

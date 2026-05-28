@@ -172,6 +172,7 @@ function isDuplicateReservation(
     localTime?: string;
     location?: string;
     confirmationCode?: string;
+    flightNumber?: string;
   },
   candidate: {
     type?: string;
@@ -179,19 +180,57 @@ function isDuplicateReservation(
     localTime?: string;
     location?: string;
     confirmationCode?: string;
+    flightNumber?: string;
   },
 ): boolean {
   const existingCode = normalizeDuplicateValue(existing.confirmationCode);
   const candidateCode = normalizeDuplicateValue(candidate.confirmationCode);
-  if (existingCode.length > 0 && candidateCode.length > 0 && existingCode === candidateCode) {
-    return true;
-  }
+  const existingFlight = normalizeDuplicateValue(existing.flightNumber);
+  const candidateFlight = normalizeDuplicateValue(candidate.flightNumber);
+
+  // For flights: same confirmation code is NOT enough — multi-leg itineraries
+  // share one booking reference but are different flights. Require flight number
+  // to also match, or fall back to departure time if flight number is missing.
   const existingType = normalizeDuplicateValue(existing.type);
   const candidateType = normalizeDuplicateValue(candidate.type);
-  const existingProvider = normalizeDuplicateValue(existing.provider);
-  const candidateProvider = normalizeDuplicateValue(candidate.provider);
+  if (existingCode.length > 0 && candidateCode.length > 0 && existingCode === candidateCode) {
+    if (existingType === "flight" || candidateType === "flight") {
+      // Both have flight numbers — they must match to be a duplicate
+      if (existingFlight.length > 0 && candidateFlight.length > 0) {
+        return existingFlight === candidateFlight;
+      }
+      // No flight numbers — fall back to departure time match
+      const existingTime = normalizeDuplicateValue(existing.localTime);
+      const candidateTime = normalizeDuplicateValue(candidate.localTime);
+      if (existingTime.length > 0 && candidateTime.length > 0) {
+        return existingTime === candidateTime;
+      }
+      // Can't distinguish — treat as duplicate to be safe
+      return true;
+    }
+    // Non-flight: confirmation code match is a duplicate
+    return true;
+  }
+  if (existingType !== candidateType) {
+    return false;
+  }
   const existingLocalTime = normalizeDuplicateValue(existing.localTime);
   const candidateLocalTime = normalizeDuplicateValue(candidate.localTime);
+  // For hotels: match on check-in date (first 10 chars) + location
+  // Never match on provider since it's often "Gmail" or similar
+  if (existingType === "hotel") {
+    const existingDate = existingLocalTime.slice(0, 10);
+    const candidateDate = candidateLocalTime.slice(0, 10);
+    const existingLocation = normalizeDuplicateValue(existing.location);
+    const candidateLocation = normalizeDuplicateValue(candidate.location);
+    if (existingDate.length === 10 && candidateDate.length === 10 && existingDate === candidateDate &&
+        existingLocation.length > 0 && candidateLocation.length > 0 && existingLocation === candidateLocation) {
+      return true;
+    }
+    return false;
+  }
+  const existingProvider = normalizeDuplicateValue(existing.provider);
+  const candidateProvider = normalizeDuplicateValue(candidate.provider);
   const existingLocation = normalizeDuplicateValue(existing.location);
   const candidateLocation = normalizeDuplicateValue(candidate.location);
   const hasFullCompositeSignal =
@@ -222,6 +261,7 @@ function isDuplicateAgainstReviewQueue(
     localTime?: string;
     location?: string;
     confirmationCode?: string;
+    flightNumber?: string;
   },
 ): boolean {
   if (!Array.isArray(reviewQueue)) {
@@ -240,6 +280,7 @@ function isDuplicateAgainstReviewQueue(
         localTime: typeof draft.localTime === "string" ? draft.localTime : "",
         location: typeof draft.location === "string" ? draft.location : "",
         confirmationCode: typeof draft.confirmationCode === "string" ? draft.confirmationCode : "",
+        flightNumber: typeof draft.flightNumber === "string" ? draft.flightNumber : "",
       },
       candidate,
     );
@@ -577,7 +618,6 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
     let nextQueue = [...(targetTrip.reviewQueue ?? [])];
     let acceptedDraftCount = 0;
     let duplicateDraftCount = 0;
-    const sourceSubject = parsed.data.subject?.trim() || "Forwarded email";
     for (const parserDraftRecord of parserDraftRecords) {
       const parserType =
         parserDraftRecord.type === "flight" ||
@@ -598,12 +638,52 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
       const parserAssignedTo = Array.isArray(parserAssignedToRaw)
         ? parserAssignedToRaw.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
         : [];
-      const parserFlightNumber =
+      const rawFlightNumber =
         typeof parserDraftRecord.flightNumber === "string"
-          ? parserDraftRecord.flightNumber
+          ? parserDraftRecord.flightNumber.trim()
           : typeof parserDraftRecord.flight_number === "string"
-            ? parserDraftRecord.flight_number
+            ? parserDraftRecord.flight_number.trim()
             : "";
+
+      // Resolve the airline name — never use email provider names (Gmail, Yahoo, etc.)
+      // as the airline. Fall back to the 2-letter IATA prefix from the flight number.
+      const EMAIL_PROVIDER_NAMES = new Set(["gmail", "yahoo", "outlook", "hotmail", "icloud", "me", "aol"]);
+      const rawAirline = parserProvider.trim();
+      const isEmailProviderName = EMAIL_PROVIDER_NAMES.has(rawAirline.toLowerCase());
+
+      // Infer IATA prefix if AI returned just the number (e.g. "832" → "AS832")
+      const AIRLINE_IATA_MAP: Record<string, string> = {
+        "alaska airlines": "AS", "alaska": "AS",
+        "hawaiian airlines": "HA", "hawaiian": "HA",
+        "united airlines": "UA", "united": "UA",
+        "american airlines": "AA", "american": "AA",
+        "delta air lines": "DL", "delta": "DL",
+        "southwest airlines": "WN", "southwest": "WN",
+        "jetblue": "B6",
+        "korean air": "KE",
+        "ana": "NH", "all nippon airways": "NH",
+        "japan airlines": "JL", "jal": "JL",
+        "lufthansa": "LH", "british airways": "BA",
+        "air france": "AF", "emirates": "EK",
+        "cathay pacific": "CX", "singapore airlines": "SQ",
+        "qantas": "QF", "air canada": "AC",
+      };
+      const hasIataPrefix = /^[A-Z]{2}\d/i.test(rawFlightNumber);
+      let parserFlightNumber = rawFlightNumber.toUpperCase();
+      if (!hasIataPrefix && /^\d+$/.test(rawFlightNumber)) {
+        const lowerProvider = rawAirline.toLowerCase();
+        for (const [name, code] of Object.entries(AIRLINE_IATA_MAP)) {
+          if (lowerProvider.includes(name)) {
+            parserFlightNumber = `${code}${rawFlightNumber}`;
+            break;
+          }
+        }
+      }
+
+      const iataPrefix = parserFlightNumber.slice(0, 2).toUpperCase();
+      const resolvedAirline = parserType === "flight"
+        ? (isEmailProviderName && iataPrefix.length === 2 ? `${iataPrefix} Airlines` : rawAirline || "Unknown Airline")
+        : "";
 
       const parsedReservation = {
         id: `res-email-${generateId()}`,
@@ -621,17 +701,56 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
         notes: parserNotesText,
         source: "imported" as const,
         flightNumber: parserType === "flight" ? parserFlightNumber : "",
-        flightAirline: parserType === "flight" ? parserProvider : "",
+        flightAirline: resolvedAirline,
         flightDate: parserType === "flight" ? parserLocalTime.slice(0, 10) : "",
+        flightDepartureAirport: parserType === "flight"
+          ? (typeof parserDraftRecord.departureAirport === "string" ? parserDraftRecord.departureAirport.trim().toUpperCase().slice(0, 4) : "")
+          : "",
+        flightArrivalAirport: parserType === "flight"
+          ? (typeof parserDraftRecord.arrivalAirport === "string" ? parserDraftRecord.arrivalAirport.trim().toUpperCase().slice(0, 4) : "")
+          : "",
+        flightDepartureTime: parserType === "flight" && parserLocalTime ? parserLocalTime : "",
+        checkOutDate: parserType === "hotel"
+          ? (typeof parserDraftRecord.checkOutDate === "string" ? parserDraftRecord.checkOutDate.trim().slice(0, 10) : "")
+          : "",
       };
 
-      const hasMatchingReservation = nextReservations.some((reservation) =>
+      const matchingReservationIndex = nextReservations.findIndex((reservation) =>
         isDuplicateReservation(reservation, parsedReservation),
       );
+      const hasMatchingReservation = matchingReservationIndex !== -1;
+      // Only check queue for duplicates (not adding to queue anymore, but keep for safety)
       const hasMatchingQueuedDraft = isDuplicateAgainstReviewQueue(nextQueue, parsedReservation);
       if (hasMatchingReservation || hasMatchingQueuedDraft) {
+        // For hotels: merge new info into existing reservation rather than dropping
+        // This handles the case where user forwards the same email again with more info
+        if (hasMatchingReservation && parserType === "hotel") {
+          const existing = nextReservations[matchingReservationIndex];
+          const existingRecord = existing as typeof existing & Record<string, unknown>;
+          const hasCheckout = typeof existingRecord.checkOutDate === "string" && (existingRecord.checkOutDate as string).trim().length > 0;
+          const hasConfirmation = existing.confirmationCode.trim().length > 0;
+          if (!hasCheckout || !hasConfirmation) {
+            // Merge: fill in missing fields from the new parse
+            nextReservations = nextReservations.map((r, idx) => {
+              if (idx !== matchingReservationIndex) return r;
+              return {
+                ...r,
+                confirmationCode: r.confirmationCode.trim() || parserConfirmationCode,
+                notes: [r.notes, parserNotesText].filter(Boolean).join(" "),
+                ...(!hasCheckout && parserLocalTime ? {} : {}),
+              };
+            });
+            routeLogger.info("Duplicate hotel reservation merged with new info.", {
+              userId: targetUserId,
+              tripId: targetTrip.id,
+              provider: parserProvider || null,
+            });
+            acceptedDraftCount += 1;
+            continue;
+          }
+        }
         duplicateDraftCount += 1;
-        routeLogger.info("Duplicate forwarded reservation dropped before review queue.", {
+        routeLogger.info("Duplicate forwarded reservation dropped.", {
           userId: targetUserId,
           tripId: targetTrip.id,
           confirmationCode: parserConfirmationCode || null,
@@ -643,48 +762,73 @@ async function processEmailForwardWebhook(req: Request, requestId: string): Prom
         continue;
       }
 
-      nextReservations = [parsedReservation, ...nextReservations];
-      const reviewItem = {
-        id: `review-email-${generateId()}`,
-        reasons:
-          parserNotes.length > 0
-            ? parserNotes
-            : ["Forwarded email parsed and queued for confirmation."],
-        impact:
-          parserParsingStatus === "needs-user-input"
-            ? "We need your help with this one"
-            : parserParsingStatus === "needs-review"
-              ? "A few fields need review before publish."
-              : "Ready for quick confirmation.",
-        sourceEmailSubject: sourceSubject,
-        draft: {
+      // Smart routing: high confidence = auto-accept. Low confidence or missing
+      // critical fields = review queue so user can fix the specific problem.
+      const isCriticalFieldMissing = !parserLocalTime.trim() ||
+        (parserType === "flight" && !parserFlightNumber.trim());
+      const needsReview = isCriticalFieldMissing ||
+        parserParsingStatus === "needs-user-input" ||
+        parserConfidenceScore < 40;
+
+      if (needsReview) {
+        const missingDesc = parserMissingFields.length > 0
+          ? `Could not read: ${parserMissingFields.join(", ")}. Please confirm these fields.`
+          : isCriticalFieldMissing
+            ? "We could not find the date or flight number. Please fill them in."
+            : "Please confirm this reservation looks correct.";
+        const reviewItem = {
+          id: `review-email-${generateId()}`,
+          reasons: [missingDesc],
+          impact: "Tap 'Open details' to fill in the missing info and save.",
+          sourceEmailSubject: parsed.data.subject?.trim() || "Forwarded email",
+          draft: {
+            type: parserType,
+            title: parserTitle,
+            provider: parserProvider,
+            localTime: parserLocalTime,
+            timezone: parserTimezone || "Etc/UTC",
+            location: parserLocation,
+            confirmationCode: parserConfirmationCode,
+            assignedTo: defaultAssignees,
+            stage: targetTrip.stage,
+            critical: parserType === "flight" || parserType === "train" || parserType === "ride",
+            confidence: confidenceToDraftValue(parserConfidenceScore),
+            notes: parserNotesText,
+            flightNumber: parserType === "flight" ? parserFlightNumber : "",
+            flightAirline: resolvedAirline,
+            flightDate: parserType === "flight" ? parserLocalTime.slice(0, 10) : "",
+          },
+          sourceChannel: "email-forward" as const,
+          parseConfidenceScore: parserConfidenceScore,
+          parsingStatus: parserParsingStatus,
+          missingFields: parserMissingFields,
+          originalEmailText: parserOriginalEmailText,
+          hasPdfAttachment: parserHasPdfAttachment,
+          imageBasedEmail: parserImageBasedEmail,
+          reviewStatus: "pending" as const,
+          parserNotes,
+        };
+        nextQueue = [reviewItem, ...nextQueue];
+        routeLogger.info("Forwarded reservation needs review.", {
+          userId: targetUserId,
+          tripId: targetTrip.id,
           type: parserType,
-          title: parserTitle,
+          confidenceScore: parserConfidenceScore,
+          missingFields: parserMissingFields,
+          isCriticalFieldMissing,
+        });
+      } else {
+        nextReservations = [parsedReservation, ...nextReservations];
+        routeLogger.info("Forwarded reservation auto-accepted.", {
+          userId: targetUserId,
+          tripId: targetTrip.id,
+          type: parserType,
           provider: parserProvider,
+          flightNumber: parserFlightNumber || null,
           localTime: parserLocalTime,
-          timezone: parserTimezone || "Etc/UTC",
-          location: parserLocation,
-          confirmationCode: parserConfirmationCode,
-          assignedTo: defaultAssignees,
-          stage: targetTrip.stage,
-          critical: parserType === "flight" || parserType === "train" || parserType === "ride",
-          confidence: confidenceToDraftValue(parserConfidenceScore),
-          notes: parserNotesText,
-          flightNumber: parserType === "flight" ? parserFlightNumber : "",
-          flightAirline: parserType === "flight" ? parserProvider : "",
-          flightDate: parserType === "flight" ? parserLocalTime.slice(0, 10) : "",
-        },
-        sourceChannel: "email-forward" as const,
-        parseConfidenceScore: parserConfidenceScore,
-        parsingStatus: parserParsingStatus,
-        missingFields: parserMissingFields,
-        originalEmailText: parserOriginalEmailText,
-        hasPdfAttachment: parserHasPdfAttachment,
-        imageBasedEmail: parserImageBasedEmail,
-        reviewStatus: parserParsingStatus === "needs-user-input" ? "incomplete" : "pending",
-        parserNotes,
-      };
-      nextQueue = [reviewItem, ...nextQueue];
+          confirmationCode: parserConfirmationCode || null,
+        });
+      }
       acceptedDraftCount += 1;
     }
 

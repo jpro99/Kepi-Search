@@ -1,3 +1,4 @@
+// build: invite-email-ui
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
 import createBundleAnalyzer from "@next/bundle-analyzer";
@@ -28,13 +29,13 @@ const contentSecurityPolicy = [
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.clerk.com https://*.clerk.accounts.dev https://*.sentry-cdn.com",
-  "connect-src 'self' ws: wss: https://*.clerk.com https://*.clerk.accounts.dev https://*.ingest.sentry.io https://*.sentry.io https://api.inngest.com https://*.inngest.com",
+  "connect-src 'self' ws: wss: https://*.clerk.com https://*.clerk.accounts.dev https://*.ingest.sentry.io https://*.sentry.io https://api.inngest.com https://*.inngest.com https://api.maptiler.com https://*.maptiler.com",
   "frame-src 'self' https://*.clerk.com https://*.clerk.accounts.dev",
   "worker-src 'self' blob:",
 ].join("; ");
 
 const nextConfig: NextConfig = {
-  reactCompiler: true,
+  reactCompiler: false, // disabled — causes TDZ crash with Turbopack in Next 16.2.4
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -45,6 +46,7 @@ const nextConfig: NextConfig = {
   },
   experimental: {
     optimizePackageImports: ["lucide-react", "recharts"],
+    clientTraceMetadata: [],
   },
   ...(isCapacitorBuild
     ? {}

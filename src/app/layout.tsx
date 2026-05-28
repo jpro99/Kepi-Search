@@ -21,9 +21,9 @@ function resolveSiteUrl(): URL {
     process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
   const withProtocol = rawBaseUrl?.startsWith("http") ? rawBaseUrl : rawBaseUrl ? `https://${rawBaseUrl}` : null;
   try {
-    return new URL(withProtocol ?? "https://kepi.travel");
+    return new URL(withProtocol ?? "https://kepitravel.com");
   } catch {
-    return new URL("https://kepi.travel");
+    return new URL("https://kepitravel.com");
   }
 }
 
@@ -32,12 +32,12 @@ const siteUrl = resolveSiteUrl();
 export const metadata: Metadata = {
   metadataBase: siteUrl,
   title: {
-    default: "Kepi Travel Assistant",
-    template: "%s | Kepi Travel Assistant",
+    default: "Kepi Travel",
+    template: "%s | Kepi Travel",
   },
   description:
     "Never miss a flight. Never lose a reservation. Kepi is your adaptive travel assistant from packing to landing.",
-  applicationName: "Kepi Travel Assistant",
+  applicationName: "Kepi Travel",
   keywords: [
     "travel assistant",
     "itinerary app",
@@ -64,7 +64,7 @@ export const metadata: Metadata = {
     },
   },
   openGraph: {
-    title: "Kepi Travel Assistant",
+    title: "Kepi Travel",
     description:
       "Never miss a flight. Never lose a reservation. Adaptive trip execution from packing to landing.",
     url: "/",
@@ -82,7 +82,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Kepi Travel Assistant",
+    title: "Kepi Travel",
+    creator: "@kepitravel",
     description:
       "Never miss a flight. Never lose a reservation. Adaptive trip execution from packing to landing.",
     images: ["/og-image.png"],
@@ -109,10 +110,20 @@ export default async function RootLayout({
     <html
       lang={locale}
       className={`${GeistSans.variable} ${GeistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
       <head>
+        {/* Inline script — runs before React hydration to prevent theme flash */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var _ktheme=localStorage.getItem('kepi-theme');var _kdark=_ktheme==='dark'||(_ktheme===null&&window.matchMedia('(prefers-color-scheme:dark)').matches);if(_kdark)document.documentElement.classList.add('dark');}catch(e){}})();`,
+          }}
+        />
         <link rel="manifest" href="/manifest.json" />
-        <meta name="theme-color" content="#1a1a2e" />
+        {process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ? (
+          <meta name="vapid-public-key" content={process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY} />
+        ) : null}
+        <meta name="theme-color" content="#0ea5e9" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="Kepi" />

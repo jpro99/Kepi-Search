@@ -34,45 +34,35 @@ const FlightLookupQuerySchema = z.object({
   flightDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u),
 });
 
-const FlightLookupItemSchema = z.object({
-  flight: z.object({
-    iata: z.string().trim().min(1).nullable().optional(),
-  }),
-  airline: z.object({
-    name: z.string().trim().min(1).nullable().optional(),
-  }),
-  departure: z.object({
-    iata: z.string().trim().min(1).nullable().optional(),
-    airport: z.string().trim().min(1).nullable().optional(),
-    scheduled: z.string().trim().min(1).nullable().optional(),
-    estimated: z.string().trim().min(1).nullable().optional(),
-    terminal: z.string().trim().min(1).nullable().optional(),
-    gate: z.string().trim().min(1).nullable().optional(),
-    delay: z.number().finite().nullable().optional(),
-  }),
-  arrival: z.object({
-    iata: z.string().trim().min(1).nullable().optional(),
-    airport: z.string().trim().min(1).nullable().optional(),
-    scheduled: z.string().trim().min(1).nullable().optional(),
-    estimated: z.string().trim().min(1).nullable().optional(),
-    terminal: z.string().trim().min(1).nullable().optional(),
-    gate: z.string().trim().min(1).nullable().optional(),
-    delay: z.number().finite().nullable().optional(),
-  }),
-  flight_status: z.string().trim().min(1).optional(),
+const AeroDataBoxTimeSchema = z.object({
+  local: z.string().trim().optional().nullable(),
+  utc: z.string().trim().optional().nullable(),
 });
 
-const FlightLookupEnvelopeSchema = z.object({
-  data: z.array(FlightLookupItemSchema).default([]),
-  error: z
-    .object({
-      code: z.union([z.string(), z.number()]).optional(),
-      message: z.string().optional(),
-    })
-    .optional(),
+const AeroDataBoxAirportSchema = z.object({
+  iata: z.string().trim().optional().nullable(),
+  name: z.string().trim().optional().nullable(),
 });
 
-const AVIATIONSTACK_BASE_URL = "https://api.aviationstack.com/v1/flights";
+const AeroDataBoxEndpointSchema = z.object({
+  airport: AeroDataBoxAirportSchema.optional().nullable(),
+  scheduledTime: AeroDataBoxTimeSchema.optional().nullable(),
+  estimatedTime: AeroDataBoxTimeSchema.optional().nullable(),
+  actualTime: AeroDataBoxTimeSchema.optional().nullable(),
+  terminal: z.string().trim().optional().nullable(),
+  gate: z.string().trim().optional().nullable(),
+  delay: z.number().finite().optional().nullable(),
+});
+
+const AeroDataBoxFlightSchema = z.object({
+  number: z.string().trim().optional().nullable(),
+  status: z.string().trim().optional().nullable(),
+  airline: z.object({ name: z.string().trim().optional().nullable() }).optional().nullable(),
+  departure: AeroDataBoxEndpointSchema.optional().nullable(),
+  arrival: AeroDataBoxEndpointSchema.optional().nullable(),
+});
+
+const AERODATABOX_BASE_URL = "https://prod.api.market/api/v1/aedbx/aerodatabox";
 const TICKET_SCAN_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 type ScannedReservationType = "flight" | "hotel" | "train" | "ride" | "dinner";
@@ -99,52 +89,39 @@ function pickDisruptionUpdate(updates: readonly TravelUpdateEvent[]): TravelUpda
   );
 }
 
-function normalizeLookupValue(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/gu, " ");
-}
-
-function normalizeFlightCode(value: string): string {
-  return value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, "");
-}
-
-function parseDateMs(value: string | null | undefined): number {
-  if (!value) return Number.NaN;
-  return Date.parse(value);
-}
-
-function chooseLookupResult(
-  snapshots: readonly z.infer<typeof FlightLookupItemSchema>[],
-  expectedFlightCode: string,
-  expectedAirline: string,
-  expectedDate: string,
-): z.infer<typeof FlightLookupItemSchema> | null {
-  const normalizedFlightCode = normalizeFlightCode(expectedFlightCode);
-  const normalizedAirline = normalizeLookupValue(expectedAirline);
-  const normalizedDate = expectedDate.trim();
-
-  const exactFlightMatches = snapshots.filter(
-    (snapshot) => normalizeFlightCode(snapshot.flight.iata ?? "") === normalizedFlightCode,
-  );
-  const airlineMatches = exactFlightMatches.filter((snapshot) =>
-    normalizeLookupValue(snapshot.airline.name ?? "").includes(normalizedAirline),
-  );
-  const pool = airlineMatches.length > 0 ? airlineMatches : exactFlightMatches.length > 0 ? exactFlightMatches : snapshots;
-  if (pool.length === 0) {
-    return null;
+function chooseBestFlight(
+  flights: z.infer<typeof AeroDataBoxFlightSchema>[],
+): z.infer<typeof AeroDataBoxFlightSchema> | null {
+  if (flights.length === 0) return null;
+  // Prefer flights with live status over unknown/scheduled
+  const priority = ["EnRoute", "Boarding", "GateClosed", "Departed", "Approaching", "Arrived", "Delayed", "Landed"];
+  for (const status of priority) {
+    const match = flights.find((f) => f.status === status);
+    if (match) return match;
   }
+  return flights[0] ?? null;
+}
 
-  const sameDay = pool.filter((snapshot) =>
-    (snapshot.departure.scheduled ?? "").startsWith(normalizedDate),
+function resolveAeroDataBoxTime(endpoint: z.infer<typeof AeroDataBoxEndpointSchema> | null | undefined): string {
+  if (!endpoint) return "";
+  return (
+    endpoint.actualTime?.utc ??
+    endpoint.estimatedTime?.utc ??
+    endpoint.scheduledTime?.utc ??
+    ""
   );
-  const ranked = (sameDay.length > 0 ? sameDay : pool).sort((left, right) => {
-    const leftMs = parseDateMs(left.departure.scheduled);
-    const rightMs = parseDateMs(right.departure.scheduled);
-    if (Number.isNaN(leftMs) && Number.isNaN(rightMs)) return 0;
-    if (Number.isNaN(leftMs)) return 1;
-    if (Number.isNaN(rightMs)) return -1;
-    return leftMs - rightMs;
-  });
-  return ranked[0] ?? null;
+}
+
+function resolveAeroDataBoxStatus(status: string | null | undefined): { flightStatus: string; onTime: boolean | null } {
+  const s = (status ?? "").toLowerCase();
+  if (s === "cancelled" || s === "cancelleduncertain") return { flightStatus: "cancelled", onTime: false };
+  if (s === "diverted") return { flightStatus: "diverted", onTime: false };
+  if (s === "delayed") return { flightStatus: "delayed", onTime: false };
+  if (s === "enroute" || s === "approaching" || s === "departed") return { flightStatus: "active", onTime: null };
+  if (s === "arrived" || s === "landed") return { flightStatus: "landed", onTime: null };
+  if (s === "boarding" || s === "gateclosed" || s === "checkin") return { flightStatus: "boarding", onTime: null };
+  if (s === "scheduled") return { flightStatus: "scheduled", onTime: null };
+  return { flightStatus: status ?? "unknown", onTime: null };
 }
 
 function normalizeScannedReservationType(rawType: unknown): ScannedReservationType {
@@ -272,101 +249,84 @@ export async function GET(req: Request) {
     );
   }
 
-  const apiKey = process.env.AVIATIONSTACK_API_KEY?.trim();
+  const apiKey = process.env.AERODATABOX_API_KEY?.trim();
   if (!apiKey) {
     return NextResponse.json(
-      { error: "Flight lookup unavailable: AVIATIONSTACK_API_KEY is missing." },
+      { error: "Flight lookup unavailable: AERODATABOX_API_KEY is missing." },
       { status: 503, headers: rateLimit.headers },
     );
   }
 
-  const lookupUrl = new URL(AVIATIONSTACK_BASE_URL);
-  lookupUrl.searchParams.set("access_key", apiKey);
-  lookupUrl.searchParams.set("flight_iata", parsed.data.flightNumber);
-  lookupUrl.searchParams.set("flight_date", parsed.data.flightDate);
-  lookupUrl.searchParams.set("limit", "10");
-  routeLogger.info("Flight lookup request.", {
+  const flightNum = parsed.data.flightNumber.replace(/\s+/gu, "").toUpperCase();
+  const lookupUrl = `${AERODATABOX_BASE_URL}/flights/number/${encodeURIComponent(flightNum)}/${encodeURIComponent(parsed.data.flightDate)}`;
+  routeLogger.info("AeroDataBox flight lookup request.", {
     requestQuery: parsed.data,
-    providerRequest: {
-      endpoint: AVIATIONSTACK_BASE_URL,
-      flight_iata: parsed.data.flightNumber,
-      flight_date: parsed.data.flightDate,
-      limit: "10",
-    },
+    lookupUrl,
+    flightNum,
+    flightDate: parsed.data.flightDate,
   });
 
   try {
-    const response = await fetch(lookupUrl, { method: "GET", cache: "no-store" });
+    const response = await fetch(lookupUrl, {
+      method: "GET",
+      headers: { "x-api-market-key": apiKey, "Accept": "application/json" },
+      cache: "no-store",
+    });
+
+    if (response.status === 204) {
+      return NextResponse.json(
+        { error: "No flight data found for that number and date." },
+        { status: 404, headers: rateLimit.headers },
+      );
+    }
     if (!response.ok) {
-      throw new Error(`AviationStack returned ${response.status}`);
-    }
-    const parsedEnvelope = FlightLookupEnvelopeSchema.safeParse(await response.json());
-    if (!parsedEnvelope.success) {
-      throw new Error("Flight lookup payload validation failed.");
-    }
-    if (parsedEnvelope.data.error?.message) {
-      throw new Error(parsedEnvelope.data.error.message);
+      const errText = await response.text().catch(() => "");
+      throw new Error(`AeroDataBox returned ${response.status}: ${errText.slice(0, 200)}`);
     }
 
-    const bestMatch = chooseLookupResult(
-      parsedEnvelope.data.data,
-      parsed.data.flightNumber,
-      parsed.data.airline,
-      parsed.data.flightDate,
-    );
-    if (!bestMatch) {
+    const rawJson = await response.json();
+    const flightArray = Array.isArray(rawJson) ? rawJson : [rawJson];
+    const parsedFlights = z.array(AeroDataBoxFlightSchema).safeParse(flightArray);
+    if (!parsedFlights.success) {
+      throw new Error("AeroDataBox payload validation failed.");
+    }
+
+    const best = chooseBestFlight(parsedFlights.data);
+    if (!best) {
       return NextResponse.json(
-        { error: "No matching flight found for that number, airline, and date." },
+        { error: "No matching flight found for that number and date." },
         { status: 404, headers: rateLimit.headers },
       );
     }
 
-    const responseBody = {
-      flightNumber: bestMatch.flight.iata ?? parsed.data.flightNumber,
-      airline: bestMatch.airline.name ?? parsed.data.airline,
-      flightDate: parsed.data.flightDate,
-      departureAirport: bestMatch.departure.iata ?? bestMatch.departure.airport ?? "",
-      arrivalAirport: bestMatch.arrival.iata ?? bestMatch.arrival.airport ?? "",
-      departureTime: bestMatch.departure.estimated ?? bestMatch.departure.scheduled ?? "",
-      arrivalTime: bestMatch.arrival.estimated ?? bestMatch.arrival.scheduled ?? "",
-      departureTerminal: bestMatch.departure.terminal ?? "",
-      departureGate: bestMatch.departure.gate ?? "",
-      arrivalTerminal: bestMatch.arrival.terminal ?? "",
-      arrivalGate: bestMatch.arrival.gate ?? "",
-      delayMinutes:
-        typeof bestMatch.departure.delay === "number"
-          ? Math.max(0, Math.round(bestMatch.departure.delay))
-          : typeof bestMatch.arrival.delay === "number"
-            ? Math.max(0, Math.round(bestMatch.arrival.delay))
-            : null,
-      onTime: (() => {
-        const status = (bestMatch.flight_status ?? "").trim().toLowerCase();
-        const delay =
-          typeof bestMatch.departure.delay === "number"
-            ? bestMatch.departure.delay
-            : typeof bestMatch.arrival.delay === "number"
-              ? bestMatch.arrival.delay
-              : null;
-        if (typeof delay === "number") {
-          return delay <= 0;
-        }
-        if (status.includes("delay")) {
-          return false;
-        }
-        if (status === "scheduled" || status === "active" || status === "on-time" || status === "on time") {
-          return true;
-        }
-        if (status === "cancelled" || status === "canceled" || status === "diverted") {
-          return false;
-        }
-        return null;
-      })(),
-      flightStatus: bestMatch.flight_status ?? "unknown",
-    };
-    routeLogger.info("Flight lookup response.", {
-      responseBody,
-    });
+    const dep = best.departure;
+    const arr = best.arrival;
+    const delayMinutes =
+      typeof dep?.delay === "number" && Number.isFinite(dep.delay)
+        ? Math.max(0, Math.round(dep.delay))
+        : typeof arr?.delay === "number" && Number.isFinite(arr.delay)
+          ? Math.max(0, Math.round(arr.delay))
+          : null;
+    const { flightStatus, onTime } = resolveAeroDataBoxStatus(best.status);
+    const computedOnTime = delayMinutes !== null ? delayMinutes <= 0 : onTime;
 
+    const responseBody = {
+      flightNumber: best.number ?? flightNum,
+      airline: best.airline?.name ?? parsed.data.airline,
+      flightDate: parsed.data.flightDate,
+      departureAirport: dep?.airport?.iata ?? dep?.airport?.name ?? "",
+      arrivalAirport: arr?.airport?.iata ?? arr?.airport?.name ?? "",
+      departureTime: resolveAeroDataBoxTime(dep),
+      arrivalTime: resolveAeroDataBoxTime(arr),
+      departureTerminal: dep?.terminal ?? "",
+      departureGate: dep?.gate ?? "",
+      arrivalTerminal: arr?.terminal ?? "",
+      arrivalGate: arr?.gate ?? "",
+      delayMinutes,
+      onTime: computedOnTime,
+      flightStatus,
+    };
+    routeLogger.info("AeroDataBox flight lookup response.", { responseBody });
     return NextResponse.json(responseBody, { headers: rateLimit.headers });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown flight lookup error.";
@@ -443,7 +403,7 @@ export async function POST(req: Request) {
       const imageBase64 = Buffer.from(await image.arrayBuffer()).toString("base64");
       const client = new Anthropic({ apiKey: anthropicApiKey });
       const scanResponse = await client.messages.create({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-5",
         max_tokens: 900,
         temperature: 0,
         system: [
@@ -452,9 +412,15 @@ export async function POST(req: Request) {
           "Read multilingual text including Japanese when present.",
           "Return strict JSON only.",
           "Use this exact shape:",
-          '{ "reservation": { "type": "", "provider": "", "title": "", "date": "", "time": "", "timezone": "", "confirmationCode": "", "location": "", "flightOrTrainNumber": "", "roomType": "", "checkOutDate": "", "notes": "" } }',
+          '{ "reservation": { "type": "", "provider": "", "title": "", "date": "", "time": "", "timezone": "", "confirmationCode": "", "departureAirport": "", "arrivalAirport": "", "location": "", "flightOrTrainNumber": "", "roomType": "", "checkOutDate": "", "notes": "" } }',
           "type must be one of: flight, hotel, train, ride, dinner.",
-          "Use ISO-like date YYYY-MM-DD when possible and 24-hour time HH:mm when possible.",
+          "CRITICAL: Only extract what is explicitly visible in the image. NEVER guess, infer, or assume any field.",
+          "For flights, time = DEPARTURE time (when plane leaves gate), NOT boarding time, NOT check-in time, NOT gate open time. Departure time is labeled Departs, Departure, or shown next to the origin airport code.",
+          "If the year is not shown in the image, set date to empty string — do NOT assume the current year or any year.",
+          "If any field is unclear or not visible, return empty string for that field.",
+          "Use ISO date YYYY-MM-DD only when the full date including year is clearly visible. Use 24-hour HH:mm for time.",
+          "Do not invent confirmation codes, dates, or any other fields.",
+          "For flights: departureAirport = the IATA code of the origin airport (e.g. HND, LAX, HNL). arrivalAirport = the IATA code of the destination airport. Extract from the ticket — they are always shown.",
         ].join(" "),
         messages: [
           {
@@ -514,6 +480,12 @@ export async function POST(req: Request) {
             : typeof reservationNode.trainNumber === "string"
               ? reservationNode.trainNumber.trim()
               : "";
+      const departureAirport = typeof reservationNode.departureAirport === "string"
+        ? reservationNode.departureAirport.trim().toUpperCase().slice(0, 4)
+        : "";
+      const arrivalAirport = typeof reservationNode.arrivalAirport === "string"
+        ? reservationNode.arrivalAirport.trim().toUpperCase().slice(0, 4)
+        : "";
       const localTime =
         typeof reservationNode.localTime === "string" && reservationNode.localTime.trim().length > 0
           ? reservationNode.localTime.trim()
@@ -531,7 +503,7 @@ export async function POST(req: Request) {
       const draft = {
         type: scannedType,
         title: title || `${provider || "Scanned"} reservation`,
-        provider: provider || "Scanned ticket",
+        provider: provider || title || (scannedType === "hotel" ? "Hotel" : scannedType === "flight" ? "Flight" : "Reservation"),
         localTime,
         timezone,
         location,
@@ -544,6 +516,8 @@ export async function POST(req: Request) {
         flightNumber: scannedType === "flight" ? numberValue : "",
         flightAirline: scannedType === "flight" ? provider : "",
         flightDate: scannedType === "flight" ? date : "",
+        flightDepartureAirport: scannedType === "flight" ? departureAirport : "",
+        flightArrivalAirport: scannedType === "flight" ? arrivalAirport : "",
         checkOutDate: scannedType === "hotel" ? checkOutDate : "",
         roomType: scannedType === "hotel" ? roomType : "",
       };

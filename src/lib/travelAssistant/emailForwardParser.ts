@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "@/lib/logger";
 
-const MODEL = "claude-sonnet-4-20250514";
+const MODEL = "claude-sonnet-4-5";
 const HIGH_CONFIDENCE_THRESHOLD = 70;
 const LOW_CONFIDENCE_THRESHOLD = 40;
 const MIN_READABLE_TEXT_LENGTH = 100;
@@ -15,6 +15,7 @@ const FIELD_WEIGHTS = {
   localTime: 20,
   timezone: 8,
   location: 12,
+  flightNumber: 0,
 } as const;
 
 const TIMEZONE_ABBREVIATION_MAP: Record<string, string> = {
@@ -75,6 +76,24 @@ function sanitizeTimezoneValue(raw: string): string {
   return "Etc/UTC";
 }
 
+// ISO 3166-1 alpha-2 country codes that should NOT be treated as IATA airline codes.
+// Prevents postal codes like "JP 104-0061" from triggering flight detection.
+const COUNTRY_CODE_DENYLIST = new Set([
+  "AF", "AL", "AO", "AR", "AM", "AU", "AT", "AZ", "BE", "BZ",
+  "BR", "BG", "CA", "CL", "CN", "CO", "HR", "CU", "CY", "CZ",
+  "DK", "EG", "EE", "ET", "FI", "FR", "GE", "DE", "GH", "GR",
+  "GT", "HU", "IN", "ID", "IR", "IQ", "IE", "IL", "IT", "JP",
+  "JO", "KZ", "KE", "KW", "LV", "LB", "LY", "LI", "LT", "LU",
+  "MY", "MV", "ML", "MT", "MX", "MD", "MC", "MN", "ME", "MA",
+  "MM", "NA", "NP", "NL", "NZ", "NG", "MK", "NO", "OM", "PK",
+  "PA", "PY", "PE", "PH", "PL", "PT", "QA", "RO", "RU", "SA",
+  "SN", "RS", "SG", "SK", "SI", "SO", "ZA", "ES", "LK", "SE",
+  "CH", "SY", "TW", "TZ", "TH", "TT", "TN", "TR", "UA", "AE",
+  "GB", "UK", "US", "UY", "VE", "VN", "YE", "ZM", "ZW",
+  // Credit card prefixes — never flight numbers
+  "VI", "MC", "AX", "DI", "DC",
+]);
+
 const RESERVATION_TYPE_KEYWORDS: Array<{ type: ForwardedReservationType; pattern: RegExp; confidence: number }> = [
   { type: "flight", pattern: /\b(flight|airline|boarding|terminal|gate)\b/iu, confidence: 0.78 },
   { type: "hotel", pattern: /\b(hotel|check-?in|check out|room|suite|stay)\b/iu, confidence: 0.78 },
@@ -109,7 +128,11 @@ export type ForwardedReservationField =
   | "localTime"
   | "timezone"
   | "location"
-  | "notes";
+  | "notes"
+  | "flightNumber"
+  | "departureAirport"
+  | "arrivalAirport"
+  | "checkOutDate";
 export type ForwardedParsingStatus = "auto-parsed" | "needs-review" | "needs-user-input";
 export type ForwardedConfidenceLevel = "high" | "medium" | "low";
 
@@ -135,6 +158,10 @@ export interface ForwardedReservationDraft {
   location: string;
   confirmationCode: string;
   notes: string;
+  flightNumber?: string;
+  checkOutDate?: string;
+  departureAirport?: string;
+  arrivalAirport?: string;
 }
 
 export interface ForwardedEmailParseResult {
@@ -149,6 +176,24 @@ export interface ForwardedEmailParseResult {
   imageBasedEmail: boolean;
   hasPdfAttachment: boolean;
   usedAiFallback: boolean;
+}
+
+function extractOriginalEmailFromForwardChain(text: string): string {
+  // When an email is forwarded multiple times, Gmail adds repeated
+  // "---------- Forwarded message ---------" headers. Extract the LAST
+  // (deepest/original) block which contains the actual reservation data.
+  const forwardMarker = "---------- Forwarded message ---------";
+  const lastMarkerIdx = text.lastIndexOf(forwardMarker);
+  if (lastMarkerIdx >= 0) {
+    return text.slice(lastMarkerIdx);
+  }
+  // Also handle "-----Original Message-----" style
+  const originalMarker = "-----Original Message-----";
+  const lastOriginalIdx = text.lastIndexOf(originalMarker);
+  if (lastOriginalIdx >= 0) {
+    return text.slice(lastOriginalIdx);
+  }
+  return text;
 }
 
 function normalizeWhitespace(value: string): string {
@@ -329,6 +374,10 @@ function parseAiCandidate(candidate: Record<string, unknown>): CandidateMap {
   }
   setIfPresent("location", candidate.location, 0.76);
   setIfPresent("notes", candidate.notes, 0.68);
+  setIfPresent("flightNumber", candidate.flightNumber, 0.9);
+  setIfPresent("departureAirport", candidate.departureAirport, 0.9);
+  setIfPresent("arrivalAirport", candidate.arrivalAirport, 0.9);
+  setIfPresent("checkOutDate", candidate.checkOutDate, 0.85);
   return output;
 }
 
@@ -433,8 +482,15 @@ function buildRegexCandidates(input: {
   const combined = `${subject}\n${text}`.trim();
   const candidates: CandidateMap = {};
 
-  const flightNumberMatch = combined.match(/\b([A-Z]{2})\s?(\d{2,4})\b/u);
-  if (flightNumberMatch) {
+  // Only treat a 2-letter+digit pattern as a flight number when the email
+  // contains words that are EXCLUSIVELY flight-specific.
+  // "arrival", "departure", "gate", "terminal", "itinerary" all appear in
+  // hotel confirmation emails and must NOT be here.
+  const FLIGHT_CONTEXT_RE = /\b(flight|airline|boarding\s*pass|aircraft|operated\s*by)\b/iu;
+  const hasFlightContext = FLIGHT_CONTEXT_RE.test(combined);
+
+  const flightNumberMatch = hasFlightContext ? combined.match(/\b([A-Z]{2})\s?(\d{2,4})\b/u) : null;
+  if (flightNumberMatch && !COUNTRY_CODE_DENYLIST.has(flightNumberMatch[1] ?? "")) {
     const flightNumber = `${flightNumberMatch[1]} ${flightNumberMatch[2]}`;
     candidates.type = {
       value: "flight",
@@ -444,6 +500,11 @@ function buildRegexCandidates(input: {
     candidates.title = {
       value: `${flightNumber} reservation`,
       confidence: 0.88,
+      source: "regex",
+    };
+    candidates.flightNumber = {
+      value: flightNumber.replace(/\s+/gu, "").toUpperCase(),
+      confidence: 0.95,
       source: "regex",
     };
   } else {
@@ -499,17 +560,21 @@ function buildRegexCandidates(input: {
     }
   }
 
+  // Handle "Confirmation #\n49932361" where newline separates # from code
   const confirmationMatch = combined.match(
-    /(?:confirmation(?:\s*(?:number|code))?|booking\s*(?:ref(?:erence)?|code)|record locator|pnr)[^A-Za-z0-9]{0,20}([A-Za-z0-9-]{5,8})/iu,
+    /(?:confirmation(?:\s*(?:number|code|#|receipt))?|booking\s*(?:ref(?:erence)?|code|#|number)|record locator|pnr|itinerary\s*(?:number|#)?|reservation\s*(?:number|#)?)[^A-Za-z0-9]{0,30}([A-Za-z0-9-]{4,20})/iu,
   );
-  if (confirmationMatch?.[1]) {
+  // Denylist common English words that regex may incorrectly grab as confirmation codes
+  const CONFIRMATION_CODE_WORD_DENYLIST = new Set(["RECEIPT", "CODE", "NUMBER", "DETAILS", "PENDING", "CONFIRMED", "RESERVED", "BOOKING", "TRAVEL", "FLIGHT", "HOTEL", "TICKET", "MANAGE", "VIEW"]);
+  const isValidConfirmationCode = confirmationMatch?.[1] && !CONFIRMATION_CODE_WORD_DENYLIST.has(confirmationMatch[1].toUpperCase());
+  if (isValidConfirmationCode) {
     candidates.confirmationCode = {
-      value: normalizeConfirmationCode(confirmationMatch[1]),
+      value: normalizeConfirmationCode(confirmationMatch![1]!),
       confidence: 0.92,
       source: "regex",
     };
   } else {
-    const fallbackConfirmationMatch = combined.match(/\b([A-Z0-9]{5,8})\b/u);
+    const fallbackConfirmationMatch = combined.match(/\b([A-Z0-9]{5,12})\b/u);
     if (fallbackConfirmationMatch?.[1]) {
       candidates.confirmationCode = {
         value: normalizeConfirmationCode(fallbackConfirmationMatch[1]),
@@ -523,6 +588,9 @@ function buildRegexCandidates(input: {
     combined.match(/\b(20\d{2}-\d{2}-\d{2})\b/u) ??
     combined.match(/\b(\d{1,2}\/\d{1,2}\/\d{2,4})\b/u) ??
     combined.match(
+      /\b(\d{1,2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4})\b/iu,
+    ) ??
+    combined.match(
       /\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}(?:,\s*\d{4})?)\b/iu,
     );
   const parsedDate = parseDateCandidate(dateMatch?.[1] ?? "");
@@ -531,13 +599,13 @@ function buildRegexCandidates(input: {
   if (parsedDate && parsedTime) {
     candidates.localTime = {
       value: `${parsedDate} ${parsedTime}`,
-      confidence: 0.9,
+      confidence: 0.55, // lowered — AI departure time should override for flights
       source: "regex",
     };
   } else if (parsedDate) {
     candidates.localTime = {
       value: `${parsedDate} 12:00`,
-      confidence: 0.6,
+      confidence: 0.45,
       source: "regex",
     };
     parserNotes.push("Time not found in email; defaulted to 12:00 local time for review.");
@@ -577,7 +645,7 @@ function buildRegexCandidates(input: {
   return candidates;
 }
 
-async function runAiFallback(rawEmailText: string): Promise<CandidateMap[]> {
+async function runAiFallback(rawEmailText: string, subject = ""): Promise<CandidateMap[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
     logger.warn("AI fallback skipped: ANTHROPIC_API_KEY is missing.", {
@@ -588,17 +656,24 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap[]> {
     return [];
   }
 
+  const emailContext = subject.trim() ? `Subject: ${subject}\n\n${rawEmailText}` : rawEmailText;
   const aiPrompt = [
     "Extract every travel reservation found in this email.",
     "Return strict JSON only with this shape:",
-    '{ "reservations": [ { "type": "", "title": "", "provider": "", "confirmationCode": "", "localTime": "", "timezone": "", "location": "", "notes": "" } ] }',
-    "If there are multiple flights in one email, include one reservations[] object per flight.",
+    '{ "reservations": [ { "type": "", "title": "", "provider": "", "confirmationCode": "", "localTime": "", "checkOutDate": "", "timezone": "", "location": "", "notes": "", "flightNumber": "", "departureAirport": "", "arrivalAirport": "" } ] }',
+    "IMPORTANT: This may be a multi-leg itinerary. Scan for EVERY individual flight segment. For example HND→HNL→SEA→ONT has 3 flights — return 3 separate objects in reservations[]. Each object must have its own flightNumber, departureAirport, arrivalAirport, and localTime (departure time for that specific leg).",
     "Use type values only: flight, hotel, train, ride.",
-    "Use localTime in 'YYYY-MM-DD HH:mm' when possible.",
-    "If any field is unknown, return an empty string for that field.",
+    "CRITICAL for localTime: For flights, use the scheduled DEPARTURE time (not email send time, not boarding time). For hotels, use the check-in date and time if stated, otherwise just the check-in date at 15:00 local time. NEVER guess or infer a year — if the year is not explicitly in the email use the current year only if the date is clearly in the future, otherwise leave localTime empty.",
+    "For hotels, set checkOutDate to the check-out date in YYYY-MM-DD format. The email may use formats like 'Friday, 29-May-2026' or 'May 29, 2026' — convert to YYYY-MM-DD e.g. 2026-05-29. Also set localTime to the check-in date and time e.g. '2026-05-24 15:00'. For flights, leave checkOutDate empty.",
+    "The departure time is the scheduled time the plane leaves the gate. Format: 'YYYY-MM-DD HH:mm' in 24-hour.",
+    "For flights, set flightNumber to IATA airline code + flight number. If the email says 'Alaska Airlines Flight 832' write AS832. If it says 'Hawaiian Airlines Flight 12' write HA12. Common IATA codes: AS=Alaska Airlines, HA=Hawaiian Airlines, UA=United Airlines, AA=American Airlines, DL=Delta, WN=Southwest, B6=JetBlue, KE=Korean Air, NH=ANA, JL=JAL. NEVER use just the number alone — always prefix with the 2-letter IATA code. Never use credit card numbers like VI3557.",
+    "For flights, set departureAirport to the IATA code of the origin airport and arrivalAirport to the IATA code of the destination. These are always in the email.",
+    "For timezone: use the IATA timezone of the DEPARTURE airport city e.g. Pacific/Honolulu, America/New_York, Asia/Tokyo.",
+    "For location: set to the departure airport name or city, NOT the hotel address.",
+    "If any field is not explicitly stated in the email, return empty string. NEVER invent or guess dates, codes, or any other field.",
     "Do not include explanation text.",
     "",
-    rawEmailText,
+    emailContext,
   ].join("\n");
   logger.info("AI fallback request started.", {
     scope: EMAIL_FORWARD_PARSER_SCOPE,
@@ -611,10 +686,10 @@ async function runAiFallback(rawEmailText: string): Promise<CandidateMap[]> {
     const client = new Anthropic({ apiKey });
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 700,
+      max_tokens: 8000,  // 8000 handles up to ~30 flight legs safely
       temperature: 0,
       system:
-        "Extract travel reservations from forwarded email text. Return strict JSON only in the shape { reservations: [{ type, title, provider, confirmationCode, localTime, timezone, location, notes }] }. For multi-flight emails, return every flight as a separate reservations[] item.",
+        "You extract travel reservations from forwarded emails. Return ONLY a JSON object with a reservations array. CRITICAL RULES:\n(1) For FLIGHTS: scan the entire email for every individual flight segment. A 3-leg itinerary like HND→HNL→SEA→ONT has 3 separate flights — return 3 objects. NEVER merge segments into one. Each segment has its own flight number, departure airport, arrival airport, and departure time.\n(2) type=flight ONLY when a flight number or airline is present. type=hotel for hotels even if they mention arrival/departure dates.\n(3) localTime = scheduled DEPARTURE time of that specific flight leg in YYYY-MM-DD HH:mm 24-hour format. Not email send time, not boarding time.\n(4) flightNumber = 2-letter IATA code + flight number. If email says 'Alaska Airlines Flight 832' write AS832. If 'Hawaiian Airlines Flight 12' write HA12. Key codes: AS=Alaska, HA=Hawaiian, UA=United, AA=American, DL=Delta, KE=Korean Air, NH=ANA, JL=JAL. NEVER return number alone. VI3557 is a credit card, NOT a flight number.\n(5) departureAirport = IATA code of origin. arrivalAirport = IATA code of destination. Both must be set for every flight.\n(6) timezone = IANA timezone of the departure city e.g. Asia/Tokyo, Pacific/Honolulu, America/Los_Angeles.\n(7) location = departure city or airport name.\n(8) If a field is not in the email, use empty string. Never guess or invent values.",
       messages: [
         {
           role: "user",
@@ -665,6 +740,22 @@ function buildDraft(candidates: CandidateMap, parserNotes: string[]): ForwardedR
     location: normalizeWhitespace(candidates.location?.value ?? ""),
     confirmationCode: normalizeConfirmationCode(candidates.confirmationCode?.value ?? ""),
     notes: notesSections.join(" "),
+    flightNumber:
+      typeValue === "flight"
+        ? (candidates.flightNumber?.value ?? "").replace(/[^A-Za-z0-9]/gu, "").toUpperCase()
+        : "",
+    departureAirport:
+      typeValue === "flight"
+        ? (candidates.departureAirport?.value ?? "").trim().toUpperCase().slice(0, 4)
+        : "",
+    arrivalAirport:
+      typeValue === "flight"
+        ? (candidates.arrivalAirport?.value ?? "").trim().toUpperCase().slice(0, 4)
+        : "",
+    checkOutDate:
+      typeValue === "hotel"
+        ? normalizeWhitespace(candidates.checkOutDate?.value ?? "")
+        : "",
   };
 }
 
@@ -712,10 +803,21 @@ function chooseBodyText(text: string, html: string): { parsedText: string; image
 }
 
 function hasMultipleFlightMentions(text: string): boolean {
-  const matches = [...text.matchAll(/\b([A-Z]{2}\s?\d{2,4}[A-Z]?)\b/gu)]
+  // Match flight numbers like AS832, KE 1121, VI3557
+  const flightMatches = [...text.matchAll(/\b([A-Z]{2}\s?\d{2,4}[A-Z]?)\b/gu)]
     .map((match) => (match[1] ?? "").replace(/\s+/gu, "").toUpperCase())
     .filter((value) => value.length >= 4);
-  return new Set(matches).size > 1;
+  if (new Set(flightMatches).size > 1) return true;
+  // Match multiple IATA airport codes (3 uppercase letters).
+  // Use a denylist of common English words instead of an allowlist so any airport works.
+  const AIRPORT_WORD_DENYLIST = new Set(["THE","AND","FOR","ARE","BUT","NOT","YOU","ALL","CAN","WAS","ONE","OUR","OUT","GET","HAS","HOW","NEW","NOW","OLD","SEE","TWO","WAY","WHO","ITS","LET","PUT","SAY","SHE","TOO","USE","MAY","END","FAR","FEW","GOT","HAD","HIM","HOW","LOW","OWN","PAY","SIT","SIX","TEN","TRY","YET","SUN","MON","TUE","WED","THU","FRI","SAT","JAN","FEB","MAR","APR","JUN","JUL","AUG","SEP","OCT","NOV","DEC","PDF","ETA","ETD","UTC","GMT","EST","CST","MST","PST"]);
+  const airportMatches = [...text.matchAll(/\b([A-Z]{3})\b/gu)]
+    .map((m) => m[1] ?? "")
+    .filter((code) => !AIRPORT_WORD_DENYLIST.has(code));
+  if (new Set(airportMatches).size > 2) return true;
+  // Detect "Segment X" or "Flight X of Y" patterns
+  if (/segment\s+\d|flight\s+\d\s+of\s+\d|\d\s+stop|connecting|layover/iu.test(text)) return true;
+  return false;
 }
 
 export async function parseForwardedEmail(input: ForwardedEmailParseInput): Promise<ForwardedEmailParseResult> {
@@ -736,7 +838,11 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
   const text = normalizeWhitespace(input.text ?? "");
   const html = input.html ?? "";
   const parserNotes: string[] = [];
-  const { parsedText, imageBasedEmail } = chooseBodyText(text, html);
+  const chosenBody = chooseBodyText(text, html);
+  const imageBasedEmail = chosenBody.imageBasedEmail;
+  // Strip repeated forwarding headers — keep only the deepest original email
+  // This prevents 18x forwarded emails from burying the actual reservation data
+  const parsedText = extractOriginalEmailFromForwardChain(chosenBody.parsedText);
   const multiFlightDetected = hasMultipleFlightMentions(`${subject}\n${parsedText}`);
   const pdfAttached = hasPdfAttachment(input.attachments);
 
@@ -755,7 +861,10 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
   let score = scoreCandidates(candidates);
   let usedAiFallback = false;
   let aiCandidates: CandidateMap[] = [];
-  const shouldAttemptAiFallback = multiFlightDetected || (!imageBasedEmail && score < HIGH_CONFIDENCE_THRESHOLD);
+  // Always run AI for flight emails — regex only catches one flight,
+  // AI is needed to extract all legs from multi-segment confirmations
+  const likelyFlightEmail = /\bflight\b|\boarding\b|\bairport\b|\bdeparture\b|\barrival\b/iu.test(parsedText);
+  const shouldAttemptAiFallback = multiFlightDetected || likelyFlightEmail || (!imageBasedEmail && score < HIGH_CONFIDENCE_THRESHOLD);
 
   if (shouldAttemptAiFallback) {
     logger.info("Email parser attempting AI fallback.", {
@@ -767,7 +876,7 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
       parsedText,
       parsedTextLength: parsedText.length,
     });
-    aiCandidates = await runAiFallback(parsedText);
+    aiCandidates = await runAiFallback(parsedText, subject);
     if (aiCandidates.length > 0) {
       usedAiFallback = true;
       candidates = mergeCandidates(candidates, aiCandidates[0] ?? {});
@@ -842,3 +951,4 @@ export async function parseForwardedEmail(input: ForwardedEmailParseInput): Prom
     usedAiFallback,
   };
 }
+

@@ -25,6 +25,7 @@ export interface InviteCodeRecord {
   usedAt: string | null;
   status: InviteCodeStatus;
   note: string | null;
+  intendedEmail: string | null;
 }
 
 export type RedeemInviteCodeResult =
@@ -74,6 +75,9 @@ function sanitizeInviteCodeRecord(input: unknown): InviteCodeRecord | null {
     usedAt: typeof candidate.usedAt === "string" ? candidate.usedAt : null,
     status: candidate.status === "revoked" ? "revoked" : candidate.status === "used" ? "used" : "active",
     note: typeof candidate.note === "string" && candidate.note.trim().length > 0 ? candidate.note.trim() : null,
+    intendedEmail: typeof candidate.intendedEmail === "string" && candidate.intendedEmail.trim().length > 0
+      ? candidate.intendedEmail.trim().toLowerCase()
+      : null,
   };
 }
 
@@ -102,6 +106,7 @@ export async function createInviteCode(args: {
   type: InviteCodeType;
   createdBy: string;
   note?: string | null;
+  intendedEmail?: string | null;
 }): Promise<InviteCodeRecord> {
   for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt += 1) {
     const suffix = randomSuffix(INVITE_CODE_RANDOM_LENGTH);
@@ -115,6 +120,7 @@ export async function createInviteCode(args: {
       usedAt: null,
       status: "active",
       note: args.note?.trim() ? args.note.trim() : null,
+      intendedEmail: args.intendedEmail?.trim().toLowerCase() || null,
     };
     try {
       const created = await kvStoreSetNx(codeKey(candidate), record, { userId: INVITE_SYSTEM_NAMESPACE });
