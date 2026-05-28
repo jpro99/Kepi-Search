@@ -1762,8 +1762,6 @@ export default function TravelAssistantPage() {
   const [manualReservationModalOpen, setManualReservationModalOpen] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [travelDayOpen, setTravelDayOpen] = useState(false);
-  // Reset transport choice when active trip changes so it's asked each departure
-  const lastTripIdRef = require("react").useRef<string | null>(null);
   const [pushSubscribed, setPushSubscribed] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
