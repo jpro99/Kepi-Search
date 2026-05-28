@@ -28,9 +28,9 @@ const contentSecurityPolicy = [
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.clerk.com https://*.clerk.accounts.dev https://*.sentry-cdn.com",
-  "connect-src 'self' ws: wss: https://*.clerk.com https://*.clerk.accounts.dev https://*.ingest.sentry.io https://*.sentry.io https://api.inngest.com https://*.inngest.com https://api.maptiler.com https://*.maptiler.com https://demotiles.maplibre.org https://tile.openstreetmap.org",
-  "frame-src 'self' https://*.clerk.com https://*.clerk.accounts.dev",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.clerk.com https://*.clerk.accounts.dev https://*.sentry-cdn.com https://challenges.cloudflare.com https://*.hcaptcha.com https://*.hcaptcha.net",
+  "connect-src 'self' ws: wss: https://*.clerk.com https://*.clerk.accounts.dev https://*.ingest.sentry.io https://*.sentry.io https://api.inngest.com https://*.inngest.com https://api.maptiler.com https://*.maptiler.com https://demotiles.maplibre.org https://tile.openstreetmap.org https://challenges.cloudflare.com https://*.hcaptcha.com https://*.hcaptcha.net",
+  "frame-src 'self' https://*.clerk.com https://*.clerk.accounts.dev https://challenges.cloudflare.com https://*.hcaptcha.com https://*.hcaptcha.net",
   "worker-src 'self' blob:",
 ].join("; ");
 
