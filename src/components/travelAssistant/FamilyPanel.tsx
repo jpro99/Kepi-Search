@@ -69,6 +69,7 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
   const [hasGroup, setHasGroup] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [showMap, setShowMap] = useState(true);
+  const [mapFullscreen, setMapFullscreen] = useState(false);
   const [joiningGroup, setJoiningGroup] = useState(false);
   const [joinCode, setJoinCode] = useState("");
   const [joinName, setJoinName] = useState("");
@@ -322,17 +323,19 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
       </div>
 
       {/* Live map */}
-      {showMap && maptilerKey && (
+      {showMap && maptilerKey !== undefined && (
         <Suspense fallback={<div className="h-64 w-full rounded-2xl bg-slate-100 dark:bg-slate-800 animate-pulse" />}>
           <FamilyMap
             members={group?.members ?? []}
             locations={locations}
-            maptilerKey={maptilerKey}
+            maptilerKey={maptilerKey ?? ""}
+            fullscreen={mapFullscreen}
+            onFullscreenToggle={() => setMapFullscreen(v => !v)}
             onMemberClick={setSelectedMemberId}
           />
         </Suspense>
       )}
-      {showMap && !maptilerKey && Object.keys(locations).length > 0 && (
+      {showMap && maptilerKey === undefined && Object.keys(locations).length > 0 && (
         <div className="h-32 w-full rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
           <p className="text-xs text-slate-500">Map unavailable — MAPTILER key not configured</p>
         </div>
