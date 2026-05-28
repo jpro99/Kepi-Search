@@ -66,12 +66,7 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
   const [copiedCode, setCopiedCode] = useState(false);
   const [groupRole, setGroupRole] = useState<"owner" | "member" | null>(null);
   const [hasGroup, setHasGroup] = useState(false);
-  const [resolvedMapKey, setResolvedMapKey] = useState<string>(
-    // Use build-time key if available, otherwise fetch from server
-    typeof process !== "undefined" && process.env?.NEXT_PUBLIC_MAPTILER_KEY
-      ? process.env.NEXT_PUBLIC_MAPTILER_KEY
-      : ""
-  );
+  const [resolvedMapKey, setResolvedMapKey] = useState<string>("");
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [showMap, setShowMap] = useState(true);
   const [mapFullscreen, setMapFullscreen] = useState(false);
@@ -81,16 +76,16 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
   const [joinBusy, setJoinBusy] = useState(false);
   const watchIdRef = useRef<number | null>(null);
 
-  // Fetch map key from server on mount — ensures latest key regardless of build time
+  // Always fetch map key from server on mount — never rely on build-time baking
+  // cache: no-store ensures we get the latest key even if previously empty
   useEffect(() => {
-    if (resolvedMapKey) return; // already have key from build-time env
-    void fetch("/api/config")
+    void fetch("/api/config", { cache: "no-store" })
       .then(r => r.json())
       .then((d: { maptilerKey?: string }) => {
         if (d.maptilerKey) setResolvedMapKey(d.maptilerKey);
       })
       .catch(() => null);
-  }, [resolvedMapKey]);
+  }, []);
 
   const load = useCallback(async () => {
     try {
