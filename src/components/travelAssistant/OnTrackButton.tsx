@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { detectTripGaps } from "@/lib/travelAssistant/gapDetectionService";
 
 interface OnTrackButtonProps {
   reservations: {
@@ -30,13 +31,6 @@ type CheckState =
   | { status: "error"; message?: string };
 
 const EMAIL_PROVIDERS = new Set(["gmail", "yahoo", "outlook", "hotmail", "icloud", "aol"]);
-
-function parseLocalMs(localTime: string): number {
-  const s = localTime.trim().replace("T", " ").slice(0, 16);
-  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(s);
-  if (!m) return Number.NaN;
-  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime();
-}
 
 function toUtcMs(localTime: string, timezone?: string): number {
   const s = localTime.trim().replace("T", " ").slice(0, 16);
@@ -113,6 +107,19 @@ export function OnTrackButton({ reservations, tripName }: OnTrackButtonProps) {
   const [state, setState] = useState<CheckState>({ status: "idle" });
 
   const runCheck = async () => {
+    const topGap = detectTripGaps(reservations).find(
+      (gap) => gap.severity === "critical" || gap.severity === "warning",
+    );
+    if (topGap) {
+      setState({
+        status: "done",
+        pass: false,
+        headline: topGap.title,
+        detail: topGap.detail,
+        action: topGap.actionLabel,
+      });
+      return;
+    }
     setState({ status: "loading" });
     try {
       const res = await fetch("/api/trip-guidance", {

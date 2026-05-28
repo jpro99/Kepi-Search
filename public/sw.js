@@ -1,4 +1,4 @@
-const CACHE_VERSION = "kepi-pwa-v1";
+const CACHE_VERSION = "kepi-pwa-v2";
 const APP_SHELL_CACHE = `${CACHE_VERSION}-app-shell`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
@@ -167,4 +167,10 @@ self.addEventListener("notificationclick", (event) => {
       return clients.openWindow(url);
     }),
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (event?.data?.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
 });

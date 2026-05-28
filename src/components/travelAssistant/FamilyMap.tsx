@@ -38,16 +38,39 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 60)}h ago`;
 }
 
+const OPEN_STREET_MAP_FALLBACK_STYLE: import("maplibre-gl").StyleSpecification = {
+  version: 8,
+  sources: {
+    osm: {
+      type: "raster",
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tileSize: 256,
+      attribution: "© OpenStreetMap contributors",
+    },
+  },
+  layers: [
+    {
+      id: "osm-raster",
+      type: "raster",
+      source: "osm",
+      minzoom: 0,
+      maxzoom: 22,
+    },
+  ],
+};
+
 export function FamilyMap({ members, locations, maptilerKey, height = 300, onMemberClick }: FamilyMapProps) {
+  const MAP_LOAD_TIMEOUT_MS = 12_000;
   const mapEl = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mapRef = useRef<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const markersRef = useRef<Map<string, any>>(new Map());
+  const mapRef = useRef<import("maplibre-gl").Map | null>(null);
+  const markersRef = useRef<Map<string, import("maplibre-gl").Marker>>(new Map());
+  const fallbackAppliedRef = useRef(false);
   const [satellite, setSatellite] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [mapError, setMapError] = useState<string | null>(null);
+  const [mapWarning, setMapWarning] = useState<string | null>(null);
+  const [usingMaptilerStyle, setUsingMaptilerStyle] = useState(Boolean(maptilerKey));
   const [ready, setReady] = useState(false);
 
   const createPinEl = useCallback((member: FamilyMember, loc: LocationPoint): HTMLElement => {
@@ -80,9 +103,8 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
 
   const syncMarkers = useCallback(async () => {
     if (!mapRef.current || !ready) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ml = await import("maplibre-gl") as any;
-    markersRef.current.forEach((m: any) => m.remove());
+    const ml = await import("maplibre-gl");
+    markersRef.current.forEach((marker) => marker.remove());
     markersRef.current.clear();
     members.forEach(member => {
       const loc = locations[member.id];
@@ -101,23 +123,29 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
     if (!el || mapRef.current) return;
     // Allow empty string key - just try and show error if it fails
     let cancelled = false;
+    let loadTimeout: ReturnType<typeof window.setTimeout> | undefined;
+    fallbackAppliedRef.current = false;
+    setUsingMaptilerStyle(Boolean(maptilerKey));
 
     void (async () => {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const ml = await import("maplibre-gl") as any;
+        const ml = await import("maplibre-gl");
         if (cancelled || !mapEl.current) return;
 
-        const knownLocs = members.map(m => locations[m.id]).filter(Boolean);
+        const knownLocs = members
+          .map((member) => locations[member.id])
+          .filter((location): location is LocationPoint => Boolean(location));
         const center: [number, number] = knownLocs.length > 0
-          ? [knownLocs.reduce((s: number, l: any) => s + l.lon, 0) / knownLocs.length,
-             knownLocs.reduce((s: number, l: any) => s + l.lat, 0) / knownLocs.length]
+          ? [
+              knownLocs.reduce((sum, location) => sum + location.lon, 0) / knownLocs.length,
+              knownLocs.reduce((sum, location) => sum + location.lat, 0) / knownLocs.length,
+            ]
           : [-118.2437, 34.0522];
         const zoom = knownLocs.length === 1 ? 14 : knownLocs.length > 1 ? 10 : 4;
 
         const styleUrl = maptilerKey
           ? `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`
-          : "https://demotiles.maplibre.org/style.json"; // free fallback
+          : OPEN_STREET_MAP_FALLBACK_STYLE;
 
         const map = new ml.Map({
           container: mapEl.current,
@@ -130,16 +158,58 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
         map.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
         map.addControl(new ml.AttributionControl({ compact: true }), "bottom-right");
 
-        map.on("load", () => {
-          if (!cancelled) { setReady(true); setMapError(null); }
-        });
+        const switchToFallbackStyle = (warning: string): boolean => {
+          if (fallbackAppliedRef.current) {
+            return false;
+          }
+          fallbackAppliedRef.current = true;
+          setUsingMaptilerStyle(false);
+          setSatellite(false);
+          setMapWarning(warning);
+          setMapError(null);
+          map.once("styledata", () => {
+            if (cancelled) return;
+            setReady(true);
+            setMapError(null);
+          });
+          map.setStyle(OPEN_STREET_MAP_FALLBACK_STYLE);
+          return true;
+        };
 
-        map.on("error", (e: any) => {
-          const msg = String(e?.error?.message ?? e?.message ?? "");
-          if (msg.includes("401") || msg.includes("403") || msg.includes("Unauthorized")) {
-            setMapError("Map tiles failed to load — check NEXT_PUBLIC_MAPTILER_KEY in Vercel env vars.");
+        map.on("load", () => {
+          if (!cancelled) {
+            window.clearTimeout(loadTimeout);
+            setReady(true);
+            setMapError(null);
           }
         });
+
+        map.on("error", (event: unknown) => {
+          const eventRecord = event && typeof event === "object" ? (event as Record<string, unknown>) : null;
+          const nestedError =
+            eventRecord?.error && typeof eventRecord.error === "object"
+              ? (eventRecord.error as Record<string, unknown>)
+              : null;
+          const msg = String(nestedError?.message ?? eventRecord?.message ?? "");
+          if (maptilerKey.length > 0 && !fallbackAppliedRef.current) {
+            switchToFallbackStyle("MapTiler tiles unavailable — showing fallback map style.");
+            return;
+          }
+          if (!cancelled && msg) {
+            setMapError(`Map tiles failed to load: ${msg}`);
+          }
+        });
+
+        loadTimeout = window.setTimeout(() => {
+          if (cancelled || map.loaded()) return;
+          if (maptilerKey.length > 0 && !fallbackAppliedRef.current) {
+            switchToFallbackStyle("Map startup stalled — switching to fallback map style.");
+            return;
+          }
+          setMapError(
+            "Map is taking too long to load. Verify network access to map tiles and refresh.",
+          );
+        }, MAP_LOAD_TIMEOUT_MS);
 
         mapRef.current = map;
       } catch (err) {
@@ -149,25 +219,31 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
 
     return () => {
       cancelled = true;
+      if (loadTimeout !== undefined) {
+        window.clearTimeout(loadTimeout);
+      }
       mapRef.current?.remove();
       mapRef.current = null;
       setReady(false);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // init once only
+  }, [maptilerKey]); // init once per mount/config
 
   // Sync markers after load and when locations change
   useEffect(() => { void syncMarkers(); }, [syncMarkers]);
 
   // Satellite
   useEffect(() => {
-    if (!mapRef.current || !maptilerKey || !ready) return;
+    if (!mapRef.current || !maptilerKey || !ready || !usingMaptilerStyle) return;
     const style = satellite
       ? `https://api.maptiler.com/maps/hybrid/style.json?key=${encodeURIComponent(maptilerKey)}`
       : `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`;
     mapRef.current.setStyle(style);
-    mapRef.current.once("styledata", () => { void syncMarkers(); });
-  }, [satellite, maptilerKey, syncMarkers, ready]);
+    mapRef.current.once("styledata", () => {
+      setMapWarning(null);
+      void syncMarkers();
+    });
+  }, [satellite, maptilerKey, syncMarkers, ready, usingMaptilerStyle]);
 
   // Resize when fullscreen changes
   useEffect(() => {
@@ -217,7 +293,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
 
         {/* Controls */}
         <div className="absolute top-3 left-3 z-10 flex flex-col gap-1.5">
-          {maptilerKey && (
+          {maptilerKey && usingMaptilerStyle && (
             <button
               type="button"
               onClick={() => setSatellite(v => !v)}
@@ -239,6 +315,11 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
             {fullscreen ? "✕ Close" : "⛶ Expand"}
           </button>
         </div>
+        {mapWarning ? (
+          <div className="absolute right-3 top-3 z-10 max-w-[230px] rounded-lg bg-amber-500/90 px-2.5 py-1.5 text-[11px] font-semibold text-amber-950 shadow-md">
+            {mapWarning}
+          </div>
+        ) : null}
 
         {/* Selected member card */}
         {selMember && selLoc && (
