@@ -38,8 +38,28 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 60)}h ago`;
 }
 
+const OPEN_STREET_MAP_FALLBACK_STYLE: import("maplibre-gl").StyleSpecification = {
+  version: 8,
+  sources: {
+    osm: {
+      type: "raster",
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tileSize: 256,
+      attribution: "© OpenStreetMap contributors",
+    },
+  },
+  layers: [
+    {
+      id: "osm-raster",
+      type: "raster",
+      source: "osm",
+      minzoom: 0,
+      maxzoom: 22,
+    },
+  ],
+};
+
 export function FamilyMap({ members, locations, maptilerKey, height = 300, onMemberClick }: FamilyMapProps) {
-  const FALLBACK_STYLE_URL = "https://demotiles.maplibre.org/style.json";
   const MAP_LOAD_TIMEOUT_MS = 12_000;
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<import("maplibre-gl").Map | null>(null);
@@ -125,7 +145,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
 
         const styleUrl = maptilerKey
           ? `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`
-          : FALLBACK_STYLE_URL; // free fallback
+          : OPEN_STREET_MAP_FALLBACK_STYLE;
 
         const map = new ml.Map({
           container: mapEl.current,
@@ -167,7 +187,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
             setUsingMaptilerStyle(false);
             setMapWarning("MapTiler tiles unavailable — showing fallback map style.");
             setMapError(null);
-            map.setStyle(FALLBACK_STYLE_URL);
+            map.setStyle(OPEN_STREET_MAP_FALLBACK_STYLE);
             return;
           }
           if (!cancelled && msg) {
@@ -182,7 +202,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
             setUsingMaptilerStyle(false);
             setMapWarning("Map startup stalled — switching to fallback map style.");
             setMapError(null);
-            map.setStyle(FALLBACK_STYLE_URL);
+            map.setStyle(OPEN_STREET_MAP_FALLBACK_STYLE);
             return;
           }
           setMapError(
@@ -206,7 +226,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
       setReady(false);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [FALLBACK_STYLE_URL, maptilerKey]); // init once per mount/config
+  }, [maptilerKey]); // init once per mount/config
 
   // Sync markers after load and when locations change
   useEffect(() => { void syncMarkers(); }, [syncMarkers]);

@@ -29,7 +29,7 @@ const contentSecurityPolicy = [
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.clerk.com https://*.clerk.accounts.dev https://*.sentry-cdn.com",
-  "connect-src 'self' ws: wss: https://*.clerk.com https://*.clerk.accounts.dev https://*.ingest.sentry.io https://*.sentry.io https://api.inngest.com https://*.inngest.com https://api.maptiler.com https://*.maptiler.com https://demotiles.maplibre.org",
+  "connect-src 'self' ws: wss: https://*.clerk.com https://*.clerk.accounts.dev https://*.ingest.sentry.io https://*.sentry.io https://api.inngest.com https://*.inngest.com https://api.maptiler.com https://*.maptiler.com https://demotiles.maplibre.org https://tile.openstreetmap.org",
   "frame-src 'self' https://*.clerk.com https://*.clerk.accounts.dev",
   "worker-src 'self' blob:",
 ].join("; ");
