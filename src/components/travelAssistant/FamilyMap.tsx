@@ -192,12 +192,27 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         map.addControl(new (ml as any).AttributionControl({ compact: true }), "bottom-right");
 
-        map.on("load", () => {
+        // "style.load" fires when style is parsed — does NOT wait for tiles
+        // This is more reliable than "load" which waits for all tiles to render
+        map.on("style.load", () => {
           if (cancelled) return;
           setIsLoaded(true);
           setIsError(false);
           setStatusMsg("");
-          // Pass map directly — no stale closure issues
+          placeMarkers(map);
+        });
+
+        // Also handle "load" as a fallback (fires after tiles)
+        map.on("load", () => {
+          if (cancelled) return;
+          setIsLoaded(true);
+          setIsError(false);
+        });
+
+        // Place markers again once map is idle (all tiles loaded/settled)
+        map.once("idle", () => {
+          if (cancelled) return;
+          setIsLoaded(true);
           placeMarkers(map);
         });
 
@@ -290,13 +305,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
         />
 
-        {/* Loading spinner — shown until map fires "load" */}
-        {!isLoaded && !isError && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/70 z-10 gap-2 pointer-events-none">
-            <div className="h-8 w-8 rounded-full border-2 border-sky-400 border-t-transparent animate-spin" />
-            <p className="text-xs text-slate-300">Loading map...</p>
-          </div>
-        )}
+        {/* No spinner overlay — map renders as it loads. Dark bg = tiles loading. */}
 
         {/* Error overlay — ONLY shown when key is actually rejected */}
         {isError && (
@@ -316,7 +325,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
 
         {/* Controls — always on top */}
         <div className="absolute top-3 left-3 z-20 flex flex-col gap-1.5">
-          {maptilerKey && isLoaded && (
+          {maptilerKey && (
             <button
               type="button"
               onClick={() => setSatellite(v => !v)}
@@ -327,7 +336,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
               {satellite ? "🛰 Satellite" : "🗺 Streets"}
             </button>
           )}
-          {Object.keys(locations).length > 0 && isLoaded && (
+          {Object.keys(locations).length > 0 && (
             <button
               type="button"
               onClick={fitAll}
