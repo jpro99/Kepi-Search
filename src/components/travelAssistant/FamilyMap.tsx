@@ -194,11 +194,15 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
           placeMarkers(map);
         });
 
-        // Log errors but don't show overlay unless it's a critical failure
+        // Show ALL MapLibre errors on screen so we can diagnose what's blocking streets
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         map.on("error", (e: any) => {
-          const msg = String(e?.error?.message ?? e?.message ?? "");
-          if (msg) console.warn("[FamilyMap]", msg);
+          const msg = String(e?.error?.message ?? e?.error?.statusCode ?? e?.message ?? "unknown error");
+          console.warn("[FamilyMap]", msg, e);
+          if (!cancelled) {
+            setIsError(true);
+            setStatusMsg(`Map error: ${msg}`);
+          }
         });
 
         mapRef.current = map;
