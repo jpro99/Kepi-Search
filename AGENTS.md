@@ -2,6 +2,27 @@
 
 These rules are mandatory for every coding session.
 
+
+## RULE ZERO — BUILD BEFORE PUSH (NON-NEGOTIABLE)
+Every code change MUST pass `npm run build` locally in /tmp/kepi-build before being pushed.
+No exceptions. A failed Vercel build costs the user real credits.
+
+Workflow for every change:
+1. Pull latest: `cd /tmp/kepi-build && git pull`
+2. Make changes to files in /tmp/kepi-build/
+3. Run: `npm run build` — fix ALL errors before proceeding
+4. Run pre-push verification checks (assert no old patterns remain)
+5. Only then push to GitHub
+
+If the build fails:
+- Read the FULL error message
+- Fix it in /tmp/kepi-build/
+- Re-run npm run build
+- Repeat until clean
+- NEVER push a broken build
+
+This rule exists because every failed Vercel deploy costs the owner money and time.
+
 ## 1) Understand before editing
 - Read the relevant files end-to-end before changing code.
 - Do not guess requirements or behavior.
