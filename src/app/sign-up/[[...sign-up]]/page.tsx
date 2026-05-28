@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { SignUp } from "@clerk/nextjs";
 
 const ALPHANUMERIC_HYPHEN_CODE_REGEX = /^[A-Z0-9-]{1,50}$/u;
@@ -9,12 +10,18 @@ function normalizeCode(value: string): string {
   return value.toUpperCase().replaceAll(/\s+/g, "").trim();
 }
 
-export default function SignUpPage() {
-  const [inviteInputCode, setInviteInputCode] = useState("");
+import { Suspense } from "react";
+
+function SignUpPageInner() {
+  const searchParams = useSearchParams();
+  const codeFromUrl = searchParams.get("code") ?? searchParams.get("inviteCode") ?? searchParams.get("redeem") ?? "";
+  const [inviteInputCode, setInviteInputCode] = useState(codeFromUrl.toUpperCase());
   const [referralInputCode, setReferralInputCode] = useState("");
-  const [appliedInviteCode, setAppliedInviteCode] = useState("");
+  const [appliedInviteCode, setAppliedInviteCode] = useState(codeFromUrl.toUpperCase());
   const [appliedReferralCode, setAppliedReferralCode] = useState("");
-  const [inviteCodeMessage, setInviteCodeMessage] = useState<string | null>(null);
+  const [inviteCodeMessage, setInviteCodeMessage] = useState<string | null>(
+    codeFromUrl ? "✅ Invite code applied — complete sign-up below." : null
+  );
   const [referralCodeMessage, setReferralCodeMessage] = useState<string | null>(null);
 
   const normalizedInviteInputCode = normalizeCode(inviteInputCode);
@@ -123,7 +130,24 @@ export default function SignUpPage() {
       </section>
       <div className="w-full max-w-md">
         <SignUp forceRedirectUrl={redirectUrl} signInForceRedirectUrl={redirectUrl} />
+        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-center dark:border-slate-700 dark:bg-slate-900">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            <strong>On iPhone?</strong> If you see a security check error, try opening this page in <strong>Safari</strong> and make sure you are not in Private Browsing mode. Disable any content blockers if the problem persists.
+          </p>
+        </div>
       </div>
     </main>
+  );
+}
+
+export default function SignUpPage() {
+  return (
+    <Suspense fallback={
+      <main className="flex min-h-screen items-center justify-center">
+        <div className="h-8 w-8 rounded-full border-2 border-sky-500 border-t-transparent animate-spin" />
+      </main>
+    }>
+      <SignUpPageInner />
+    </Suspense>
   );
 }
