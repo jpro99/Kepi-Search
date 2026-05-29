@@ -79,13 +79,13 @@ function resolveEffectiveUpdateMode(requestedMode: "off" | "mock" | "auto" | und
   if (requestedMode !== "auto") {
     return { mode: requestedMode, usedMockFallback: false };
   }
-  if (process.env.AVIATIONSTACK_API_KEY?.trim()) {
+  if (process.env.AERODATABOX_API_KEY?.trim()) {
     return { mode: requestedMode, usedMockFallback: false };
   }
   return {
     mode: "mock",
     usedMockFallback: true,
-    reason: "AVIATIONSTACK_API_KEY missing; background updates forced to mock mode.",
+    reason: "AERODATABOX_API_KEY missing; background updates forced to mock mode.",
   };
 }
 

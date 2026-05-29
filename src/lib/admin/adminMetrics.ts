@@ -192,31 +192,30 @@ function evaluateInngestHealthFromRuns(runs: readonly AdminBackgroundJobRun[]): 
 }
 
 async function measureAviationStackHealth(): Promise<AdminHealthResponse["services"]["aviationStack"]> {
-  const apiKey = process.env.AVIATIONSTACK_API_KEY?.trim();
+  const apiKey = process.env.AERODATABOX_API_KEY?.trim();
   if (!apiKey) {
     return {
       status: "yellow",
       quotaRemaining: null,
-      detail: "AviationStack API key is not configured.",
+      detail: "AeroDataBox API key (AERODATABOX_API_KEY) is not configured.",
     };
   }
 
   try {
     const response = await fetchWithTimeout(
-      `https://api.aviationstack.com/v1/flights?access_key=${encodeURIComponent(apiKey)}&limit=1`,
-      { method: "GET", cache: "no-store" },
+      `https://prod.api.market/api/v1/aedbx/aerodatabox/flights/number/AA100/${new Date().toISOString().slice(0, 10)}`,
+      { method: "GET", headers: { "x-api-market-key": apiKey }, cache: "no-store" },
       5000,
     );
     const quotaHeader =
       response.headers.get("x-ratelimit-remaining") ??
-      response.headers.get("x-rate-limit-remaining") ??
-      response.headers.get("x-aviationstack-ratelimit-remaining");
+      response.headers.get("x-rate-limit-remaining");
     const quotaRemaining = quotaHeader ? Number.parseInt(quotaHeader, 10) : Number.NaN;
     const normalizedQuota = Number.isNaN(quotaRemaining) ? null : Math.max(0, quotaRemaining);
-    let status: AdminServiceStatus = response.ok ? "green" : "red";
-    if (response.ok && normalizedQuota === null) {
-      status = "yellow";
-    } else if (response.ok && normalizedQuota !== null && normalizedQuota < 50) {
+    // 204 = no data for that flight (valid response), 200 = data found, 404 = unknown flight
+    const isUp = response.ok || response.status === 204 || response.status === 404;
+    let status: AdminServiceStatus = isUp ? "green" : "red";
+    if (isUp && normalizedQuota !== null && normalizedQuota < 50) {
       status = normalizedQuota === 0 ? "red" : "yellow";
     }
     return {
@@ -226,13 +225,13 @@ async function measureAviationStackHealth(): Promise<AdminHealthResponse["servic
         ? normalizedQuota === null
           ? "Quota header unavailable; API reachable."
           : `Approximate remaining quota: ${normalizedQuota}.`
-        : `AviationStack health check failed (${response.status}).`,
+        : `AeroDataBox health check failed (${response.status}).`,
     };
   } catch (error) {
     return {
       status: "red",
       quotaRemaining: null,
-      detail: `AviationStack request failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      detail: `AeroDataBox request failed: ${error instanceof Error ? error.message : "unknown error"}`,
     };
   }
 }

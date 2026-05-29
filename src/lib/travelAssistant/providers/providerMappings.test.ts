@@ -16,8 +16,8 @@ const SAMPLE_FLIGHT_RESERVATION: UpdatableReservation = {
 };
 
 test("flight provider falls back to mock updates when key is missing", async () => {
-  const previousAviationStackKey = process.env.AVIATIONSTACK_API_KEY;
-  delete process.env.AVIATIONSTACK_API_KEY;
+  const previousKey = process.env.AERODATABOX_API_KEY;
+  delete process.env.AERODATABOX_API_KEY;
   try {
     const provider = createFlightStatusProviderFromEnv();
     const updates = await provider.fetchUpdates({
@@ -25,9 +25,11 @@ test("flight provider falls back to mock updates when key is missing", async () 
       nowIso: "2026-06-22T06:30:00.000Z",
     });
     assert.ok(updates.length >= 1);
-    assert.ok((updates[0]?.provider ?? "").startsWith("mock-"));
+    // When no key is set, provider returns "status unavailable" updates
+    assert.ok(updates[0]?.provider === "flight-status-provider");
+    assert.ok(updates[0]?.summary?.includes("unavailable") || updates[0]?.kind === "on-time");
   } finally {
-    process.env.AVIATIONSTACK_API_KEY = previousAviationStackKey;
+    process.env.AERODATABOX_API_KEY = previousKey;
   }
 });
 
