@@ -46,35 +46,13 @@ function timeAgo(iso: string): string {
 function isStale(iso: string) { return Date.now() - Date.parse(iso) > 10 * 60_000; }
 
 /* ─── Map style builders ─────────────────────────────────────── */
-// Use tileSize 256 + @1x for speed on mobile (4x fewer bytes than 512/@2x)
-function buildStreetsStyle(key: string) {
-  return {
-    version: 8 as const,
-    sources: {
-      "streets-raster": {
-        type: "raster" as const,
-        tiles: [`https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=${key}`],
-        tileSize: 256, maxzoom: 20,
-        attribution: "© MapTiler © OpenStreetMap contributors",
-      },
-    },
-    layers: [{ id: "streets-layer", type: "raster" as const, source: "streets-raster", minzoom: 0, maxzoom: 22 }],
-  };
+// Vector GL styles — full Google Maps quality: buildings, POIs, smooth labels, fast
+function streetsStyleUrl(key: string) {
+  return `https://api.maptiler.com/maps/streets-v2/style.json?key=${key}`;
 }
-function buildSatelliteStyle(key: string) {
-  // FIX: correct satellite endpoint is /maps/satellite/ not /tiles/satellite-v2/
-  return {
-    version: 8 as const,
-    sources: {
-      "sat-raster": {
-        type: "raster" as const,
-        tiles: [`https://api.maptiler.com/maps/satellite/{z}/{x}/{y}.jpg?key=${key}`],
-        tileSize: 256, maxzoom: 20,
-        attribution: "© MapTiler © OpenStreetMap contributors",
-      },
-    },
-    layers: [{ id: "sat-layer", type: "raster" as const, source: "sat-raster", minzoom: 0, maxzoom: 22 }],
-  };
+function satelliteStyleUrl(key: string) {
+  // Hybrid = satellite imagery + vector labels/roads on top
+  return `https://api.maptiler.com/maps/hybrid/style.json?key=${key}`;
 }
 
 /* ─── Component ──────────────────────────────────────────────── */
@@ -238,7 +216,7 @@ export function LiveMapPage() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const map = new (ml as any).Map({
           container: mapEl.current,
-          style: satellite ? buildSatelliteStyle(key) : buildStreetsStyle(key),
+          style: satellite ? satelliteStyleUrl(key) : streetsStyleUrl(key),
           center, zoom,
           maxZoom: 20,
           // Don't cap pixelRatio — let MapLibre decide; capping to 1 makes it blurry on Retina
@@ -291,7 +269,7 @@ export function LiveMapPage() {
   useEffect(() => {
     if (!mapRef.current || !maptilerKey || !isLoaded) return;
     const key = encodeURIComponent(maptilerKey);
-    mapRef.current.setStyle(satellite ? buildSatelliteStyle(key) : buildStreetsStyle(key));
+    mapRef.current.setStyle(satellite ? satelliteStyleUrl(key) : streetsStyleUrl(key));
     mapRef.current.once("styledata", () => { if (mapRef.current) placeMarkers(mapRef.current); });
   }, [satellite, maptilerKey, isLoaded, placeMarkers]);
 
