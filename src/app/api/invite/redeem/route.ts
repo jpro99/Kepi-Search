@@ -214,12 +214,6 @@ export async function POST(req: Request) {
                 usedAt: redeemedInviteRecord.usedAt,
               });
         const subscriptionStorageKey = getSubscriptionStorageKey(userId);
-        console.info(`BILLING SAVE KEY: ${subscriptionStorageKey}`);
-        console.info("[invite/redeem] restored subscription persistence", {
-          userId,
-          subscriptionStorageKey,
-          persistedRecord: persisted.savedRecord,
-        });
         routeLogger.info("Invite Code subscription restored.", {
           subscriptionStorageKey,
           persistedRecord: persisted.savedRecord,
@@ -274,12 +268,6 @@ export async function POST(req: Request) {
     usedAt: redemption.record.usedAt,
   });
   const subscriptionStorageKey = getSubscriptionStorageKey(userId);
-  console.info(`BILLING SAVE KEY: ${subscriptionStorageKey}`);
-  console.info("[invite/redeem] saved subscription persistence", {
-    userId,
-    subscriptionStorageKey,
-    persistedRecord: persisted.savedRecord,
-  });
   routeLogger.info("Invite Code subscription persisted.", {
     subscriptionStorageKey,
     persistedRecord: persisted.savedRecord,

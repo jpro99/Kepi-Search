@@ -121,8 +121,6 @@ export default function BillingPage() {
     if (inviteBusy) return;
     const rawInputValue = inviteCodeInputRef.current?.value ?? "";
     const normalizedCode = normalizeRedeemCode(rawInputValue);
-    // Temporary debugging log requested by user for Invite Code submissions.
-    console.log("[billing][invite-code] submitted code:", normalizedCode);
     if (!normalizedCode) return;
     setInviteBusy(true);
     setInviteMessage(null);
@@ -177,8 +175,6 @@ export default function BillingPage() {
     if (referralBusy) return;
     const rawInputValue = referralCodeInputRef.current?.value ?? "";
     const normalizedCode = normalizeRedeemCode(rawInputValue);
-    // Temporary debugging log requested by user for Referral Code submissions.
-    console.log("[billing][referral-code] submitted code:", normalizedCode);
     if (!normalizedCode) return;
     setReferralBusy(true);
     setReferralMessage(null);

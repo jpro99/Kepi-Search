@@ -162,21 +162,8 @@ async function readTrips(userId?: string): Promise<TravelTrip[]> {
 
 async function writeTrips(trips: TravelTrip[], userId?: string): Promise<void> {
   try {
-    console.log("[tripStore] writeTrips start.", {
-      userId: userId ?? "anonymous",
-      tripCount: trips.length,
-      tripIds: trips.map((trip) => trip.id),
-    });
     await kvStoreSet(TRIPS_KEY, trips, { userId });
-    console.log("[tripStore] writeTrips success.", {
-      userId: userId ?? "anonymous",
-      tripCount: trips.length,
-    });
   } catch {
-    console.log("[tripStore] writeTrips failed; continuing degraded mode.", {
-      userId: userId ?? "anonymous",
-      tripCount: trips.length,
-    });
     // Storage failures are handled by callers as degraded mode.
   }
 }
@@ -234,29 +221,13 @@ export async function updateTrip(
   patch: UpdateTripInput,
   userId?: string,
 ): Promise<TravelTrip | null> {
-  console.log("[tripStore] updateTrip called.", {
-    userId: userId ?? "anonymous",
-    tripId: id,
-    patchKeys: Object.keys(patch),
-    patchReservationsCount: Array.isArray(patch.reservations) ? patch.reservations.length : null,
-  });
   const trips = await readTrips(userId);
   const index = trips.findIndex((trip) => trip.id === id);
   if (index < 0) {
-    console.log("[tripStore] updateTrip aborted: trip not found.", {
-      userId: userId ?? "anonymous",
-      tripId: id,
-      availableTripIds: trips.map((trip) => trip.id),
-    });
     return null;
   }
   const existing = trips[index];
   if (!existing) {
-    console.log("[tripStore] updateTrip aborted: existing trip missing at index.", {
-      userId: userId ?? "anonymous",
-      tripId: id,
-      index,
-    });
     return null;
   }
   const updated: TravelTrip = {
@@ -266,17 +237,7 @@ export async function updateTrip(
   };
   const nextTrips = [...trips];
   nextTrips[index] = updated;
-  console.log("[tripStore] updateTrip writing updated trip snapshot.", {
-    userId: userId ?? "anonymous",
-    tripId: id,
-    previousReservationCount: existing.reservations.length,
-    updatedReservationCount: updated.reservations.length,
-  });
   await writeTrips(nextTrips, userId);
-  console.log("[tripStore] updateTrip completed.", {
-    userId: userId ?? "anonymous",
-    tripId: id,
-  });
   return updated;
 }
 
@@ -317,17 +278,7 @@ export async function deleteReservationFromTrip(
 ): Promise<DeleteReservationFromTripResult> {
   const reservationId = input.reservationId.trim();
   const preferredTripId = input.tripId?.trim() || null;
-  console.log("[tripStore] deleteReservationFromTrip called.", {
-    userId: userId ?? "anonymous",
-    reservationId,
-    preferredTripId,
-  });
   const trips = await readTrips(userId);
-  console.log("[tripStore] deleteReservationFromTrip redis read complete.", {
-    userId: userId ?? "anonymous",
-    tripCount: trips.length,
-    tripIds: trips.map((trip) => trip.id),
-  });
 
   if (!reservationId) {
     return {
@@ -342,11 +293,6 @@ export async function deleteReservationFromTrip(
     ? trips.findIndex((trip) => trip.id === preferredTripId)
     : trips.findIndex((trip) => trip.reservations.some((reservation) => reservation.id === reservationId));
   if (targetTripIndex < 0) {
-    console.log("[tripStore] deleteReservationFromTrip aborted: trip not found.", {
-      userId: userId ?? "anonymous",
-      reservationId,
-      preferredTripId,
-    });
     return {
       removed: false,
       trip: null,
@@ -366,12 +312,6 @@ export async function deleteReservationFromTrip(
   }
   const nextReservations = targetTrip.reservations.filter((reservation) => reservation.id !== reservationId);
   if (nextReservations.length === targetTrip.reservations.length) {
-    console.log("[tripStore] deleteReservationFromTrip aborted: reservation missing in target trip.", {
-      userId: userId ?? "anonymous",
-      reservationId,
-      tripId: targetTrip.id,
-      reservationIds: targetTrip.reservations.map((reservation) => reservation.id),
-    });
     return {
       removed: false,
       trip: targetTrip,
@@ -386,18 +326,7 @@ export async function deleteReservationFromTrip(
   };
   const nextTrips = [...trips];
   nextTrips[targetTripIndex] = updatedTrip;
-  console.log("[tripStore] deleteReservationFromTrip redis write starting.", {
-    userId: userId ?? "anonymous",
-    tripId: updatedTrip.id,
-    beforeCount: targetTrip.reservations.length,
-    afterCount: updatedTrip.reservations.length,
-  });
   await writeTrips(nextTrips, userId);
-  console.log("[tripStore] deleteReservationFromTrip redis write complete.", {
-    userId: userId ?? "anonymous",
-    tripId: updatedTrip.id,
-    reservationId,
-  });
   return {
     removed: true,
     trip: updatedTrip,

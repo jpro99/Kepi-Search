@@ -3787,7 +3787,7 @@ export default function TravelAssistantPage() {
         nowIso: new Date(nowMs).toISOString(),
       };
       if (providerEligibleReservations.some((reservation) => reservation.type === "flight")) {
-        console.info("[travel-assistant] flight status lookup request", travelUpdateRequestBody);
+        // flight status lookup in progress
       }
       const response = await fetch("/api/travel-updates", {
         method: "POST",
@@ -3799,9 +3799,6 @@ export default function TravelAssistantPage() {
         throw new Error(`Transport updates API returned ${response.status}`);
       }
       const result = (await response.json()) as TravelUpdateCheckResult;
-      if (providerEligibleReservations.some((reservation) => reservation.type === "flight")) {
-        console.info("[travel-assistant] flight status lookup response", result);
-      }
       setLastProviderCheckAt(new Date().toISOString());
       setLastProviderAttempts(result.attempts);
       setProviderCircuitOpen(result.circuitOpen);
@@ -4909,12 +4906,6 @@ export default function TravelAssistantPage() {
         airline: flightAirline,
         flightDate,
       });
-      console.info("[travel-assistant] review flight lookup request", {
-        action: "flight-lookup",
-        flightNumber,
-        airline: flightAirline,
-        flightDate,
-      });
       const response = await fetch(`/api/travel-updates?${params.toString()}`, {
         method: "GET",
         credentials: "include",
@@ -4931,10 +4922,6 @@ export default function TravelAssistantPage() {
         arrivalTime?: string;
         flightStatus?: string;
       };
-      console.info("[travel-assistant] review flight lookup response", {
-        status: response.status,
-        payload,
-      });
       if (!response.ok || payload.error) {
         throw new Error(payload.error ?? `Flight lookup failed (${response.status})`);
       }
@@ -5269,10 +5256,6 @@ export default function TravelAssistantPage() {
       }
       if (reservation.type === "hotel") {
         const hotelSummary = buildHotelCheckInStatusSummary(reservation);
-        console.info("[travel-assistant] Hotel check status summary.", {
-          reservationId,
-          hotelSummary,
-        });
         setFlightStatusCheckByReservationId((prev) => ({
           ...prev,
           [reservationId]: {
@@ -5298,18 +5281,6 @@ export default function TravelAssistantPage() {
       }
 
       const lookupInput = extractFlightLookupInput(reservation);
-      const reservationRecord = reservation as Reservation & Record<string, unknown>;
-      console.info("[travel-assistant] Flight status lookup reservation fields.", {
-        reservationId,
-        reservationKeys: Object.keys(reservationRecord),
-        flightNumber: reservationRecord.flightNumber ?? reservationRecord.flight_number ?? null,
-        flightAirline: reservationRecord.flightAirline ?? reservationRecord.flight_airline ?? reservationRecord.airline ?? null,
-        flightDate: reservationRecord.flightDate ?? reservationRecord.flight_date ?? null,
-        localTime: reservationRecord.localTime ?? reservationRecord.local_time ?? null,
-        provider: reservation.provider,
-        title: reservation.title,
-        lookupInput,
-      });
       if (!lookupInput) {
         const errorMessage = "Add flight number, airline, and date before checking status.";
         setFlightStatusCheckByReservationId((prev) => ({
