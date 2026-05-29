@@ -51,7 +51,6 @@ interface PendingFamilyEmailInvite {
 interface FamilyPanelProps {
   isPremium: boolean;
   onUpgrade: () => void;
-  maptilerKey?: string;
 }
 
 interface BeforeInstallPromptEvent extends Event {
@@ -129,7 +128,7 @@ function readInviteCodeFromUrl(): string {
   return toUpperInviteCode(currentUrl.searchParams.get(INVITE_QUERY_PARAM) ?? "");
 }
 
-export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelProps) {
+export function FamilyPanel({ isPremium, onUpgrade }: FamilyPanelProps) {
   const inviteCodeFromUrl = readInviteCodeFromUrl();
   const [group, setGroup] = useState<FamilyGroup | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -1242,7 +1241,6 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
         <FamilyMap
           members={group?.members ?? []}
           locations={locations}
-          maptilerKey={maptilerKey ?? ""}
           height={300}
           onMemberClick={setSelectedMemberId}
         />

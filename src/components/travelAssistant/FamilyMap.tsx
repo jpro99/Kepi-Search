@@ -24,7 +24,6 @@ interface FamilyMember {
 interface FamilyMapProps {
   members: FamilyMember[];
   locations: Record<string, LocationPoint>;
-  maptilerKey: string;
   height?: number;
   onMemberClick?: (memberId: string) => void;
 }
@@ -84,17 +83,14 @@ const OPEN_STREET_MAP_FALLBACK_STYLE: import("maplibre-gl").StyleSpecification =
 };
 
 function createMaptilerRasterStyle(
-  maptilerKey: string,
   variant: "streets" | "hybrid",
   useHighDensityTiles: boolean,
 ): import("maplibre-gl").StyleSpecification {
-  const encodedKey = encodeURIComponent(maptilerKey);
-  const highDensitySuffix = useHighDensityTiles ? "@2x" : "";
   const tileSize = useHighDensityTiles ? 512 : 256;
+  const styleName = variant === "hybrid" ? "hybrid" : "streets-v2";
+  const format = variant === "hybrid" ? "jpg" : "png";
   const tileUrl =
-    variant === "hybrid"
-      ? `https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}${highDensitySuffix}.jpg?key=${encodedKey}`
-      : `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}${highDensitySuffix}.png?key=${encodedKey}`;
+    `/api/maps/tiles?style=${styleName}&z={z}&x={x}&y={y}&scale=${useHighDensityTiles ? "2" : "1"}&format=${format}`;
 
   return {
     version: 8,
@@ -122,7 +118,7 @@ function createMaptilerRasterStyle(
   };
 }
 
-export function FamilyMap({ members, locations, maptilerKey, height = 300, onMemberClick }: FamilyMapProps) {
+export function FamilyMap({ members, locations, height = 300, onMemberClick }: FamilyMapProps) {
   const MAP_LOAD_TIMEOUT_MS = 12_000;
   const useHighDensityTiles =
     typeof window !== "undefined" && window.devicePixelRatio >= 1.5;
@@ -137,7 +133,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
   const [followSelected, setFollowSelected] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
   const [mapWarning, setMapWarning] = useState<string | null>(null);
-  const [usingMaptilerStyle, setUsingMaptilerStyle] = useState(Boolean(maptilerKey));
+  const [usingMaptilerStyle, setUsingMaptilerStyle] = useState(true);
   const [ready, setReady] = useState(false);
 
   const createPinEl = useCallback((member: FamilyMember, loc: LocationPoint): HTMLElement => {
@@ -194,11 +190,10 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
   useEffect(() => {
     const el = mapEl.current;
     if (!el || mapRef.current) return;
-    // Allow empty string key - just try and show error if it fails
     let cancelled = false;
     let loadTimeout: ReturnType<typeof window.setTimeout> | undefined;
     fallbackAppliedRef.current = false;
-    setUsingMaptilerStyle(Boolean(maptilerKey));
+    setUsingMaptilerStyle(true);
 
     void (async () => {
       try {
@@ -216,9 +211,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
           : [-118.2437, 34.0522];
         const zoom = knownLocs.length === 1 ? 14 : knownLocs.length > 1 ? 10 : 4;
 
-        const styleUrl = maptilerKey
-          ? createMaptilerRasterStyle(maptilerKey, "streets", useHighDensityTiles)
-          : OPEN_STREET_MAP_FALLBACK_STYLE;
+        const styleUrl = createMaptilerRasterStyle("streets", useHighDensityTiles);
 
         const map = new ml.Map({
           container: mapEl.current,
@@ -268,7 +261,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
               ? (eventRecord.error as Record<string, unknown>)
               : null;
           const msg = String(nestedError?.message ?? eventRecord?.message ?? "");
-          if (maptilerKey.length > 0 && !fallbackAppliedRef.current) {
+          if (!fallbackAppliedRef.current) {
             switchToFallbackStyle("MapTiler tiles unavailable — showing fallback map style.");
             return;
           }
@@ -279,7 +272,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
 
         loadTimeout = window.setTimeout(() => {
           if (cancelled || map.loaded()) return;
-          if (maptilerKey.length > 0 && !fallbackAppliedRef.current) {
+          if (!fallbackAppliedRef.current) {
             switchToFallbackStyle("Map startup stalled — switching to fallback map style.");
             return;
           }
@@ -304,23 +297,23 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
       setReady(false);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [maptilerKey]); // init once per mount/config
+  }, []); // init once per mount/config
 
   // Sync markers after load and when locations change
   useEffect(() => { void syncMarkers(); }, [syncMarkers]);
 
   // Satellite
   useEffect(() => {
-    if (!mapRef.current || !maptilerKey || !ready || !usingMaptilerStyle) return;
+    if (!mapRef.current || !ready || !usingMaptilerStyle) return;
     const style = satellite
-      ? createMaptilerRasterStyle(maptilerKey, "hybrid", useHighDensityTiles)
-      : createMaptilerRasterStyle(maptilerKey, "streets", useHighDensityTiles);
+      ? createMaptilerRasterStyle("hybrid", useHighDensityTiles)
+      : createMaptilerRasterStyle("streets", useHighDensityTiles);
     mapRef.current.setStyle(style);
     mapRef.current.once("styledata", () => {
       setMapWarning(null);
       void syncMarkers();
     });
-  }, [satellite, maptilerKey, syncMarkers, ready, usingMaptilerStyle, useHighDensityTiles]);
+  }, [satellite, syncMarkers, ready, usingMaptilerStyle, useHighDensityTiles]);
 
   // Resize when fullscreen changes
   useEffect(() => {
@@ -395,7 +388,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
 
         {/* Controls */}
         <div className="absolute top-3 left-3 z-10 flex flex-col gap-1.5">
-          {maptilerKey && usingMaptilerStyle && (
+          {usingMaptilerStyle && (
             <button
               type="button"
               onClick={() => setSatellite(v => !v)}

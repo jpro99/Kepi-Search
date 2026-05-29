@@ -2,6 +2,6 @@
 
 import VeniceMapClient from "@/components/venice/VeniceMapClient";
 
-export function HomeMapLoader({ maptilerKey }: { maptilerKey: string }) {
-  return <VeniceMapClient maptilerKey={maptilerKey} />;
+export function HomeMapLoader() {
+  return <VeniceMapClient />;
 }

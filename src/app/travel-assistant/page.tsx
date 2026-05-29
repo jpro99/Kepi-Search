@@ -7809,7 +7809,6 @@ export default function TravelAssistantPage() {
                 <FamilyPanel
                   isPremium={hasProAccess || isLifetime || isTrial}
                   onUpgrade={() => openUpgradeModal("multi-trip", "Upgrade to Pro to unlock Family Tracker — real-time location sharing for your whole group.")}
-                  maptilerKey={process.env.NEXT_PUBLIC_MAPTILER_KEY ?? ""}
                 />
               </Suspense>
               {/* Invite a friend */}

@@ -77,11 +77,8 @@ function compareHits(a: HotelSearchHit, b: HotelSearchHit, sort: SortMode) {
 }
 
 function createMaptilerRasterBasemapStyle(
-  maptilerKey: string,
   useHighDensityTiles: boolean,
 ): maplibregl.StyleSpecification {
-  const encodedKey = encodeURIComponent(maptilerKey);
-  const highDensitySuffix = useHighDensityTiles ? "@2x" : "";
   const tileSize = useHighDensityTiles ? 512 : 256;
   return {
     version: 8,
@@ -89,7 +86,7 @@ function createMaptilerRasterBasemapStyle(
       maptilerRaster: {
         type: "raster",
         tiles: [
-          `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}${highDensitySuffix}.png?key=${encodedKey}`,
+          `/api/maps/tiles?style=streets-v2&z={z}&x={x}&y={y}&scale=${useHighDensityTiles ? "2" : "1"}&format=png`,
         ],
         tileSize,
         attribution: "© MapTiler © OpenStreetMap contributors",
@@ -233,7 +230,7 @@ function MapLoading() {
   );
 }
 
-function UrlCityBridge({ maptilerKey }: { maptilerKey: string }) {
+function UrlCityBridge() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const rawCity = searchParams.get("city");
@@ -309,7 +306,6 @@ function UrlCityBridge({ maptilerKey }: { maptilerKey: string }) {
       allCities={list.cities}
       defaultCityId={list.defaultCityId}
       shareAreaParam={searchParams.get("area")}
-      maptilerKey={maptilerKey}
     />
   );
 }
@@ -319,13 +315,11 @@ function VeniceMapShell({
   allCities,
   defaultCityId,
   shareAreaParam,
-  maptilerKey,
 }: {
   cityId: string;
   allCities: CityListEntry[];
   defaultCityId: string;
   shareAreaParam: string | null;
-  maptilerKey: string;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -558,7 +552,7 @@ function VeniceMapShell({
   }, [catalog, searchParams]);
 
   useEffect(() => {
-    if (!catalog || !mapEl.current || !maptilerKey) return;
+    if (!catalog || !mapEl.current) return;
     void KEPI_CLIENT_BUILD;
     void KEPI_MAP_CLIENT_STAMP;
     setMapBootIssue(null);
@@ -569,9 +563,8 @@ function VeniceMapShell({
 
     const { center, zoom, maxBounds } = catalog.map;
     const useHighDensityTiles = window.devicePixelRatio >= 1.5;
-    const maptilerTileProbeUrl = `https://api.maptiler.com/maps/streets-v2/0/0/0${useHighDensityTiles ? "@2x" : ""}.png?key=${encodeURIComponent(maptilerKey)}`;
+    const maptilerTileProbeUrl = `/api/maps/tiles?style=streets-v2&z=0&x=0&y=0&scale=${useHighDensityTiles ? "2" : "1"}&format=png`;
     const maptilerBasemapStyle = createMaptilerRasterBasemapStyle(
-      maptilerKey,
       useHighDensityTiles,
     );
 
@@ -585,7 +578,7 @@ function VeniceMapShell({
         if (cancelled) return;
         if (!styleRes.ok) {
           setMapBootIssue(
-            `MapTiler rejected basemap tile requests (HTTP ${styleRes.status}). In Vercel: Project -> Settings -> Environment Variables -> set NEXT_PUBLIC_MAPTILER_KEY for Production, save, then Redeploy. Wrong or missing keys usually return 401 or 403.`,
+            `Map tile proxy rejected basemap tile requests (HTTP ${styleRes.status}). In Vercel set MAPTILER_KEY (server env), redeploy, then verify /api/maps/tiles returns image data.`,
           );
           return;
         }
@@ -712,13 +705,13 @@ function VeniceMapShell({
       try {
         if (!sawMaptilerStyle) {
           setMapBootIssue(
-            "Basemap style never reported sources after load. Open DevTools -> Network, reload, and inspect api.maptiler.com tile requests. Set NEXT_PUBLIC_MAPTILER_KEY for Production on Vercel and redeploy. Try Ctrl+Shift+R.",
+            "Basemap style never reported sources after load. Open DevTools -> Network, reload, and inspect /api/maps/tiles requests. Confirm MAPTILER_KEY is configured on Vercel.",
           );
           return;
         }
         if (!map.loaded()) {
           setMapBootIssue(
-            "The map never finished loading after the basemap style arrived. Check api.maptiler.com tile requests in Network, confirm your MapTiler key, and try a hard refresh.",
+            "The map never finished loading after the basemap style arrived. Check /api/maps/tiles requests in Network, confirm MAPTILER_KEY, and try a hard refresh.",
           );
         }
       } catch {
@@ -869,7 +862,7 @@ function VeniceMapShell({
             setMapBootIssue(
               (prev) =>
                 prev ??
-                "Basemap tiles are still missing after load. In DevTools -> Network, filter maptiler and look for failed tile or font requests (403, blocked). Confirm NEXT_PUBLIC_MAPTILER_KEY in Vercel and try disabling strict blockers.",
+                "Basemap tiles are still missing after load. In DevTools -> Network, filter /api/maps/tiles and inspect failures. Confirm MAPTILER_KEY in Vercel and redeploy.",
             );
           }
         } catch {
@@ -923,34 +916,11 @@ function VeniceMapShell({
       detach = null;
       mapRef.current = null;
     };
-  }, [maptilerKey, catalog, upsertResultLayer, shareAreaParam, cityId]);
+  }, [catalog, upsertResultLayer, shareAreaParam, cityId]);
 
   useEffect(() => {
     upsertResultLayer(displayHotels);
   }, [displayHotels, upsertResultLayer]);
-
-  if (!maptilerKey) {
-    return (
-      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 bg-slate-900 p-6 text-center text-slate-100">
-        <p className="max-w-md text-lg font-semibold">MapTiler key missing</p>
-        <p className="max-w-lg text-sm text-slate-300">
-          Put{" "}
-          <code className="rounded bg-slate-800 px-1.5 py-0.5">
-            NEXT_PUBLIC_MAPTILER_KEY=…
-          </code>{" "}
-          in{" "}
-          <code className="rounded bg-slate-800 px-1.5 py-0.5">.env.local</code>{" "}
-          next to this app&apos;s{" "}
-          <code className="rounded bg-slate-800 px-1.5 py-0.5">package.json</code>
-          , then stop and restart{" "}
-          <code className="rounded bg-slate-800 px-1.5 py-0.5">next dev</code>{" "}
-          (Next only reads env when the dev server starts). For production, set
-          the same variable in the host dashboard and rebuild. Free tier at
-          maptiler.com is enough for personal use.
-        </p>
-      </div>
-    );
-  }
 
   if (metaError) {
     return (
@@ -1234,10 +1204,6 @@ function VeniceMapShell({
   );
 }
 
-export default function VeniceMapClient({
-  maptilerKey,
-}: {
-  maptilerKey: string;
-}) {
-  return <UrlCityBridge maptilerKey={maptilerKey} />;
+export default function VeniceMapClient() {
+  return <UrlCityBridge />;
 }
