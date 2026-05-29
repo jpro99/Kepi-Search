@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useClerk, useUser } from "@clerk/nextjs";
 import {
   cache,
@@ -1795,6 +1796,32 @@ export default function TravelAssistantPage() {
   const [manualReservationModalOpen, setManualReservationModalOpen] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [travelDayOpen, setTravelDayOpen] = useState(false);
+  const searchParams = useSearchParams();
+
+  // Auto-join family group if ?joinFamily=CODE in URL
+  useEffect(() => {
+    const joinCode = searchParams.get("joinFamily");
+    if (!joinCode || !user) return;
+    // Remove param from URL immediately
+    const url = new URL(window.location.href);
+    url.searchParams.delete("joinFamily");
+    window.history.replaceState({}, "", url.toString());
+    // Auto-join via API
+    void fetch("/api/family", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "join-group",
+        inviteCode: joinCode.toUpperCase(),
+        name: user.firstName ?? user.username ?? "Family Member",
+        imageUrl: user.imageUrl ?? null,
+      }),
+    }).then(r => r.json()).then((d: { ok?: boolean; error?: string }) => {
+      if (d.ok) setToast("✅ Joined family group! Go to the Family tab to share your location.");
+      else setToast(d.error ?? "Could not join family group.");
+    }).catch(() => setToast("Could not join family group."));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, user]);
   const [pushSubscribed, setPushSubscribed] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
