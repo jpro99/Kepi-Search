@@ -506,6 +506,78 @@ const AIRPORT_NAV: AirportNavigation[] = [
     ],
     generalNotes: "LHR is large and complex. T2 and T3 share a terminal zone. T5 is BA's home and has satellites T5B and T5C connected by internal pods. Allow 20+ min for inter-terminal transfers.",
   },
+  // ── Portland PDX ─────────────────────────────────────────────
+  {
+    iata: "PDX",
+    name: "Portland International",
+    securityNotes: [
+      { instruction: "PDX is a single terminal with concourses A–E all connected airside — no train needed", mode: "walk", estimatedMinutes: 0, landmark: "After security turn right for A/B gates, left for C/D/E gates" },
+    ],
+    concourseRoutes: [
+      {
+        fromZone: "security", toZone: "A",
+        steps: [{ instruction: "Turn right after security — A gates are closest, starting at A1", mode: "walk", estimatedMinutes: 4, landmark: "Alaska and Southwest use A concourse" }],
+        totalMinutes: 4,
+      },
+      {
+        fromZone: "security", toZone: "B",
+        steps: [{ instruction: "Walk straight ahead from security — B gates are center concourse", mode: "walk", estimatedMinutes: 5 }],
+        totalMinutes: 5,
+      },
+      {
+        fromZone: "security", toZone: "C",
+        steps: [{ instruction: "Turn left after security and walk to C gates", mode: "walk", estimatedMinutes: 7, landmark: "United and Delta use C/D concourse" }],
+        totalMinutes: 7,
+      },
+      {
+        fromZone: "security", toZone: "D",
+        steps: [{ instruction: "Turn left after security, walk past C gates to D concourse", mode: "walk", estimatedMinutes: 9 }],
+        totalMinutes: 9,
+      },
+      {
+        fromZone: "security", toZone: "E",
+        steps: [{ instruction: "E is the farthest concourse — turn left and walk all the way to the end", mode: "walk", estimatedMinutes: 12, landmark: "E gates are international departures" }],
+        totalMinutes: 12,
+      },
+    ],
+    generalNotes: "PDX is one of the easiest US airports — single terminal, all gates connected airside, no trains. MAX light rail connects downtown to the airport.",
+  },
+
+  // ── San Francisco SFO (detailed) ─────────────────────────────
+  // Already in the list above — SFO is covered
+
+  // ── Los Angeles LAX (detailed) ───────────────────────────────
+  // Already in the list above — LAX is covered
+
+  // ── Ontario ONT ──────────────────────────────────────────────
+  {
+    iata: "ONT",
+    name: "Ontario International",
+    securityNotes: [
+      { instruction: "ONT has two small terminals — T2 is the main terminal for most flights, T4 is for some airlines", mode: "walk", estimatedMinutes: 0 },
+    ],
+    concourseRoutes: [
+      {
+        fromZone: "T2-security", toZone: "T2",
+        steps: [{ instruction: "After security in T2 all gates are immediately ahead — small airport, nothing more than a 3-min walk", mode: "walk", estimatedMinutes: 3 }],
+        totalMinutes: 3,
+      },
+      {
+        fromZone: "T4-security", toZone: "T4",
+        steps: [{ instruction: "After T4 security all gates are directly ahead", mode: "walk", estimatedMinutes: 3 }],
+        totalMinutes: 3,
+      },
+      {
+        fromZone: "T2", toZone: "T4",
+        steps: [
+          { instruction: "Exit T2 to the roadway and walk or take the free shuttle to T4", mode: "shuttle", estimatedMinutes: 8, landmark: "Shuttle stop is outside the T2 arrivals exit" },
+        ],
+        totalMinutes: 8,
+      },
+    ],
+    generalNotes: "ONT is a small, easy airport. Most Alaska, Southwest, American, and Delta flights use T2. T4 is used by some other carriers. Very short walks to all gates.",
+  },
+
 ];
 
 const NAV_MAP = new Map(AIRPORT_NAV.map(n => [n.iata, n]));

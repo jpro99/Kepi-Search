@@ -63,7 +63,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
       if (tokenMatch) {
         const base = tokenMatch[1].replace(/\/$/, "");
         const suffix = tokenMatch[2];
-        return `/api/maptiles?url=${encodeURIComponent(base)}&suffix=${encodeURIComponent(suffix)}`;
+        return `/api/maptiles?url=${encodeURIComponent(base)}&suffix=${suffix}`;
       }
       return `/api/maptiles?url=${encodeURIComponent(clean)}`;
     };

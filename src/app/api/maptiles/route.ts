@@ -36,9 +36,14 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   // Reconstruct full URL — suffix contains template tokens already substituted by MapLibre
+  // e.g. suffix = "Open Sans Regular,Arial Unicode MS Regular/0-255.pbf"
+  // It arrives raw (not encoded) because we intentionally left {range}/{fontstack} unencoded
   const suffix = searchParams.get("suffix");
   if (suffix) {
-    target = new URL(target.toString().replace(/\/$/, "") + "/" + decodeURIComponent(suffix));
+    // suffix may contain spaces and slashes — append as path segments
+    const base = target.toString().replace(/\/$/, "");
+    const suffixClean = suffix.startsWith("/") ? suffix.slice(1) : suffix;
+    target = new URL(`${base}/${suffixClean}`);
   }
   target.searchParams.set("key", MAPTILER_KEY);
 

@@ -64,7 +64,7 @@ function proxyStyleUrls(style: Record<string, unknown>): Record<string, unknown>
       // Proxy just the base portion, keep the token suffix as-is
       const base = tokenMatch[1].replace(/\/$/, "");
       const suffix = tokenMatch[2]; // e.g. "{fontstack}/{range}.pbf"
-      return `/api/maptiles?url=${encodeURIComponent(base)}&suffix=${encodeURIComponent(suffix)}`;
+      return `/api/maptiles?url=${encodeURIComponent(base)}&suffix=${suffix}`;
     }
 
     return `/api/maptiles?url=${encodeURIComponent(clean)}`;
