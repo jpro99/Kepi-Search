@@ -52,4 +52,4 @@ Full production deployment instructions live in:
 
 - [DEPLOYMENT.md](./DEPLOYMENT.md)
 
-This includes Vercel setup, KV linking, env var provisioning, third-party account setup (Clerk, Inngest, AviationStack, Sentry), and preview E2E guidance.
+This includes Vercel setup, KV linking, env var provisioning, third-party account setup (Clerk, Inngest, AeroDataBox, Sentry), and preview E2E guidance.

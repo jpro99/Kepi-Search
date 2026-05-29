@@ -60,11 +60,11 @@ At runtime, `scripts/verify-env.ts` checks `.env.example` and prints clear warni
 - Endpoint:
   - Ensure Inngest is configured to call `https://<your-domain>/api/inngest`
 
-### AviationStack (live flight status)
+### AeroDataBox (live flight status)
 
-- Create account: [aviationstack.com](https://aviationstack.com/)
+- Create account: [rapidapi.com/aedbx-aedbx/api/aerodatabox](https://rapidapi.com/aedbx-aedbx/api/aerodatabox/)
 - Key:
-  - `AVIATIONSTACK_API_KEY`
+  - `AERODATABOX_API_KEY`
 
 ### Sentry (error monitoring)
 
@@ -106,4 +106,4 @@ PLAYWRIGHT_BASE_URL="https://kepi-search-git-<branch>-<team>.vercel.app" npm run
 - [ ] `npm run build`
 - [ ] Vercel env vars configured
 - [ ] Upstash Redis connected and keys set
-- [ ] Clerk/Inngest/AviationStack/Sentry keys configured
+- [ ] Clerk/Inngest/AeroDataBox/Sentry keys configured

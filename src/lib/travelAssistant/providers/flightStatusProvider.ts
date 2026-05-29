@@ -14,44 +14,33 @@ import {
 import { createMockTravelUpdateProvider } from "@/lib/travelAssistant/providers/mockTransportProvider";
 import { logger } from "@/lib/logger";
 
-const AVIATIONSTACK_BASE_URL = "https://api.aviationstack.com/v1/flights";
-const AVIATIONSTACK_STATUSES = [
-  "scheduled",
-  "active",
-  "landed",
-  "cancelled",
-  "diverted",
-  "incident",
-] as const;
-
-type AviationStackFlightStatus = (typeof AVIATIONSTACK_STATUSES)[number];
+const AERODATABOX_BASE_URL = "https://prod.api.market/api/v1/aedbx/aerodatabox";
 type FlightGovernanceStatus = "green" | "yellow" | "red";
 
-const FlightStatusSchema = z.object({
-  flight: z.object({
-    iata: z.string().trim().min(1).nullable().optional(),
-  }),
-  departure: z.object({
-    iata: z.string().trim().min(1).nullable().optional(),
-    scheduled: z.string().trim().min(1).nullable().optional(),
-    estimated: z.string().trim().min(1).nullable().optional(),
-  }),
-  arrival: z.object({
-    iata: z.string().trim().min(1).nullable().optional(),
-    scheduled: z.string().trim().min(1).nullable().optional(),
-    estimated: z.string().trim().min(1).nullable().optional(),
-  }),
-  flight_status: z.enum(AVIATIONSTACK_STATUSES),
+const AeroDataBoxTimeSchema = z.object({
+  local: z.string().trim().optional().nullable(),
+  utc: z.string().trim().optional().nullable(),
 });
 
-const AviationStackEnvelopeSchema = z.object({
-  data: z.array(FlightStatusSchema).default([]),
-  error: z
-    .object({
-      code: z.union([z.string(), z.number()]).optional(),
-      message: z.string().optional(),
-    })
-    .optional(),
+const AeroDataBoxAirportSchema = z.object({
+  iata: z.string().trim().optional().nullable(),
+  name: z.string().trim().optional().nullable(),
+});
+
+const AeroDataBoxEndpointSchema = z.object({
+  airport: AeroDataBoxAirportSchema.optional().nullable(),
+  scheduledTime: AeroDataBoxTimeSchema.optional().nullable(),
+  estimatedTime: AeroDataBoxTimeSchema.optional().nullable(),
+  actualTime: AeroDataBoxTimeSchema.optional().nullable(),
+  delay: z.number().finite().optional().nullable(),
+});
+
+const AeroDataBoxFlightSchema = z.object({
+  number: z.string().trim().optional().nullable(),
+  status: z.string().trim().optional().nullable(),
+  airline: z.object({ name: z.string().trim().optional().nullable() }).optional().nullable(),
+  departure: AeroDataBoxEndpointSchema.optional().nullable(),
+  arrival: AeroDataBoxEndpointSchema.optional().nullable(),
 });
 
 interface FlightProviderConfig {
@@ -59,7 +48,7 @@ interface FlightProviderConfig {
 }
 
 function resolveFlightProviderConfig(): FlightProviderConfig | null {
-  const apiKey = process.env.AVIATIONSTACK_API_KEY?.trim();
+  const apiKey = process.env.AERODATABOX_API_KEY?.trim();
   if (!apiKey) {
     return null;
   }
@@ -91,14 +80,14 @@ function calculateDelayMinutes(args: {
   return undefined;
 }
 
-function mapAviationStatusToGovernanceStatus(
-  status: AviationStackFlightStatus,
+function mapAeroDataBoxStatusToGovernanceStatus(
+  status: string,
   delayMinutes: number | undefined,
 ): FlightGovernanceStatus {
-  if (status === "cancelled" || status === "diverted" || status === "incident") {
+  if (status === "cancelled" || status === "diverted") {
     return "red";
   }
-  if (typeof delayMinutes === "number" && delayMinutes >= 20) {
+  if (status === "delayed" || (typeof delayMinutes === "number" && delayMinutes >= 20)) {
     return "yellow";
   }
   return "green";
@@ -119,20 +108,63 @@ function extractFlightNumber(reservation: UpdatableReservation): string | null {
   return null;
 }
 
+function extractFlightDate(reservation: UpdatableReservation): string | null {
+  const directMatch = reservation.localTime.match(/^(\d{4}-\d{2}-\d{2})/u);
+  if (directMatch?.[1]) {
+    return directMatch[1];
+  }
+  const parsed = Date.parse(reservation.localTime);
+  if (Number.isNaN(parsed)) {
+    return null;
+  }
+  const date = new Date(parsed);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+
 function selectBestFlightSnapshot(
-  snapshots: readonly z.infer<typeof FlightStatusSchema>[],
+  snapshots: readonly z.infer<typeof AeroDataBoxFlightSchema>[],
   expectedFlightNumber: string,
-): z.infer<typeof FlightStatusSchema> | null {
+): z.infer<typeof AeroDataBoxFlightSchema> | null {
   const normalizedExpected = normalizeProviderCode(expectedFlightNumber);
+  const statusPriority = [
+    "enroute",
+    "boarding",
+    "gateclosed",
+    "departed",
+    "approaching",
+    "arrived",
+    "delayed",
+    "landed",
+    "scheduled",
+    "cancelled",
+    "diverted",
+  ] as const;
   const matching = snapshots.filter(
-    (snapshot) => normalizeProviderCode(snapshot.flight.iata ?? "") === normalizedExpected,
+    (snapshot) => normalizeProviderCode(snapshot.number ?? "") === normalizedExpected,
   );
   const pool = matching.length > 0 ? matching : snapshots;
   if (pool.length === 0) return null;
 
   return [...pool].sort((left, right) => {
-    const leftTime = parseDateToMs(left.departure.scheduled);
-    const rightTime = parseDateToMs(right.departure.scheduled);
+    const leftStatusPriority = statusPriority.indexOf((left.status ?? "").toLowerCase() as (typeof statusPriority)[number]);
+    const rightStatusPriority = statusPriority.indexOf((right.status ?? "").toLowerCase() as (typeof statusPriority)[number]);
+    if (leftStatusPriority !== rightStatusPriority) {
+      if (leftStatusPriority === -1) return 1;
+      if (rightStatusPriority === -1) return -1;
+      return leftStatusPriority - rightStatusPriority;
+    }
+    const leftTime = parseDateToMs(
+      left.departure?.scheduledTime?.utc ??
+        left.departure?.scheduledTime?.local ??
+        left.departure?.estimatedTime?.utc ??
+        left.departure?.estimatedTime?.local,
+    );
+    const rightTime = parseDateToMs(
+      right.departure?.scheduledTime?.utc ??
+        right.departure?.scheduledTime?.local ??
+        right.departure?.estimatedTime?.utc ??
+        right.departure?.estimatedTime?.local,
+    );
     if (Number.isNaN(leftTime) && Number.isNaN(rightTime)) return 0;
     if (Number.isNaN(leftTime)) return 1;
     if (Number.isNaN(rightTime)) return -1;
@@ -140,25 +172,77 @@ function selectBestFlightSnapshot(
   })[0];
 }
 
+function resolveAeroDataBoxTime(endpoint: z.infer<typeof AeroDataBoxEndpointSchema> | null | undefined): string {
+  if (!endpoint) return "";
+  return (
+    endpoint.actualTime?.utc ??
+    endpoint.actualTime?.local ??
+    endpoint.estimatedTime?.utc ??
+    endpoint.estimatedTime?.local ??
+    endpoint.scheduledTime?.utc ??
+    endpoint.scheduledTime?.local ??
+    ""
+  );
+}
+
+function resolveAeroDataBoxStatus(status: string | null | undefined): { normalizedStatus: string; onTime: boolean | null } {
+  const normalized = (status ?? "").toLowerCase();
+  if (normalized === "cancelled" || normalized === "cancelleduncertain") {
+    return { normalizedStatus: "cancelled", onTime: false };
+  }
+  if (normalized === "diverted") {
+    return { normalizedStatus: "diverted", onTime: false };
+  }
+  if (normalized === "delayed") {
+    return { normalizedStatus: "delayed", onTime: false };
+  }
+  if (normalized === "enroute" || normalized === "approaching" || normalized === "departed") {
+    return { normalizedStatus: "active", onTime: null };
+  }
+  if (normalized === "arrived" || normalized === "landed") {
+    return { normalizedStatus: "landed", onTime: null };
+  }
+  if (normalized === "boarding" || normalized === "gateclosed" || normalized === "checkin") {
+    return { normalizedStatus: "boarding", onTime: null };
+  }
+  if (normalized === "scheduled") {
+    return { normalizedStatus: "scheduled", onTime: null };
+  }
+  return { normalizedStatus: normalized || "unknown", onTime: null };
+}
+
 function mapFlightSnapshotToUpdate(
   reservation: UpdatableReservation,
-  snapshot: z.infer<typeof FlightStatusSchema>,
+  snapshot: z.infer<typeof AeroDataBoxFlightSchema>,
 ): TravelUpdateEvent {
   const normalizedDelay = calculateDelayMinutes({
-    scheduledDeparture: snapshot.departure.scheduled,
-    estimatedDeparture: snapshot.departure.estimated,
-    scheduledArrival: snapshot.arrival.scheduled,
-    estimatedArrival: snapshot.arrival.estimated,
+    scheduledDeparture:
+      snapshot.departure?.scheduledTime?.utc ?? snapshot.departure?.scheduledTime?.local,
+    estimatedDeparture:
+      snapshot.departure?.estimatedTime?.utc ?? snapshot.departure?.estimatedTime?.local,
+    scheduledArrival:
+      snapshot.arrival?.scheduledTime?.utc ?? snapshot.arrival?.scheduledTime?.local,
+    estimatedArrival:
+      snapshot.arrival?.estimatedTime?.utc ?? snapshot.arrival?.estimatedTime?.local,
   });
-  const governanceStatus = mapAviationStatusToGovernanceStatus(snapshot.flight_status, normalizedDelay);
-  const departureAirport = normalizeLocationToken(snapshot.departure.iata ?? "unknown");
-  const arrivalAirport = normalizeLocationToken(snapshot.arrival.iata ?? "unknown");
+  const explicitDelay = typeof snapshot.departure?.delay === "number"
+    ? clampDelayMinutes(snapshot.departure.delay)
+    : typeof snapshot.arrival?.delay === "number"
+      ? clampDelayMinutes(snapshot.arrival.delay)
+      : undefined;
+  const finalDelay = explicitDelay ?? normalizedDelay;
+  const status = resolveAeroDataBoxStatus(snapshot.status);
+  const governanceStatus = mapAeroDataBoxStatusToGovernanceStatus(status.normalizedStatus, finalDelay);
+  const departureAirport = normalizeLocationToken(
+    snapshot.departure?.airport?.iata ?? snapshot.departure?.airport?.name ?? "unknown",
+  );
+  const arrivalAirport = normalizeLocationToken(
+    snapshot.arrival?.airport?.iata ?? snapshot.arrival?.airport?.name ?? "unknown",
+  );
   const routeSummary = `${departureAirport} -> ${arrivalAirport}`;
   const scheduleSummary = [
-    `Dep ${snapshot.departure.scheduled ?? "n/a"}`,
-    `Est dep ${snapshot.departure.estimated ?? "n/a"}`,
-    `Arr ${snapshot.arrival.scheduled ?? "n/a"}`,
-    `Est arr ${snapshot.arrival.estimated ?? "n/a"}`,
+    `Dep ${resolveAeroDataBoxTime(snapshot.departure) || "n/a"}`,
+    `Arr ${resolveAeroDataBoxTime(snapshot.arrival) || "n/a"}`,
   ].join(" | ");
 
   if (governanceStatus === "red") {
@@ -168,9 +252,9 @@ function mapFlightSnapshotToUpdate(
       severity: "critical",
       summary: ensureSummary(
         undefined,
-        `${reservation.title} ${snapshot.flight_status === "cancelled" ? "cancelled" : snapshot.flight_status}`,
+        `${reservation.title} ${status.normalizedStatus === "cancelled" ? "cancelled" : status.normalizedStatus}`,
       ),
-      detail: `AviationStack status ${snapshot.flight_status}. Route ${routeSummary}. ${scheduleSummary}`,
+      detail: `AeroDataBox status ${status.normalizedStatus}. Route ${routeSummary}. ${scheduleSummary}`,
       target: {
         reservationType: "flight",
         confirmationCode: reservation.confirmationCode,
@@ -179,20 +263,24 @@ function mapFlightSnapshotToUpdate(
     };
   }
 
-  if (governanceStatus === "yellow" && typeof normalizedDelay === "number") {
-    const severity = normalizedDelay >= 45 ? "critical" : "warning";
+  if (governanceStatus === "yellow") {
+    const severity = typeof finalDelay === "number" && finalDelay >= 45 ? "critical" : "warning";
+    const delayDescriptor =
+      typeof finalDelay === "number" && finalDelay > 0
+        ? `${finalDelay} minutes`
+        : "operational status";
     return {
       provider: "flight-status-provider",
       kind: "delay",
       severity,
-      summary: `${reservation.title} delayed ${normalizedDelay} minutes`,
-      detail: `AviationStack status ${snapshot.flight_status}. Route ${routeSummary}. ${scheduleSummary}`,
+      summary: `${reservation.title} delayed (${delayDescriptor})`,
+      detail: `AeroDataBox status ${status.normalizedStatus}. Route ${routeSummary}. ${scheduleSummary}`,
       target: {
         reservationType: "flight",
         confirmationCode: reservation.confirmationCode,
         titleHint: reservation.title,
       },
-      delayMinutes: normalizedDelay,
+      delayMinutes: finalDelay,
     };
   }
 
@@ -201,7 +289,7 @@ function mapFlightSnapshotToUpdate(
     kind: "on-time",
     severity: "info",
     summary: `${reservation.title} on time`,
-    detail: `AviationStack status ${snapshot.flight_status}. Route ${routeSummary}. ${scheduleSummary}`,
+    detail: `AeroDataBox status ${status.normalizedStatus}. Route ${routeSummary}. ${scheduleSummary}`,
     target: {
       reservationType: "flight",
       confirmationCode: reservation.confirmationCode,
@@ -238,39 +326,48 @@ export function createFlightStatusProviderFromEnv(): TravelUpdateProvider {
         return runMockFallback({
           reservations: candidates,
           nowIso: args.nowIso,
-          reason: "AVIATIONSTACK_API_KEY is missing",
+          reason: "AERODATABOX_API_KEY is missing",
         });
       }
 
       const updates: TravelUpdateEvent[] = [];
       for (const reservation of candidates) {
         const flightNumber = extractFlightNumber(reservation);
-        if (!flightNumber) {
+        const flightDate = extractFlightDate(reservation);
+        if (!flightNumber || !flightDate) {
           continue;
         }
 
         try {
-          const url = new URL(AVIATIONSTACK_BASE_URL);
-          url.searchParams.set("flight_iata", flightNumber);
-          url.searchParams.set("access_key", config.apiKey);
-          const response = await fetch(url, {
+          const lookupUrl = `${AERODATABOX_BASE_URL}/flights/number/${encodeURIComponent(flightNumber)}/${encodeURIComponent(flightDate)}`;
+          const response = await fetch(lookupUrl, {
             method: "GET",
+            headers: {
+              "x-api-market-key": config.apiKey,
+              Accept: "application/json",
+            },
             cache: "no-store",
             signal: createTimeoutSignal(),
           });
+          if (response.status === 204) {
+            continue;
+          }
+          if (response.status === 404) {
+            continue;
+          }
           if (!response.ok) {
-            throw new Error(`AviationStack returned ${response.status}`);
+            const errText = await response.text().catch(() => "");
+            throw new Error(`AeroDataBox returned ${response.status}: ${errText.slice(0, 200)}`);
           }
 
-          const parsedEnvelope = AviationStackEnvelopeSchema.safeParse(await response.json());
-          if (!parsedEnvelope.success) {
-            throw new Error("AviationStack payload validation failed");
-          }
-          if (parsedEnvelope.data.error?.message) {
-            throw new Error(parsedEnvelope.data.error.message);
+          const rawPayload = await response.json();
+          const normalizedPayload = Array.isArray(rawPayload) ? rawPayload : [rawPayload];
+          const parsedFlights = z.array(AeroDataBoxFlightSchema).safeParse(normalizedPayload);
+          if (!parsedFlights.success) {
+            throw new Error("AeroDataBox payload validation failed");
           }
 
-          const snapshot = selectBestFlightSnapshot(parsedEnvelope.data.data, flightNumber);
+          const snapshot = selectBestFlightSnapshot(parsedFlights.data, flightNumber);
           if (!snapshot) {
             continue;
           }
@@ -279,7 +376,7 @@ export function createFlightStatusProviderFromEnv(): TravelUpdateProvider {
           const fallbackUpdates = await runMockFallback({
             reservations: [reservation],
             nowIso: args.nowIso,
-            reason: error instanceof Error ? error.message : "AviationStack request failed",
+            reason: error instanceof Error ? error.message : "AeroDataBox request failed",
           });
           updates.push(...fallbackUpdates);
         }
@@ -290,8 +387,10 @@ export function createFlightStatusProviderFromEnv(): TravelUpdateProvider {
 }
 
 export {
-  FlightStatusSchema,
-  mapAviationStatusToGovernanceStatus,
+  AeroDataBoxFlightSchema,
+  mapAeroDataBoxStatusToGovernanceStatus,
+  resolveAeroDataBoxStatus,
   calculateDelayMinutes,
   extractFlightNumber,
+  extractFlightDate,
 };

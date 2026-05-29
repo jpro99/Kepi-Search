@@ -13,31 +13,30 @@ const SAMPLE_FLIGHT_RESERVATION: UpdatableReservation = {
   timezone: "America/New_York",
 };
 
-test("successful AviationStack parse maps to internal delayed status", async () => {
-  const previousKey = process.env.AVIATIONSTACK_API_KEY;
+test("successful AeroDataBox parse maps to internal delayed status", async () => {
+  const previousKey = process.env.AERODATABOX_API_KEY;
   const originalFetch = globalThis.fetch;
-  process.env.AVIATIONSTACK_API_KEY = "aviationstack-key";
+  process.env.AERODATABOX_API_KEY = "aerodatabox-key";
 
   globalThis.fetch = async () =>
     new Response(
-      JSON.stringify({
-        data: [
-          {
-            flight_status: "active",
-            flight: { iata: "DL407" },
-            departure: {
-              iata: "JFK",
-              scheduled: "2026-06-22T08:15:00+00:00",
-              estimated: "2026-06-22T08:40:00+00:00",
-            },
-            arrival: {
-              iata: "SFO",
-              scheduled: "2026-06-22T11:45:00+00:00",
-              estimated: "2026-06-22T12:10:00+00:00",
-            },
+      JSON.stringify([
+        {
+          number: "DL407",
+          status: "Delayed",
+          departure: {
+            airport: { iata: "JFK" },
+            scheduledTime: { utc: "2026-06-22T08:15:00+00:00" },
+            estimatedTime: { utc: "2026-06-22T08:40:00+00:00" },
+            delay: 25,
           },
-        ],
-      }),
+          arrival: {
+            airport: { iata: "SFO" },
+            scheduledTime: { utc: "2026-06-22T11:45:00+00:00" },
+            estimatedTime: { utc: "2026-06-22T12:10:00+00:00" },
+          },
+        },
+      ]),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
 
@@ -53,35 +52,31 @@ test("successful AviationStack parse maps to internal delayed status", async () 
     assert.equal(updates[0]?.delayMinutes, 25);
   } finally {
     globalThis.fetch = originalFetch;
-    process.env.AVIATIONSTACK_API_KEY = previousKey;
+    process.env.AERODATABOX_API_KEY = previousKey;
   }
 });
 
-test("cancelled flight maps to red/cancellation update", async () => {
-  const previousKey = process.env.AVIATIONSTACK_API_KEY;
+test("cancelled AeroDataBox flight maps to red/cancellation update", async () => {
+  const previousKey = process.env.AERODATABOX_API_KEY;
   const originalFetch = globalThis.fetch;
-  process.env.AVIATIONSTACK_API_KEY = "aviationstack-key";
+  process.env.AERODATABOX_API_KEY = "aerodatabox-key";
 
   globalThis.fetch = async () =>
     new Response(
-      JSON.stringify({
-        data: [
-          {
-            flight_status: "cancelled",
-            flight: { iata: "DL407" },
-            departure: {
-              iata: "JFK",
-              scheduled: "2026-06-22T08:15:00+00:00",
-              estimated: null,
-            },
-            arrival: {
-              iata: "SFO",
-              scheduled: "2026-06-22T11:45:00+00:00",
-              estimated: null,
-            },
+      JSON.stringify([
+        {
+          number: "DL407",
+          status: "Cancelled",
+          departure: {
+            airport: { iata: "JFK" },
+            scheduledTime: { utc: "2026-06-22T08:15:00+00:00" },
           },
-        ],
-      }),
+          arrival: {
+            airport: { iata: "SFO" },
+            scheduledTime: { utc: "2026-06-22T11:45:00+00:00" },
+          },
+        },
+      ]),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
 
@@ -96,14 +91,14 @@ test("cancelled flight maps to red/cancellation update", async () => {
     assert.equal(updates[0]?.severity, "critical");
   } finally {
     globalThis.fetch = originalFetch;
-    process.env.AVIATIONSTACK_API_KEY = previousKey;
+    process.env.AERODATABOX_API_KEY = previousKey;
   }
 });
 
-test("AviationStack API error falls back to mock provider without throwing", async () => {
-  const previousKey = process.env.AVIATIONSTACK_API_KEY;
+test("AeroDataBox API error falls back to mock provider without throwing", async () => {
+  const previousKey = process.env.AERODATABOX_API_KEY;
   const originalFetch = globalThis.fetch;
-  process.env.AVIATIONSTACK_API_KEY = "aviationstack-key";
+  process.env.AERODATABOX_API_KEY = "aerodatabox-key";
 
   globalThis.fetch = async () => new Response(JSON.stringify({ error: "upstream failed" }), { status: 500 });
 
@@ -117,6 +112,6 @@ test("AviationStack API error falls back to mock provider without throwing", asy
     assert.ok((updates[0]?.provider ?? "").startsWith("mock-"));
   } finally {
     globalThis.fetch = originalFetch;
-    process.env.AVIATIONSTACK_API_KEY = previousKey;
+    process.env.AERODATABOX_API_KEY = previousKey;
   }
 });

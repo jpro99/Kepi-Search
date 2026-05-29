@@ -40,11 +40,11 @@ export async function GET() {
       missingEnvKeys: kv.missingEnvKeys,
     } satisfies IntegrationHealth,
     aviationStack: buildEnvBackedIntegrationHealth({
-      envKeys: ["AVIATIONSTACK_API_KEY"],
+      envKeys: ["AERODATABOX_API_KEY"],
       modeWhenConfigured: "live",
       modeWhenMissing: "mock-fallback",
-      configuredMessage: "AviationStack live updates enabled.",
-      missingMessage: "AVIATIONSTACK_API_KEY missing; flight updates fallback to mock data.",
+      configuredMessage: "AeroDataBox live updates enabled.",
+      missingMessage: "AERODATABOX_API_KEY missing; flight updates fallback to mock data.",
     }),
     anthropic: buildEnvBackedIntegrationHealth({
       envKeys: ["ANTHROPIC_API_KEY"],

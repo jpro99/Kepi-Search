@@ -191,29 +191,37 @@ function evaluateInngestHealthFromRuns(runs: readonly AdminBackgroundJobRun[]): 
   };
 }
 
-async function measureAviationStackHealth(): Promise<AdminHealthResponse["services"]["aviationStack"]> {
-  const apiKey = process.env.AVIATIONSTACK_API_KEY?.trim();
+async function measureFlightProviderHealth(): Promise<AdminHealthResponse["services"]["aviationStack"]> {
+  const apiKey = process.env.AERODATABOX_API_KEY?.trim();
   if (!apiKey) {
     return {
       status: "yellow",
       quotaRemaining: null,
-      detail: "AviationStack API key is not configured.",
+      detail: "AeroDataBox API key is not configured.",
     };
   }
 
   try {
     const response = await fetchWithTimeout(
-      `https://api.aviationstack.com/v1/flights?access_key=${encodeURIComponent(apiKey)}&limit=1`,
-      { method: "GET", cache: "no-store" },
+      "https://prod.api.market/api/v1/aedbx/aerodatabox/flights/number/DL407/2026-06-22",
+      {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          "x-api-market-key": apiKey,
+          Accept: "application/json",
+        },
+      },
       5000,
     );
     const quotaHeader =
       response.headers.get("x-ratelimit-remaining") ??
       response.headers.get("x-rate-limit-remaining") ??
-      response.headers.get("x-aviationstack-ratelimit-remaining");
+      response.headers.get("x-ratelimit-requests-remaining");
     const quotaRemaining = quotaHeader ? Number.parseInt(quotaHeader, 10) : Number.NaN;
     const normalizedQuota = Number.isNaN(quotaRemaining) ? null : Math.max(0, quotaRemaining);
-    let status: AdminServiceStatus = response.ok ? "green" : "red";
+    const statusCodeConsideredReachable = response.ok || response.status === 204 || response.status === 404;
+    let status: AdminServiceStatus = statusCodeConsideredReachable ? "green" : "red";
     if (response.ok && normalizedQuota === null) {
       status = "yellow";
     } else if (response.ok && normalizedQuota !== null && normalizedQuota < 50) {
@@ -222,17 +230,17 @@ async function measureAviationStackHealth(): Promise<AdminHealthResponse["servic
     return {
       status,
       quotaRemaining: normalizedQuota,
-      detail: response.ok
+      detail: statusCodeConsideredReachable
         ? normalizedQuota === null
           ? "Quota header unavailable; API reachable."
           : `Approximate remaining quota: ${normalizedQuota}.`
-        : `AviationStack health check failed (${response.status}).`,
+        : `AeroDataBox health check failed (${response.status}).`,
     };
   } catch (error) {
     return {
       status: "red",
       quotaRemaining: null,
-      detail: `AviationStack request failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      detail: `AeroDataBox request failed: ${error instanceof Error ? error.message : "unknown error"}`,
     };
   }
 }
@@ -540,10 +548,10 @@ async function collectInsightsStats(
 }
 
 export async function buildAdminHealthSnapshot(): Promise<AdminHealthResponse> {
-  const [kvHealth, backgroundRuns, aviationStackHealth, sentryHealth] = await Promise.all([
+  const [kvHealth, backgroundRuns, flightProviderHealth, sentryHealth] = await Promise.all([
     measureKvHealth(),
     collectBackgroundRuns(1),
-    measureAviationStackHealth(),
+    measureFlightProviderHealth(),
     measureSentryHealth(),
   ]);
   return {
@@ -551,7 +559,7 @@ export async function buildAdminHealthSnapshot(): Promise<AdminHealthResponse> {
     services: {
       kv: kvHealth,
       inngest: evaluateInngestHealthFromRuns(backgroundRuns),
-      aviationStack: aviationStackHealth,
+      aviationStack: flightProviderHealth,
       sentry: sentryHealth,
     },
   };

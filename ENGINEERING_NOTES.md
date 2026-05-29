@@ -45,5 +45,5 @@
 - `RESEND_API_KEY` — for fetching email body
 - `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` — or `KV_REST_API_*` equivalents
 - `ANTHROPIC_API_KEY` — for AI email parsing
-- `AVIATIONSTACK_API_KEY` — for flight status lookup
+- `AERODATABOX_API_KEY` — for flight status lookup
 - `CLERK_SECRET_KEY` — for auth

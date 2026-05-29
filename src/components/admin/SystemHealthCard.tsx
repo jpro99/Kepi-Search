@@ -74,7 +74,7 @@ export function SystemHealthCard({ data, loading, error, onRefresh }: SystemHeal
 
           <article className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/60">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold">AviationStack</p>
+              <p className="text-sm font-semibold">AeroDataBox</p>
               <span
                 className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${statusBadgeClass(data.services.aviationStack.status)}`}
               >
