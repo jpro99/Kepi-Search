@@ -23,6 +23,7 @@ const MemberSchema = z.object({
   sharingEnabled: z.boolean().default(true),
   visibility: z.enum(["all-members", "organizer-only"]).default("all-members"),
   joinedAt: z.string(),
+  imageUrl: z.string().url().optional().nullable(),
 });
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -77,6 +78,7 @@ export async function GET() {
         sharingEnabled: true,
         visibility: "all-members",
         joinedAt: new Date().toISOString(),
+        imageUrl: null,
       }],
       inviteCode: generateId().slice(0, 8).toUpperCase(),
       createdAt: new Date().toISOString(),
@@ -137,6 +139,7 @@ export async function POST(request: Request) {
     sharingEnabled: z.boolean().optional(),
     visibility: z.enum(["all-members", "organizer-only"]).optional(),
     groupName: z.string().max(60).optional(),
+    imageUrl: z.string().url().nullable().optional(),
   }).safeParse(body);
 
   if (!parsed.success) {
@@ -250,6 +253,7 @@ export async function POST(request: Request) {
       sharingEnabled: true,
       visibility: "all-members",
       joinedAt: new Date().toISOString(),
+      imageUrl: parsed.data.imageUrl ?? null,
     };
     ownerGroup.members.push(newMember);
     await kvStoreSet(FAMILY_GROUP_KEY, ownerGroup, { userId: ownerUserId });
