@@ -45,15 +45,16 @@ function timeAgo(iso: string): string {
 }
 function isStale(iso: string) { return Date.now() - Date.parse(iso) > 10 * 60_000; }
 
-/* ─── Inline raster style builders ──────────────────────────── */
+/* ─── Map style builders ─────────────────────────────────────── */
+// Use tileSize 256 + @1x for speed on mobile (4x fewer bytes than 512/@2x)
 function buildStreetsStyle(key: string) {
   return {
     version: 8 as const,
     sources: {
       "streets-raster": {
         type: "raster" as const,
-        tiles: [`https://api.maptiler.com/maps/streets/{z}/{x}/{y}@2x.png?key=${key}`],
-        tileSize: 512, maxzoom: 20,
+        tiles: [`https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=${key}`],
+        tileSize: 256, maxzoom: 20,
         attribution: "© MapTiler © OpenStreetMap contributors",
       },
     },
@@ -61,13 +62,14 @@ function buildStreetsStyle(key: string) {
   };
 }
 function buildSatelliteStyle(key: string) {
+  // FIX: correct satellite endpoint is /maps/satellite/ not /tiles/satellite-v2/
   return {
     version: 8 as const,
     sources: {
       "sat-raster": {
         type: "raster" as const,
-        tiles: [`https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}@2x.jpg?key=${key}`],
-        tileSize: 512, maxzoom: 20,
+        tiles: [`https://api.maptiler.com/maps/satellite/{z}/{x}/{y}.jpg?key=${key}`],
+        tileSize: 256, maxzoom: 20,
         attribution: "© MapTiler © OpenStreetMap contributors",
       },
     },
@@ -83,6 +85,7 @@ export function LiveMapPage() {
   const mapRef = useRef<any>(null);
   const isLoadedRef = useRef(false);
   const watchIdRef = useRef<number | null>(null);
+  const myMemberIdRef = useRef<string | null>(null);
 
   const [group, setGroup] = useState<FamilyGroup | null>(null);
   const [locations, setLocations] = useState<Record<string, LocationPoint>>({});
@@ -94,6 +97,7 @@ export function LiveMapPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [sharingLocation, setSharingLocation] = useState(false);
+  const [myMemberId, setMyMemberId] = useState<string | null>(null);
 
   /* ── Load group + config ── */
   useEffect(() => {
@@ -104,44 +108,54 @@ export function LiveMapPage() {
 
     void fetch("/api/family", { cache: "no-store" })
       .then(r => r.json())
-      .then((d: { group: FamilyGroup; locations: Record<string, LocationPoint> }) => {
+      .then((d: { group: FamilyGroup; locations: Record<string, LocationPoint>; myMemberId?: string }) => {
         setGroup(d.group);
         setLocations(d.locations ?? {});
+        if (d.myMemberId) {
+          setMyMemberId(d.myMemberId);
+          myMemberIdRef.current = d.myMemberId;
+        }
       })
       .catch(() => null);
   }, []);
 
-  /* ── Poll locations every 30 s ── */
+  /* ── Poll locations every 10 s (faster than before) ── */
   useEffect(() => {
     const id = setInterval(() => {
       void fetch("/api/family", { cache: "no-store" })
         .then(r => r.json())
-        .then((d: { group?: FamilyGroup; locations?: Record<string, LocationPoint> }) => {
+        .then((d: { locations?: Record<string, LocationPoint> }) => {
           if (d.locations) setLocations(d.locations);
         })
         .catch(() => null);
-    }, 30_000);
+    }, 10_000);
     return () => clearInterval(id);
   }, []);
 
-  /* ── Place markers ── */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const placeMarkers = useCallback((map: any) => {
+  /* ── Place/update markers (move existing ones, no full rebuild) ── */
+  const placeMarkers = useCallback((map: unknown) => {
     if (!map) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const m = map as any;
     import("maplibre-gl").then((ml) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      map._kepiMarkers?.forEach((m: any) => m.remove());
-      map._kepiMarkers = [];
+      const existing: Record<string, any> = m._kepiMarkers ?? {};
 
       (group?.members ?? []).forEach(member => {
         const loc = locations[member.id];
         if (!loc) return;
         const stale = isStale(loc.updatedAt);
 
+        if (existing[member.id]) {
+          // Move existing marker instead of rebuilding — much cheaper
+          existing[member.id].setLngLat([loc.lon, loc.lat]);
+          return;
+        }
+
+        // Build new marker
         const wrap = document.createElement("div");
         wrap.style.cssText = "cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;";
 
-        // Outer pulse ring (only for live)
         if (!stale) {
           const pulse = document.createElement("div");
           pulse.style.cssText = [
@@ -153,9 +167,7 @@ export function LiveMapPage() {
           const wrap2 = document.createElement("div");
           wrap2.style.cssText = "position:relative;width:48px;height:48px;";
           wrap2.appendChild(pulse);
-
-          const av = buildAvatar(member, stale);
-          wrap2.appendChild(av);
+          wrap2.appendChild(buildAvatar(member, stale));
           wrap.appendChild(wrap2);
         } else {
           wrap.appendChild(buildAvatar(member, stale));
@@ -170,23 +182,33 @@ export function LiveMapPage() {
           "font-family:system-ui,sans-serif;letter-spacing:-0.01em;",
         ].join("");
         lbl.textContent = member.name;
-
         wrap.appendChild(lbl);
+
         wrap.addEventListener("click", () => {
           setSelected(p => p === member.id ? null : member.id);
           setDrawerOpen(false);
-          map.flyTo({ center: [loc.lon, loc.lat], zoom: 16, duration: 900, essential: true });
+          m.flyTo({ center: [loc.lon, loc.lat], zoom: 16, duration: 900, essential: true });
         });
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const marker = new (ml as any).Marker({ element: wrap, anchor: "bottom" })
-          .setLngLat([loc.lon, loc.lat]).addTo(map);
-        map._kepiMarkers.push(marker);
+          .setLngLat([loc.lon, loc.lat]).addTo(m);
+        existing[member.id] = marker;
       });
+
+      // Remove markers for members no longer in group
+      Object.keys(existing).forEach(id => {
+        if (!(group?.members ?? []).find(mb => mb.id === id)) {
+          existing[id].remove();
+          delete existing[id];
+        }
+      });
+
+      m._kepiMarkers = existing;
     }).catch(console.error);
   }, [group, locations]);
 
-  /* ── Init map ── */
+  /* ── Init map (only when maptilerKey first arrives) ── */
   useEffect(() => {
     if (!maptilerKey || !mapEl.current) return;
     let cancelled = false;
@@ -195,7 +217,8 @@ export function LiveMapPage() {
 
     if (mapRef.current) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mapRef.current._kepiMarkers?.forEach((m: any) => m.remove());
+      const old = mapRef.current._kepiMarkers as Record<string, any> | undefined;
+      if (old) Object.values(old).forEach((mk: unknown) => (mk as { remove(): void }).remove());
       mapRef.current.remove();
       mapRef.current = null;
     }
@@ -218,7 +241,7 @@ export function LiveMapPage() {
           style: satellite ? buildSatelliteStyle(key) : buildStreetsStyle(key),
           center, zoom,
           maxZoom: 20,
-          pixelRatio: typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 2) : 1,
+          // Don't cap pixelRatio — let MapLibre decide; capping to 1 makes it blurry on Retina
           attributionControl: false,
         });
 
@@ -226,21 +249,13 @@ export function LiveMapPage() {
         map.addControl(new (ml as any).NavigationControl({ showCompass: true }), "top-right");
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         map.addControl(new (ml as any).AttributionControl({ compact: true }), "bottom-right");
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        map.addControl(new (ml as any).GeolocateControl({
-          positionOptions: { enableHighAccuracy: true },
-          trackUserLocation: true,
-          showUserHeading: true,
-        }), "top-right");
 
-        map.on("style.load", () => {
+        map.on("load", () => {
           if (cancelled) return;
           isLoadedRef.current = true;
           setIsLoaded(true);
           placeMarkers(map);
         });
-        map.on("load", () => { if (!cancelled) { isLoadedRef.current = true; setIsLoaded(true); } });
-        map.once("idle", () => { if (!cancelled) placeMarkers(map); });
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         map.on("error", (e: any) => {
           const msg = String(e?.error?.message ?? "unknown error");
@@ -258,7 +273,8 @@ export function LiveMapPage() {
       cancelled = true;
       if (mapRef.current) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        mapRef.current._kepiMarkers?.forEach((m: any) => m.remove());
+        const old = mapRef.current._kepiMarkers as Record<string, any> | undefined;
+        if (old) Object.values(old).forEach((mk: unknown) => (mk as { remove(): void }).remove());
         mapRef.current.remove(); mapRef.current = null;
       }
       isLoadedRef.current = false; setIsLoaded(false);
@@ -266,10 +282,12 @@ export function LiveMapPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [maptilerKey]);
 
-  /* ── Re-place markers on data change ── */
-  useEffect(() => { if (mapRef.current && isLoaded) placeMarkers(mapRef.current); }, [placeMarkers, isLoaded]);
+  /* ── Re-place/move markers when locations update ── */
+  useEffect(() => {
+    if (mapRef.current && isLoaded) placeMarkers(mapRef.current);
+  }, [placeMarkers, isLoaded]);
 
-  /* ── Satellite toggle ── */
+  /* ── Satellite toggle — swap style without reinitialising map ── */
   useEffect(() => {
     if (!mapRef.current || !maptilerKey || !isLoaded) return;
     const key = encodeURIComponent(maptilerKey);
@@ -277,12 +295,15 @@ export function LiveMapPage() {
     mapRef.current.once("styledata", () => { if (mapRef.current) placeMarkers(mapRef.current); });
   }, [satellite, maptilerKey, isLoaded, placeMarkers]);
 
-  /* ── Fit all ── */
+  /* ── Fit all members ── */
   const fitAll = useCallback(() => {
     if (!mapRef.current) return;
     const locs = Object.values(locations);
     if (!locs.length) return;
-    if (locs.length === 1) { mapRef.current.flyTo({ center: [locs[0].lon, locs[0].lat], zoom: 15, essential: true }); return; }
+    if (locs.length === 1) {
+      mapRef.current.flyTo({ center: [locs[0].lon, locs[0].lat], zoom: 15, essential: true });
+      return;
+    }
     import("maplibre-gl").then(({ LngLatBounds }) => {
       const b = new LngLatBounds();
       locs.forEach(l => b.extend([l.lon, l.lat]));
@@ -290,29 +311,51 @@ export function LiveMapPage() {
     }).catch(console.error);
   }, [locations]);
 
-  /* ── Share location ── */
+  /* ── Share my location ── */
   const shareLocation = useCallback(() => {
     if (sharingLocation) {
-      if (watchIdRef.current !== null) { navigator.geolocation.clearWatch(watchIdRef.current); watchIdRef.current = null; }
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
       setSharingLocation(false);
       return;
     }
     if (!navigator.geolocation) { alert("Geolocation not supported on this device."); return; }
     setSharingLocation(true);
+
     watchIdRef.current = navigator.geolocation.watchPosition(
       pos => {
-        void fetch("/api/family/location", {
+        const { latitude: lat, longitude: lon, accuracy } = pos.coords;
+
+        // FIX: correct endpoint is POST /api/family with action:"update-location"
+        void fetch("/api/family", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy }),
+          body: JSON.stringify({ action: "update-location", lat, lon, accuracy }),
         }).catch(() => null);
+
+        // FIX: update own pin immediately without waiting for next poll
+        const memberId = myMemberIdRef.current;
+        if (memberId) {
+          setLocations(prev => ({
+            ...prev,
+            [memberId]: { lat, lon, accuracy, updatedAt: new Date().toISOString(), memberId },
+          }));
+          // Pan map to follow me
+          if (mapRef.current) {
+            mapRef.current.easeTo({ center: [lon, lat], duration: 400 });
+          }
+        }
       },
       () => setSharingLocation(false),
-      { enableHighAccuracy: true, maximumAge: 15000 }
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10_000 }
     );
   }, [sharingLocation]);
 
-  useEffect(() => () => { if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current); }, []);
+  useEffect(() => () => {
+    if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
+  }, []);
 
   /* ── Derived ── */
   const members = group?.members ?? [];
@@ -338,25 +381,22 @@ export function LiveMapPage() {
         }
         .lm-drawer { animation: lmslideup 0.28s cubic-bezier(0.32,0.72,0,1); }
         .lm-card   { animation: lmfadein 0.22s ease; }
-        /* Hide MapLibre's default attribution logo on mobile */
         .maplibregl-ctrl-attrib { font-size: 9px !important; opacity: 0.6; }
         .maplibregl-ctrl-group { border-radius: 12px !important; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,0.25) !important; }
         .maplibregl-ctrl button { width: 38px !important; height: 38px !important; }
       `}</style>
 
-      {/* Full viewport */}
       <div className="fixed inset-0 z-[100] flex flex-col bg-slate-950 overflow-hidden">
 
-        {/* ── Map canvas ── */}
+        {/* Map canvas */}
         <div ref={mapEl} className="absolute inset-0 w-full h-full" />
 
-        {/* ── Top bar ── */}
+        {/* Top scrim */}
         <div className="absolute top-0 left-0 right-0 z-20 pointer-events-none">
-          {/* Gradient scrim */}
           <div className="h-28 bg-gradient-to-b from-black/60 via-black/20 to-transparent" />
         </div>
 
-        {/* Back + title */}
+        {/* Back + title + style toggle */}
         <div className="absolute top-0 left-0 right-0 z-30 flex items-center gap-3 px-4 pt-4 pb-2">
           <button
             type="button"
@@ -371,10 +411,9 @@ export function LiveMapPage() {
               {group?.name ?? "Family"}
             </p>
             <p className="text-white/60 text-[11px] leading-tight">
-              {liveCount > 0 ? `${liveCount} live · updates every 30s` : "No live locations"}
+              {liveCount > 0 ? `${liveCount} live · updates every 10s` : "No live locations"}
             </p>
           </div>
-          {/* Map style pill */}
           <div className="flex rounded-full overflow-hidden shadow-lg border border-white/10">
             <button
               type="button"
@@ -393,7 +432,7 @@ export function LiveMapPage() {
           </div>
         </div>
 
-        {/* ── Loading overlay ── */}
+        {/* Loading overlay */}
         {!isLoaded && !isError && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-slate-950/80">
             <div className="h-8 w-8 rounded-full border-2 border-sky-400 border-t-transparent animate-spin" />
@@ -401,19 +440,15 @@ export function LiveMapPage() {
           </div>
         )}
 
-        {/* ── Error overlay ── */}
+        {/* Error overlay */}
         {isError && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-slate-950/90 p-6 text-center">
             <span className="text-4xl">🗺</span>
             <p className="text-red-400 text-sm max-w-xs leading-relaxed">{errorMsg}</p>
-            <a href="https://cloud.maptiler.com/account/keys" target="_blank" rel="noreferrer"
-              className="rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg">
-              Open MapTiler Keys →
-            </a>
           </div>
         )}
 
-        {/* ── Fit-all FAB ── */}
+        {/* Fit-all FAB */}
         {Object.keys(locations).length > 0 && isLoaded && (
           <button
             type="button"
@@ -425,15 +460,19 @@ export function LiveMapPage() {
           </button>
         )}
 
-        {/* ── Selected member info card ── */}
+        {/* Selected member card */}
         {selMember && selLoc && (
-          <div className="lm-card absolute left-4 right-4 z-20 rounded-2xl overflow-hidden shadow-2xl"
-            style={{ bottom: drawerOpen ? "228px" : "24px" }}>
+          <div
+            className="lm-card absolute left-4 right-4 z-20 rounded-2xl overflow-hidden shadow-2xl"
+            style={{ bottom: drawerOpen ? "228px" : "24px" }}
+          >
             <div className="bg-slate-900/95 backdrop-blur-xl border border-white/10 p-4">
               <div className="flex items-center gap-3">
                 <div className="relative shrink-0">
-                  <div className="h-11 w-11 rounded-full flex items-center justify-center text-base font-bold text-white shadow-lg"
-                    style={{ background: selMember.color }}>
+                  <div
+                    className="h-11 w-11 rounded-full flex items-center justify-center text-base font-bold text-white shadow-lg"
+                    style={{ background: selMember.color }}
+                  >
                     {selMember.name.charAt(0).toUpperCase()}
                   </div>
                   {!isStale(selLoc.updatedAt) && (
@@ -454,9 +493,7 @@ export function LiveMapPage() {
                 <div className="flex flex-col gap-1.5 shrink-0">
                   <button
                     type="button"
-                    onClick={() => {
-                      mapRef.current?.flyTo({ center: [selLoc.lon, selLoc.lat], zoom: 17, essential: true });
-                    }}
+                    onClick={() => mapRef.current?.flyTo({ center: [selLoc.lon, selLoc.lat], zoom: 17, essential: true })}
                     className="rounded-xl bg-sky-600 px-3 py-1.5 text-[11px] font-bold text-white shadow"
                   >
                     Focus
@@ -474,9 +511,8 @@ export function LiveMapPage() {
           </div>
         )}
 
-        {/* ── Member drawer ── */}
+        {/* Member drawer */}
         <div className={`absolute left-0 right-0 bottom-0 z-20 transition-transform duration-300 ${drawerOpen ? "translate-y-0" : "translate-y-full"}`}>
-          {/* Drawer handle */}
           <button
             type="button"
             onClick={() => setDrawerOpen(v => !v)}
@@ -487,7 +523,6 @@ export function LiveMapPage() {
           </button>
 
           <div className="bg-slate-900/95 backdrop-blur-xl border-t border-white/10 lm-drawer">
-            {/* Drawer header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
               <div>
                 <p className="text-white text-sm font-semibold">
@@ -501,7 +536,6 @@ export function LiveMapPage() {
                 </p>
                 <p className="text-white/40 text-[11px] mt-0.5">{members.length} member{members.length !== 1 ? "s" : ""}</p>
               </div>
-              {/* Share location toggle */}
               <button
                 type="button"
                 onClick={shareLocation}
@@ -516,7 +550,6 @@ export function LiveMapPage() {
               </button>
             </div>
 
-            {/* Member rows */}
             <div className="overflow-y-auto max-h-[200px] divide-y divide-white/5">
               {members.length === 0 && (
                 <div className="px-4 py-6 text-center text-white/30 text-xs">No members yet</div>
@@ -524,6 +557,7 @@ export function LiveMapPage() {
               {members.map(member => {
                 const loc = locations[member.id];
                 const live = loc && !isStale(loc.updatedAt);
+                const isMe = member.id === myMemberId;
                 const isSelected = selected === member.id;
                 return (
                   <button
@@ -540,20 +574,21 @@ export function LiveMapPage() {
                       isSelected ? "bg-white/8" : "hover:bg-white/5"
                     }`}
                   >
-                    {/* Avatar */}
                     <div className="relative shrink-0">
-                      <div className="h-10 w-10 rounded-full flex items-center justify-center text-sm font-bold text-white"
-                        style={{ background: live ? member.color : "#334155" }}>
+                      <div
+                        className="h-10 w-10 rounded-full flex items-center justify-center text-sm font-bold text-white"
+                        style={{ background: live ? member.color : "#334155" }}
+                      >
                         {member.name.charAt(0).toUpperCase()}
                       </div>
                       {live && (
                         <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-emerald-400 border-2 border-slate-900" />
                       )}
                     </div>
-
-                    {/* Info */}
                     <div className="flex-1 min-w-0">
-                      <p className="text-white text-sm font-medium truncate">{member.name}</p>
+                      <p className="text-white text-sm font-medium truncate">
+                        {member.name}{isMe ? " (you)" : ""}
+                      </p>
                       <p className="text-white/40 text-[11px] truncate">
                         {loc
                           ? live
@@ -561,28 +596,21 @@ export function LiveMapPage() {
                             : `⚪ ${timeAgo(loc.updatedAt)}`
                           : "No location shared"}
                       </p>
-                      {loc?.label && (
-                        <p className="text-white/30 text-[10px] truncate">📍 {loc.label}</p>
-                      )}
                     </div>
-
-                    {/* Role badge */}
                     <span className="shrink-0 rounded-md bg-white/8 px-2 py-0.5 text-[10px] text-white/40 font-medium capitalize">
                       {member.role}
                     </span>
-
                     {isSelected && <span className="shrink-0 text-sky-400 text-xs">●</span>}
                   </button>
                 );
               })}
             </div>
 
-            {/* Bottom safe area */}
             <div className="h-[env(safe-area-inset-bottom,16px)]" />
           </div>
         </div>
 
-        {/* ── Drawer collapsed toggle button ── */}
+        {/* Drawer collapsed button */}
         {!drawerOpen && (
           <button
             type="button"
@@ -593,7 +621,6 @@ export function LiveMapPage() {
             {liveCount} live
           </button>
         )}
-
       </div>
     </>
   );

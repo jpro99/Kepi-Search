@@ -102,7 +102,7 @@ export async function GET() {
         })
       );
       const memberLocations = Object.fromEntries(memberLocationEntries.filter(([, v]) => v !== null));
-      return NextResponse.json({ group: memberGroup, locations: memberLocations, role: "member" });
+      return NextResponse.json({ group: memberGroup, locations: memberLocations, role: "member", myMemberId: userId });
     }
   }
 
@@ -117,7 +117,7 @@ export async function GET() {
   );
   const locations = Object.fromEntries(locationEntries.filter(([, v]) => v !== null));
 
-  return NextResponse.json({ group, locations, role: "owner" });
+  return NextResponse.json({ group, locations, role: "owner", myMemberId: userId });
 }
 
 // POST - update own location
