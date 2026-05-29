@@ -35,6 +35,7 @@ interface AdminInviteCodeRow {
   usedAt: string | null;
   status: "active" | "revoked" | "used";
   note: string | null;
+  intendedEmail: string | null;
 }
 
 function formatCodeTypeLabel(type: AdminInviteCodeRow["type"]): string {
@@ -61,7 +62,8 @@ export function AdminDashboardClient() {
   const [adminMessage, setAdminMessage] = useState<string | null>(null);
   const [inviteNote, setInviteNote] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteSendResult, setInviteSendResult] = useState<{ code: string; redeemUrl: string; emailSent: boolean; warning?: string } | null>(null);
+  const [inviteSendResult, setInviteSendResult] = useState<{ code: string; redeemUrl: string; emailSent: boolean; warning?: string; resent?: boolean } | null>(null);
+  const [resendingCode, setResendingCode] = useState<string | null>(null);
 
   const loadHealth = useCallback(async (): Promise<void> => {
     setLoadingHealth(true);
@@ -227,6 +229,55 @@ export function AdminDashboardClient() {
       }
     },
     [adminBusy, inviteEmail, inviteNote, loadInviteCodes],
+  );
+
+  const handleResendInvite = useCallback(
+    async (code: AdminInviteCodeRow): Promise<void> => {
+      if (adminBusy || resendingCode) return;
+      const email = code.intendedEmail;
+      if (!email) {
+        setAdminMessage("No email on file for this code — use the Send form above.");
+        return;
+      }
+      setResendingCode(code.code);
+      setAdminMessage(null);
+      setInviteSendResult(null);
+      try {
+        const response = await fetch("/api/admin/send-invite", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email,
+            type: code.type === "referral" ? "trial-30" : code.type,
+            existingCode: code.code,
+          }),
+        });
+        const payload = (await response.json()) as {
+          ok?: boolean; code?: string; redeemUrl?: string;
+          emailSent?: boolean; warning?: string; error?: string; resent?: boolean;
+        };
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error ?? `Resend returned ${response.status}`);
+        }
+        setInviteSendResult({
+          code: payload.code ?? code.code,
+          redeemUrl: payload.redeemUrl ?? "",
+          emailSent: payload.emailSent ?? false,
+          warning: payload.warning,
+          resent: true,
+        });
+        setAdminMessage(
+          payload.emailSent
+            ? `✅ Invite resent to ${email} (same code: ${code.code})`
+            : `⚠️ Code ready (${code.code}) but email not sent. ${payload.warning ?? ""}`,
+        );
+      } catch (error) {
+        setAdminMessage(error instanceof Error ? error.message : "Failed to resend invite.");
+      } finally {
+        setResendingCode(null);
+      }
+    },
+    [adminBusy, resendingCode],
   );
 
   const handleRevokeInviteForUser = useCallback(
@@ -538,23 +589,52 @@ export function AdminDashboardClient() {
                 <tr className="border-b border-slate-200 dark:border-slate-700">
                   <th className="px-2 py-2">Code</th>
                   <th className="px-2 py-2">Type</th>
+                  <th className="px-2 py-2">Intended email</th>
                   <th className="px-2 py-2">Note</th>
                   <th className="px-2 py-2">Status</th>
                   <th className="px-2 py-2">Used by</th>
                   <th className="px-2 py-2">Used at</th>
                   <th className="px-2 py-2">Created by</th>
+                  <th className="px-2 py-2">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {inviteCodes.map((code) => (
                   <tr key={code.code} className="border-b border-slate-100 dark:border-slate-800">
-                    <td className="px-2 py-2 font-semibold">{code.code}</td>
+                    <td className="px-2 py-2 font-mono font-semibold text-[11px]">{code.code}</td>
                     <td className="px-2 py-2">{formatCodeTypeLabel(code.type)}</td>
-                    <td className="px-2 py-2">{code.note ?? "-"}</td>
-                    <td className="px-2 py-2">{code.status}</td>
-                    <td className="px-2 py-2">{code.usedBy ?? "-"}</td>
-                    <td className="px-2 py-2">{code.usedAt ? new Date(code.usedAt).toLocaleString() : "-"}</td>
-                    <td className="px-2 py-2">{code.createdBy}</td>
+                    <td className="px-2 py-2 text-slate-500 dark:text-slate-400">
+                      {code.intendedEmail ?? <span className="text-slate-300 dark:text-slate-600">—</span>}
+                    </td>
+                    <td className="px-2 py-2 text-slate-400 dark:text-slate-500">{code.note ?? "-"}</td>
+                    <td className="px-2 py-2">
+                      <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                        code.status === "active"
+                          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300"
+                          : code.status === "used"
+                            ? "bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300"
+                            : "bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
+                      }`}>
+                        {code.status}
+                      </span>
+                    </td>
+                    <td className="px-2 py-2 text-slate-500 dark:text-slate-400">{code.usedBy ?? "-"}</td>
+                    <td className="px-2 py-2 text-slate-500 dark:text-slate-400">{code.usedAt ? new Date(code.usedAt).toLocaleString() : "-"}</td>
+                    <td className="px-2 py-2 text-slate-500 dark:text-slate-400 text-[10px]">{code.createdBy}</td>
+                    <td className="px-2 py-2">
+                      {code.status === "active" && code.intendedEmail && code.type !== "referral" ? (
+                        <button
+                          type="button"
+                          disabled={!!resendingCode || adminBusy}
+                          onClick={() => void handleResendInvite(code)}
+                          className="rounded bg-sky-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-sky-500 disabled:opacity-50 whitespace-nowrap"
+                        >
+                          {resendingCode === code.code ? "Sending…" : "↩ Resend"}
+                        </button>
+                      ) : (
+                        <span className="text-slate-300 dark:text-slate-600 text-[10px]">—</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -28,7 +28,11 @@ export async function GET(req: Request) {
 
   const [inviteCodes, referralCodes] = await Promise.all([listInviteCodes(), listReferralCodes()]);
   const codes = [
-    ...inviteCodes,
+    ...inviteCodes.map((code) => ({
+      ...code,
+      // intendedEmail already present on InviteCodeRecord — pass it through explicitly
+      intendedEmail: code.intendedEmail ?? null,
+    })),
     ...referralCodes.map((code) => ({
       code: code.code,
       type: "referral" as const,
@@ -38,6 +42,7 @@ export async function GET(req: Request) {
       usedAt: code.latestUsedAt,
       status: "active" as const,
       note: code.totalUses > 0 ? `${code.totalUses} referral redemption${code.totalUses === 1 ? "" : "s"}` : null,
+      intendedEmail: null,
     })),
   ].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return NextResponse.json({ codes });
