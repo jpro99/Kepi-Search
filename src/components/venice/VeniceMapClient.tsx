@@ -76,6 +76,41 @@ function compareHits(a: HotelSearchHit, b: HotelSearchHit, sort: SortMode) {
   }
 }
 
+function createMaptilerRasterBasemapStyle(
+  maptilerKey: string,
+  useHighDensityTiles: boolean,
+): maplibregl.StyleSpecification {
+  const encodedKey = encodeURIComponent(maptilerKey);
+  const highDensitySuffix = useHighDensityTiles ? "@2x" : "";
+  const tileSize = useHighDensityTiles ? 512 : 256;
+  return {
+    version: 8,
+    sources: {
+      maptilerRaster: {
+        type: "raster",
+        tiles: [
+          `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}${highDensitySuffix}.png?key=${encodedKey}`,
+        ],
+        tileSize,
+        attribution: "© MapTiler © OpenStreetMap contributors",
+      },
+    },
+    layers: [
+      {
+        id: "maptiler-raster",
+        type: "raster",
+        source: "maptilerRaster",
+        minzoom: 0,
+        maxzoom: 22,
+        paint: {
+          "raster-resampling": "linear",
+          "raster-fade-duration": 0,
+        },
+      },
+    ],
+  };
+}
+
 const RESULT_SOURCE_ID = "kepi-search-results";
 const RESULT_LAYER_ID = "kepi-search-results-circles";
 const SORT_RESULTS_ID = "kepi-sort-results";
@@ -533,11 +568,16 @@ function VeniceMapShell({
     let stallTimer: number | undefined;
 
     const { center, zoom, maxBounds } = catalog.map;
-    const maptilerStyle = `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`;
+    const useHighDensityTiles = window.devicePixelRatio >= 1.5;
+    const maptilerTileProbeUrl = `https://api.maptiler.com/maps/streets-v2/0/0/0${useHighDensityTiles ? "@2x" : ""}.png?key=${encodeURIComponent(maptilerKey)}`;
+    const maptilerBasemapStyle = createMaptilerRasterBasemapStyle(
+      maptilerKey,
+      useHighDensityTiles,
+    );
 
     void (async () => {
       try {
-        const styleRes = await fetch(maptilerStyle, {
+        const styleRes = await fetch(maptilerTileProbeUrl, {
           method: "GET",
           mode: "cors",
           cache: "no-store",
@@ -545,7 +585,7 @@ function VeniceMapShell({
         if (cancelled) return;
         if (!styleRes.ok) {
           setMapBootIssue(
-            `MapTiler rejected style.json (HTTP ${styleRes.status}). In Vercel: Project -> Settings -> Environment Variables -> set NEXT_PUBLIC_MAPTILER_KEY for Production, save, then Redeploy. Wrong or missing keys usually return 401 or 403.`,
+            `MapTiler rejected basemap tile requests (HTTP ${styleRes.status}). In Vercel: Project -> Settings -> Environment Variables -> set NEXT_PUBLIC_MAPTILER_KEY for Production, save, then Redeploy. Wrong or missing keys usually return 401 or 403.`,
           );
           return;
         }
@@ -558,15 +598,17 @@ function VeniceMapShell({
 
         const map = new maplibregl.Map({
           container: mapEl.current,
-          // Load MapTiler once. The previous empty-style -> setStyle(MapTiler) two-step
-          // could leave the renderer in a bad state on some GPUs even when tiles (200) loaded.
-          style: maptilerStyle,
+          style: maptilerBasemapStyle,
           center: [center.lng, center.lat],
           zoom,
           pitch: 0,
           maxBounds,
+          maxZoom: 20,
           fadeDuration: 0,
           renderWorldCopies: true,
+          antialias: true,
+          dragRotate: false,
+          pitchWithRotate: false,
         });
 
     const canvas = map.getCanvas();
@@ -670,7 +712,7 @@ function VeniceMapShell({
       try {
         if (!sawMaptilerStyle) {
           setMapBootIssue(
-            "Basemap style never reported sources after load. Open DevTools -> Network, reload, and inspect api.maptiler.com/style.json. Set NEXT_PUBLIC_MAPTILER_KEY for Production on Vercel and redeploy. Try Ctrl+Shift+R.",
+            "Basemap style never reported sources after load. Open DevTools -> Network, reload, and inspect api.maptiler.com tile requests. Set NEXT_PUBLIC_MAPTILER_KEY for Production on Vercel and redeploy. Try Ctrl+Shift+R.",
           );
           return;
         }
