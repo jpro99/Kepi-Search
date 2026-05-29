@@ -255,6 +255,33 @@ export function AdminDashboardClient() {
     [adminBusy, loadInviteCodes, loadUsers],
   );
 
+  const handleDeleteUser = useCallback(
+    async (targetUserId: string, email: string): Promise<void> => {
+      if (adminBusy) return;
+      if (!confirm(`Delete user ${email} permanently? This cannot be undone.`)) return;
+      setAdminBusy(true);
+      setAdminMessage(null);
+      try {
+        const response = await fetch("/api/admin/users", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: targetUserId }),
+        });
+        const payload = (await response.json()) as { ok?: boolean; error?: string };
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error ?? `Delete user endpoint returned ${response.status}`);
+        }
+        setAdminMessage(`✅ Deleted user ${email}.`);
+        await Promise.all([loadUsers(), loadInviteCodes()]);
+      } catch (error) {
+        setAdminMessage(error instanceof Error ? error.message : "Failed to delete user.");
+      } finally {
+        setAdminBusy(false);
+      }
+    },
+    [adminBusy, loadInviteCodes, loadUsers],
+  );
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -400,16 +427,28 @@ export function AdminDashboardClient() {
                     <td className="px-2 py-2">${user.monthlyRevenueUsd}</td>
                     <td className="px-2 py-2">{user.status}</td>
                     <td className="px-2 py-2">
-                      <button
-                        type="button"
-                        disabled={adminBusy || user.signedUpVia !== "invite-code" || user.inviteCodeStatus === "revoked"}
-                        onClick={() => {
-                          void handleRevokeInviteForUser(user.userId);
-                        }}
-                        className="rounded-md border border-rose-400/60 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40 dark:text-rose-200"
-                      >
-                        Revoke code
-                      </button>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          disabled={adminBusy || user.signedUpVia !== "invite-code" || user.inviteCodeStatus === "revoked"}
+                          onClick={() => {
+                            void handleRevokeInviteForUser(user.userId);
+                          }}
+                          className="rounded-md border border-rose-400/60 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40 dark:text-rose-200"
+                        >
+                          Revoke code
+                        </button>
+                        <button
+                          type="button"
+                          disabled={adminBusy}
+                          onClick={() => {
+                            void handleDeleteUser(user.userId, user.email);
+                          }}
+                          className="rounded-md border border-rose-500/80 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40 dark:text-rose-200"
+                        >
+                          Delete user
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

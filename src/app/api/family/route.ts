@@ -5,6 +5,7 @@ import { z } from "zod";
 import { kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
 import { logger } from "@/lib/logger";
 import { generateId } from "@/lib/utils/generateId";
+import { getResendClient, getResendFromEmail } from "@/lib/email/resendClient";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +14,9 @@ const FAMILY_GROUP_KEY = "family:group";
 const FAMILY_LOCATION_KEY = (memberId: string) => `family:location:${memberId}`;
 const FAMILY_INVITE_INDEX_KEY = (inviteCode: string) => `family:invite-index:${inviteCode}`;
 const FAMILY_MEMBERSHIP_KEY = "family:membership"; // stores { ownerId, inviteCode } for non-owner members
+const FAMILY_GROUP_EMAIL_INVITES_KEY = "family:email-invites";
+const FAMILY_EMAIL_INVITE_NAMESPACE = "family-email-invite-queue";
+const FAMILY_EMAIL_INVITE_QUEUE_KEY = (email: string) => `family:email-invite:${email.trim().toLowerCase()}`;
 
 const MemberSchema = z.object({
   id: z.string(),
@@ -43,6 +47,20 @@ const LocationSchema = z.object({
   label: z.string().optional(),
 });
 
+const FamilyEmailInviteSchema = z.object({
+  id: z.string(),
+  ownerId: z.string(),
+  groupId: z.string(),
+  groupName: z.string(),
+  inviteCode: z.string(),
+  invitedEmail: z.string().email(),
+  invitedName: z.string().nullable(),
+  inviterName: z.string().nullable(),
+  createdAt: z.string(),
+  status: z.enum(["pending", "accepted", "declined", "cancelled"]),
+  respondedAt: z.string().nullable(),
+});
+
 const MEMBER_COLORS = [
   "#0ea5e9", "#10b981", "#f59e0b", "#ef4444",
   "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
@@ -53,10 +71,90 @@ function nextColor(members: z.infer<typeof MemberSchema>[]): string {
   return MEMBER_COLORS.find(c => !used.has(c)) ?? MEMBER_COLORS[members.length % MEMBER_COLORS.length];
 }
 
+async function resolveUserPrimaryEmail(userId: string): Promise<string | null> {
+  try {
+    const clerkServer = await import("@clerk/nextjs/server");
+    const client = await clerkServer.clerkClient();
+    const user = await client.users.getUser(userId);
+    const primaryId = user.primaryEmailAddressId;
+    const primaryAddress =
+      user.emailAddresses.find((entry) => entry.id === primaryId) ?? user.emailAddresses[0] ?? null;
+    const address = primaryAddress?.emailAddress?.trim();
+    return address && address.length > 0 ? address.toLowerCase() : null;
+  } catch (error) {
+    logger.warn("Unable to resolve user email for family invite flow.", {
+      scope: "api/family",
+      userId,
+      error: error instanceof Error ? error.message : "unknown",
+    });
+    return null;
+  }
+}
+
+function normalizeInviteCode(value: string): string {
+  return value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, "");
+}
+
+async function joinGroupByInviteCode(args: {
+  userId: string;
+  inviteCode: string;
+  name?: string | null;
+}): Promise<
+  | { ok: true; group: z.infer<typeof FamilyGroupSchema>; alreadyMember?: boolean; joined?: boolean; ownerId: string; normalizedInviteCode: string }
+  | { ok: false; status: number; error: string }
+> {
+  const normalizedInviteCode = normalizeInviteCode(args.inviteCode);
+  if (!normalizedInviteCode) {
+    return { ok: false, status: 400, error: "inviteCode required" };
+  }
+
+  const ownerUserId = await kvStoreGet<string>(FAMILY_INVITE_INDEX_KEY(normalizedInviteCode), { userId: args.userId });
+  if (!ownerUserId) {
+    return { ok: false, status: 404, error: "Invalid invite code. Ask the group organizer for the correct code." };
+  }
+  if (ownerUserId === args.userId) {
+    return { ok: false, status: 400, error: "You created this group — you're already in it." };
+  }
+
+  const ownerGroup = await kvStoreGet<z.infer<typeof FamilyGroupSchema>>(FAMILY_GROUP_KEY, { userId: ownerUserId });
+  if (!ownerGroup) {
+    return { ok: false, status: 404, error: "Group not found." };
+  }
+
+  if (ownerGroup.members.some(m => m.id === args.userId)) {
+    await kvStoreSet(FAMILY_MEMBERSHIP_KEY, { ownerId: ownerUserId, inviteCode: normalizedInviteCode }, { userId: args.userId });
+    return { ok: true, group: ownerGroup, alreadyMember: true, ownerId: ownerUserId, normalizedInviteCode };
+  }
+
+  const newMember: z.infer<typeof MemberSchema> = {
+    id: args.userId,
+    name: args.name?.trim() || "Family Member",
+    email: null,
+    role: "adult",
+    color: nextColor(ownerGroup.members),
+    sharingEnabled: true,
+    visibility: "all-members",
+    joinedAt: new Date().toISOString(),
+  };
+  ownerGroup.members.push(newMember);
+  await kvStoreSet(FAMILY_GROUP_KEY, ownerGroup, { userId: ownerUserId });
+  await kvStoreSet(FAMILY_MEMBERSHIP_KEY, { ownerId: ownerUserId, inviteCode: normalizedInviteCode }, { userId: args.userId });
+
+  logger.info("User joined family group.", { userId: args.userId, ownerId: ownerUserId });
+  return { ok: true, group: ownerGroup, joined: true, ownerId: ownerUserId, normalizedInviteCode };
+}
+
 // GET - fetch group and all member locations
 export async function GET() {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const currentUserEmail = await resolveUserPrimaryEmail(userId);
+  const pendingEmailInvites = currentUserEmail
+    ? (await kvStoreGet<Array<z.infer<typeof FamilyEmailInviteSchema>>>(FAMILY_EMAIL_INVITE_QUEUE_KEY(currentUserEmail), {
+        userId: FAMILY_EMAIL_INVITE_NAMESPACE,
+      })) ?? []
+    : [];
+  const activePendingEmailInvites = pendingEmailInvites.filter((invite) => invite.status === "pending");
 
   let group = await kvStoreGet<z.infer<typeof FamilyGroupSchema>>(FAMILY_GROUP_KEY, { userId });
 
@@ -98,7 +196,13 @@ export async function GET() {
         })
       );
       const memberLocations = Object.fromEntries(memberLocationEntries.filter(([, v]) => v !== null));
-      return NextResponse.json({ group: memberGroup, locations: memberLocations, role: "member", currentUserId: userId });
+      return NextResponse.json({
+        group: memberGroup,
+        locations: memberLocations,
+        role: "member",
+        currentUserId: userId,
+        pendingEmailInvites: activePendingEmailInvites,
+      });
     }
   }
 
@@ -113,7 +217,13 @@ export async function GET() {
   );
   const locations = Object.fromEntries(locationEntries.filter(([, v]) => v !== null));
 
-  return NextResponse.json({ group, locations, role: "owner", currentUserId: userId });
+  return NextResponse.json({
+    group,
+    locations,
+    role: "owner",
+    currentUserId: userId,
+    pendingEmailInvites: activePendingEmailInvites,
+  });
 }
 
 // POST - update own location
@@ -123,7 +233,18 @@ export async function POST(request: Request) {
 
   const body = await request.json().catch(() => ({}));
   const parsed = z.object({
-    action: z.enum(["update-location", "add-member", "remove-member", "update-member", "update-group", "join-group", "leave-group"]),
+    action: z.enum([
+      "update-location",
+      "add-member",
+      "remove-member",
+      "update-member",
+      "update-group",
+      "join-group",
+      "leave-group",
+      "send-email-invite",
+      "accept-email-invite",
+      "decline-email-invite",
+    ]),
     lat: z.number().optional(),
     lon: z.number().optional(),
     accuracy: z.number().optional(),
@@ -136,6 +257,9 @@ export async function POST(request: Request) {
     visibility: z.enum(["all-members", "organizer-only"]).optional(),
     groupName: z.string().max(60).optional(),
     inviteCode: z.string().optional(),
+    inviteId: z.string().optional(),
+    invitedEmail: z.string().email().optional(),
+    invitedName: z.string().max(60).optional(),
   }).safeParse(body);
 
   if (!parsed.success) {
@@ -144,51 +268,105 @@ export async function POST(request: Request) {
 
   const { action } = parsed.data;
   if (action === "join-group") {
-    const { inviteCode } = parsed.data;
-    if (!inviteCode) return NextResponse.json({ error: "inviteCode required" }, { status: 400 });
-
-    const normalizedInviteCode = inviteCode.toUpperCase();
-    // Look up which user owns this group via the invite index
-    const ownerUserId = await kvStoreGet<string>(FAMILY_INVITE_INDEX_KEY(normalizedInviteCode), { userId });
-    if (!ownerUserId) {
-      return NextResponse.json({ error: "Invalid invite code. Ask the group organizer for the correct code." }, { status: 404 });
+    const joinResult = await joinGroupByInviteCode({
+      userId,
+      inviteCode: parsed.data.inviteCode ?? "",
+      name: parsed.data.name ?? null,
+    });
+    if (!joinResult.ok) {
+      return NextResponse.json({ error: joinResult.error }, { status: joinResult.status });
     }
-    if (ownerUserId === userId) {
-      return NextResponse.json({ error: "You created this group — you're already in it." }, { status: 400 });
+    return NextResponse.json({
+      ok: true,
+      group: joinResult.group,
+      alreadyMember: Boolean(joinResult.alreadyMember),
+      joined: Boolean(joinResult.joined),
+    });
+  }
+
+  if (action === "accept-email-invite" || action === "decline-email-invite") {
+    const inviteId = parsed.data.inviteId?.trim();
+    if (!inviteId) {
+      return NextResponse.json({ error: "inviteId required" }, { status: 400 });
+    }
+    const currentUserEmail = await resolveUserPrimaryEmail(userId);
+    if (!currentUserEmail) {
+      return NextResponse.json({ error: "No verified email found on this account." }, { status: 400 });
     }
 
-    // Get the owner's group
-    const ownerGroup = await kvStoreGet<z.infer<typeof FamilyGroupSchema>>(FAMILY_GROUP_KEY, { userId: ownerUserId });
-    if (!ownerGroup) {
-      return NextResponse.json({ error: "Group not found." }, { status: 404 });
+    const inviteQueue = (await kvStoreGet<Array<z.infer<typeof FamilyEmailInviteSchema>>>(
+      FAMILY_EMAIL_INVITE_QUEUE_KEY(currentUserEmail),
+      { userId: FAMILY_EMAIL_INVITE_NAMESPACE },
+    )) ?? [];
+    const targetInvite = inviteQueue.find((invite) => invite.id === inviteId);
+    if (!targetInvite) {
+      return NextResponse.json({ error: "Invite not found." }, { status: 404 });
+    }
+    if (targetInvite.status !== "pending") {
+      return NextResponse.json({ error: "Invite has already been handled." }, { status: 409 });
     }
 
-    // Check if already a member
-    if (ownerGroup.members.some(m => m.id === userId)) {
-      // Already a member - store membership reference and return group
-      await kvStoreSet(FAMILY_MEMBERSHIP_KEY, { ownerId: ownerUserId, inviteCode: normalizedInviteCode }, { userId });
-      return NextResponse.json({ ok: true, group: ownerGroup, alreadyMember: true });
+    if (action === "accept-email-invite") {
+      const joinResult = await joinGroupByInviteCode({
+        userId,
+        inviteCode: targetInvite.inviteCode,
+        name: parsed.data.name ?? targetInvite.invitedName ?? null,
+      });
+      if (!joinResult.ok) {
+        return NextResponse.json({ error: joinResult.error }, { status: joinResult.status });
+      }
+
+      const respondedAt = new Date().toISOString();
+      const updatedQueue = inviteQueue.map((invite) =>
+        invite.id === inviteId
+          ? { ...invite, status: "accepted", respondedAt }
+          : invite
+      );
+      await kvStoreSet(FAMILY_EMAIL_INVITE_QUEUE_KEY(currentUserEmail), updatedQueue, {
+        userId: FAMILY_EMAIL_INVITE_NAMESPACE,
+      });
+
+      const ownerInvites = (await kvStoreGet<Array<z.infer<typeof FamilyEmailInviteSchema>>>(
+        FAMILY_GROUP_EMAIL_INVITES_KEY,
+        { userId: targetInvite.ownerId },
+      )) ?? [];
+      const updatedOwnerInvites = ownerInvites.map((invite) =>
+        invite.id === inviteId
+          ? { ...invite, status: "accepted", respondedAt }
+          : invite
+      );
+      await kvStoreSet(FAMILY_GROUP_EMAIL_INVITES_KEY, updatedOwnerInvites, { userId: targetInvite.ownerId });
+
+      return NextResponse.json({
+        ok: true,
+        group: joinResult.group,
+        joined: Boolean(joinResult.joined),
+        alreadyMember: Boolean(joinResult.alreadyMember),
+      });
     }
 
-    // Add this user to the owner's group
-    const newMember: z.infer<typeof MemberSchema> = {
-      id: userId,
-      name: parsed.data.name ?? "Family Member",
-      email: null,
-      role: "adult",
-      color: nextColor(ownerGroup.members),
-      sharingEnabled: true,
-      visibility: "all-members",
-      joinedAt: new Date().toISOString(),
-    };
-    ownerGroup.members.push(newMember);
-    await kvStoreSet(FAMILY_GROUP_KEY, ownerGroup, { userId: ownerUserId });
+    const respondedAt = new Date().toISOString();
+    const updatedQueue = inviteQueue.map((invite) =>
+      invite.id === inviteId
+        ? { ...invite, status: "declined", respondedAt }
+        : invite
+    );
+    await kvStoreSet(FAMILY_EMAIL_INVITE_QUEUE_KEY(currentUserEmail), updatedQueue, {
+      userId: FAMILY_EMAIL_INVITE_NAMESPACE,
+    });
 
-    // Store membership reference for this user so they can find the group
-    await kvStoreSet(FAMILY_MEMBERSHIP_KEY, { ownerId: ownerUserId, inviteCode: normalizedInviteCode }, { userId });
+    const ownerInvites = (await kvStoreGet<Array<z.infer<typeof FamilyEmailInviteSchema>>>(
+      FAMILY_GROUP_EMAIL_INVITES_KEY,
+      { userId: targetInvite.ownerId },
+    )) ?? [];
+    const updatedOwnerInvites = ownerInvites.map((invite) =>
+      invite.id === inviteId
+        ? { ...invite, status: "declined", respondedAt }
+        : invite
+    );
+    await kvStoreSet(FAMILY_GROUP_EMAIL_INVITES_KEY, updatedOwnerInvites, { userId: targetInvite.ownerId });
 
-    logger.info("User joined family group.", { userId, ownerId: ownerUserId });
-    return NextResponse.json({ ok: true, group: ownerGroup, joined: true });
+    return NextResponse.json({ ok: true, declined: true });
   }
 
   const membership = await kvStoreGet<{ ownerId: string; inviteCode: string }>(FAMILY_MEMBERSHIP_KEY, { userId });
@@ -196,6 +374,110 @@ export async function POST(request: Request) {
     membership && membership.ownerId !== userId ? membership.ownerId : userId;
   const group = await kvStoreGet<z.infer<typeof FamilyGroupSchema>>(FAMILY_GROUP_KEY, { userId: groupNamespaceUserId });
   if (!group) return NextResponse.json({ error: "No family group found" }, { status: 404 });
+
+  if (action === "send-email-invite") {
+    if (group.ownerId !== userId) {
+      return NextResponse.json({ error: "Only group owners can send email invites." }, { status: 403 });
+    }
+    const invitedEmail = parsed.data.invitedEmail?.trim().toLowerCase();
+    if (!invitedEmail) {
+      return NextResponse.json({ error: "invitedEmail required" }, { status: 400 });
+    }
+    const ownerEmail = await resolveUserPrimaryEmail(userId);
+    if (ownerEmail && ownerEmail === invitedEmail) {
+      return NextResponse.json({ error: "You cannot invite your own email." }, { status: 400 });
+    }
+
+    const inviterName = group.members.find((member) => member.id === userId)?.name ?? null;
+    const inviteRecord: z.infer<typeof FamilyEmailInviteSchema> = {
+      id: generateId(),
+      ownerId: userId,
+      groupId: group.id,
+      groupName: group.name,
+      inviteCode: group.inviteCode,
+      invitedEmail,
+      invitedName: parsed.data.invitedName?.trim() || null,
+      inviterName,
+      createdAt: new Date().toISOString(),
+      status: "pending",
+      respondedAt: null,
+    };
+
+    const ownerInvites = (await kvStoreGet<Array<z.infer<typeof FamilyEmailInviteSchema>>>(
+      FAMILY_GROUP_EMAIL_INVITES_KEY,
+      { userId },
+    )) ?? [];
+    const existingPendingForEmail = ownerInvites.find(
+      (invite) =>
+        invite.invitedEmail.toLowerCase() === invitedEmail &&
+        invite.status === "pending",
+    );
+    if (existingPendingForEmail) {
+      return NextResponse.json({ error: "There is already a pending invite for this email." }, { status: 409 });
+    }
+    const nextOwnerInvites = [inviteRecord, ...ownerInvites].slice(0, 100);
+    await kvStoreSet(FAMILY_GROUP_EMAIL_INVITES_KEY, nextOwnerInvites, { userId });
+
+    const recipientQueue = (await kvStoreGet<Array<z.infer<typeof FamilyEmailInviteSchema>>>(
+      FAMILY_EMAIL_INVITE_QUEUE_KEY(invitedEmail),
+      { userId: FAMILY_EMAIL_INVITE_NAMESPACE },
+    )) ?? [];
+    const nextRecipientQueue = [inviteRecord, ...recipientQueue].slice(0, 100);
+    await kvStoreSet(FAMILY_EMAIL_INVITE_QUEUE_KEY(invitedEmail), nextRecipientQueue, {
+      userId: FAMILY_EMAIL_INVITE_NAMESPACE,
+    });
+
+    const appBase =
+      process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+      process.env.APP_URL?.trim() ||
+      process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() ||
+      "http://localhost:3000";
+    const normalizedBase = appBase.startsWith("http") ? appBase.replace(/\/$/u, "") : `https://${appBase.replace(/\/$/u, "")}`;
+    const inviteUrl = `${normalizedBase}/travel-assistant?tab=family&familyInvite=${encodeURIComponent(group.inviteCode)}`;
+
+    let emailSent = false;
+    let warning: string | null = null;
+    const resend = getResendClient();
+    if (resend) {
+      const subject = `${inviterName ?? "A family member"} invited you to ${group.name} on Kepi`;
+      const html = `
+        <div style="font-family:Arial,sans-serif;line-height:1.5;color:#0f172a">
+          <h2 style="margin-bottom:8px;color:#0c4a6e">You're invited to a family travel group</h2>
+          <p><strong>${inviterName ?? "A family member"}</strong> invited you to join <strong>${group.name}</strong> on Kepi.</p>
+          <p>When you log in, Kepi will show an in-app popup to accept or deny this invitation.</p>
+          <p style="margin:16px 0">
+            <a href="${inviteUrl}" style="background:#0284c7;color:white;text-decoration:none;padding:10px 14px;border-radius:8px;font-weight:700">Open invite</a>
+          </p>
+          <p>Invite code: <strong style="font-family:monospace;letter-spacing:0.08em">${group.inviteCode}</strong></p>
+          <p style="font-size:12px;color:#475569">If the button doesn't open the app directly, log in to Kepi and open Family tab.</p>
+        </div>
+      `;
+      try {
+        const { error } = await resend.emails.send({
+          from: getResendFromEmail(),
+          to: invitedEmail,
+          subject,
+          html,
+        });
+        if (error) {
+          warning = error.message;
+        } else {
+          emailSent = true;
+        }
+      } catch (error) {
+        warning = error instanceof Error ? error.message : "unknown";
+      }
+    } else {
+      warning = "RESEND_API_KEY not configured. Invite is queued and will appear on recipient login.";
+    }
+
+    return NextResponse.json({
+      ok: true,
+      invite: inviteRecord,
+      emailSent,
+      warning,
+    });
+  }
 
   if (action === "update-location") {
     const { lat, lon, accuracy, label } = parsed.data;

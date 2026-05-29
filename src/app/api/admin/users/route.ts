@@ -5,6 +5,7 @@ import { getInviteCodeRecord, getInviteCodeRedeemedByUser } from "@/lib/invite/i
 import { logger } from "@/lib/logger";
 import { getRedeemedReferralCode } from "@/lib/referral/referralStore";
 import { generateId } from "@/lib/utils/generateId";
+import { z } from "zod";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -148,4 +149,58 @@ export async function GET(req: Request) {
   );
 
   return NextResponse.json({ users: summaries });
+}
+
+const DeleteUserBodySchema = z.object({
+  userId: z.string().min(1),
+});
+
+export async function DELETE(req: Request) {
+  const requestId = req.headers.get("x-request-id")?.trim() || generateId();
+  const requesterUserId = await resolveAuthenticatedUserId();
+  const routeLogger = logger.withContext({
+    requestId,
+    userId: requesterUserId,
+    route: "/api/admin/users",
+    method: "DELETE",
+  });
+
+  if (!requesterUserId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (!isAdminUserId(requesterUserId)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+  const parsedBody = DeleteUserBodySchema.safeParse(body);
+  if (!parsedBody.success) {
+    return NextResponse.json({ error: "userId is required." }, { status: 400 });
+  }
+
+  const targetUserId = parsedBody.data.userId.trim();
+  if (!targetUserId) {
+    return NextResponse.json({ error: "userId is required." }, { status: 400 });
+  }
+  if (targetUserId === requesterUserId) {
+    return NextResponse.json({ error: "You cannot delete your own admin account." }, { status: 400 });
+  }
+
+  try {
+    const clerkServerModule = await import("@clerk/nextjs/server");
+    const client = await clerkServerModule.clerkClient();
+    await client.users.deleteUser(targetUserId);
+    routeLogger.info("Admin deleted user account.", { targetUserId });
+    return NextResponse.json({ ok: true, deletedUserId: targetUserId });
+  } catch (error) {
+    routeLogger.error("Failed to delete user in admin panel.", error instanceof Error ? error : undefined, {
+      targetUserId,
+    });
+    return NextResponse.json({ error: "Failed to delete user account." }, { status: 500 });
+  }
 }

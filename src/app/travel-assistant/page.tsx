@@ -1843,7 +1843,7 @@ export default function TravelAssistantPage() {
     const timeout = window.setTimeout(() => {
       const params = new URLSearchParams(window.location.search);
       const tab = params.get("tab");
-      if (tab === "trip" || tab === "reservations" || tab === "packing" || tab === "more") {
+      if (tab === "trip" || tab === "reservations" || tab === "packing" || tab === "family" || tab === "more") {
         setConsumerTab(tab);
       }
       const gmailStatus = params.get("gmail");
@@ -1874,6 +1874,26 @@ export default function TravelAssistantPage() {
       window.clearTimeout(timeout);
     };
   }, [refreshEmailForwardSetup]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void fetch("/api/family", { cache: "no-store" })
+        .then(async (response) => {
+          if (!response.ok) return;
+          const payload = (await response.json()) as {
+            pendingEmailInvites?: Array<{ inviterName?: string | null; groupName?: string | null; status?: string }>;
+          };
+          const pendingInvite = payload.pendingEmailInvites?.find((invite) => invite.status === "pending");
+          if (!pendingInvite) return;
+          setConsumerTab("family");
+          const inviter = pendingInvite.inviterName?.trim() || "A family member";
+          const groupName = pendingInvite.groupName?.trim() || "a family group";
+          setToast(`${inviter} invited you to ${groupName}. Review invite in Family tab.`);
+        })
+        .catch(() => undefined);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, []);
 
   useEffect(() => {
     if (consumerTab !== "more") {

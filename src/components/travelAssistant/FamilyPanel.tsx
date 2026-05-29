@@ -33,6 +33,20 @@ interface FamilyGroup {
   createdAt: string;
 }
 
+interface PendingFamilyEmailInvite {
+  id: string;
+  ownerId: string;
+  groupId: string;
+  groupName: string;
+  inviteCode: string;
+  invitedEmail: string;
+  invitedName: string | null;
+  inviterName: string | null;
+  createdAt: string;
+  status: "pending" | "accepted" | "declined" | "cancelled";
+  respondedAt: string | null;
+}
+
 interface FamilyPanelProps {
   isPremium: boolean;
   onUpgrade: () => void;
@@ -89,11 +103,15 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
   const [, setSelectedMemberId] = useState<string | null>(null);
   const [showMap, setShowMap] = useState(true);
   const [groupNameDraft, setGroupNameDraft] = useState("");
+  const [inviteByEmail, setInviteByEmail] = useState("");
+  const [inviteByName, setInviteByName] = useState("");
+  const [inviteByEmailBusy, setInviteByEmailBusy] = useState(false);
   const [joiningGroup, setJoiningGroup] = useState(false);
   const [joinCode, setJoinCode] = useState(inviteCodeFromUrl);
   const [joinName, setJoinName] = useState("");
   const [joinBusy, setJoinBusy] = useState(false);
   const [incomingInviteCode, setIncomingInviteCode] = useState<string | null>(inviteCodeFromUrl || null);
+  const [pendingEmailInvites, setPendingEmailInvites] = useState<PendingFamilyEmailInvite[]>([]);
   const watchIdRef = useRef<number | null>(null);
   const lastLocationSentAtRef = useRef<number>(0);
   const geolocationSupported = typeof navigator !== "undefined" && Boolean(navigator.geolocation);
@@ -103,9 +121,10 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
   });
   const inviteJoinUrl = group?.inviteCode
     ? typeof window === "undefined"
-      ? `/travel-assistant?${INVITE_QUERY_PARAM}=${group.inviteCode}`
-      : `${window.location.origin}/travel-assistant?${INVITE_QUERY_PARAM}=${group.inviteCode}`
+      ? `/travel-assistant?tab=family&${INVITE_QUERY_PARAM}=${group.inviteCode}`
+      : `${window.location.origin}/travel-assistant?tab=family&${INVITE_QUERY_PARAM}=${group.inviteCode}`
     : "";
+  const activePendingEmailInvite = pendingEmailInvites.find((invite) => invite.status === "pending") ?? null;
 
   const load = useCallback(async () => {
     try {
@@ -115,13 +134,17 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
         locations: Record<string, LocationPoint>;
         role?: "owner" | "member";
         currentUserId?: string;
+        pendingEmailInvites?: PendingFamilyEmailInvite[];
       };
       setGroup(data.group);
       setLocations(data.locations ?? {});
       setGroupRole(data.role ?? "owner");
       setCurrentUserId(data.currentUserId ?? null);
       setGroupNameDraft(data.group?.name ?? "");
-      setHasGroup(true);
+      const nextPendingInvites = Array.isArray(data.pendingEmailInvites) ? data.pendingEmailInvites : [];
+      setPendingEmailInvites(nextPendingInvites);
+      // Non-premium users can access family only when invited into an existing group.
+      setHasGroup((data.role ?? "owner") === "member" || nextPendingInvites.length > 0);
     } catch {
       setMessage("Could not load family group.");
     } finally {
@@ -130,12 +153,11 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
   }, []);
 
   useEffect(() => {
-    if (!isPremium) return;
     const timer = window.setTimeout(() => {
       void load();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [isPremium, load]);
+  }, [load]);
 
   useEffect(() => {
     return () => {
@@ -484,16 +506,114 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
     }
   }, [group, groupNameDraft]);
 
+  const handleSendEmailInvite = useCallback(async () => {
+    const email = inviteByEmail.trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      setMessage("Enter a valid email address to invite.");
+      return;
+    }
+    setInviteByEmailBusy(true);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/family", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "send-email-invite",
+          invitedEmail: email,
+          invitedName: inviteByName.trim() || undefined,
+        }),
+      });
+      const data = await res.json() as {
+        ok?: boolean;
+        emailSent?: boolean;
+        warning?: string | null;
+        error?: string;
+      };
+      if (!res.ok || !data.ok) {
+        setMessage(data.error ?? "Could not send email invite.");
+        return;
+      }
+      setInviteByEmail("");
+      setInviteByName("");
+      setMessage(
+        data.emailSent
+          ? "✅ Invite sent. They will see an accept/deny popup on next login."
+          : `✅ Invite queued. ${data.warning ?? "They will still see an in-app popup on login."}`,
+      );
+      await load();
+    } catch {
+      setMessage("Could not send email invite.");
+    } finally {
+      setInviteByEmailBusy(false);
+    }
+  }, [inviteByEmail, inviteByName, load]);
+
   const handleAcceptIncomingInvite = useCallback(async () => {
+    if (activePendingEmailInvite) {
+      setJoinBusy(true);
+      try {
+        const response = await fetch("/api/family", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "accept-email-invite",
+            inviteId: activePendingEmailInvite.id,
+            name: joinName.trim() || undefined,
+          }),
+        });
+        const payload = await response.json() as { ok?: boolean; error?: string };
+        if (!response.ok || !payload.ok) {
+          setMessage(payload.error ?? "Could not accept invite.");
+          return;
+        }
+        setIncomingInviteCode(null);
+        clearInviteQueryParam();
+        setMessage("✅ Joined family group.");
+        await load();
+      } catch {
+        setMessage("Could not accept invite.");
+      } finally {
+        setJoinBusy(false);
+      }
+      return;
+    }
     if (!incomingInviteCode) return;
     await joinGroupByCode(incomingInviteCode);
-  }, [incomingInviteCode, joinGroupByCode]);
+  }, [activePendingEmailInvite, clearInviteQueryParam, incomingInviteCode, joinGroupByCode, joinName, load]);
 
-  const handleDenyIncomingInvite = useCallback(() => {
+  const handleDenyIncomingInvite = useCallback(async () => {
+    if (activePendingEmailInvite) {
+      setJoinBusy(true);
+      try {
+        const response = await fetch("/api/family", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "decline-email-invite",
+            inviteId: activePendingEmailInvite.id,
+          }),
+        });
+        const payload = await response.json() as { ok?: boolean; error?: string };
+        if (!response.ok || !payload.ok) {
+          setMessage(payload.error ?? "Could not dismiss invite.");
+          return;
+        }
+        setIncomingInviteCode(null);
+        clearInviteQueryParam();
+        await load();
+        setMessage("Invite declined.");
+      } catch {
+        setMessage("Could not dismiss invite.");
+      } finally {
+        setJoinBusy(false);
+      }
+      return;
+    }
     setIncomingInviteCode(null);
     clearInviteQueryParam();
     setMessage("Invite dismissed. You can still join later with the code.");
-  }, [clearInviteQueryParam]);
+  }, [activePendingEmailInvite, clearInviteQueryParam, load]);
 
   const copyInviteCode = useCallback(async () => {
     if (!group?.inviteCode) return;
@@ -598,11 +718,22 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
         </button>
       </div>
 
-      {incomingInviteCode ? (
+      {activePendingEmailInvite || incomingInviteCode ? (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-500/30 dark:bg-emerald-500/10">
           <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">You were invited to a family group</p>
           <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-300">
-            Invite code <span className="font-mono font-bold">{incomingInviteCode}</span>. Accept to start premium live tracking together.
+            {activePendingEmailInvite ? (
+              <>
+                <span className="font-semibold">{activePendingEmailInvite.inviterName ?? "A family member"}</span> invited you to{" "}
+                <span className="font-semibold">{activePendingEmailInvite.groupName}</span>. Invite code{" "}
+                <span className="font-mono font-bold">{activePendingEmailInvite.inviteCode}</span>.
+              </>
+            ) : (
+              <>
+                Invite code <span className="font-mono font-bold">{incomingInviteCode}</span>.
+              </>
+            )}{" "}
+            Accept to start premium live tracking together.
           </p>
           <div className="mt-3 flex gap-2">
             <button
@@ -721,6 +852,36 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
             >
               Save
             </button>
+          </div>
+          <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50 p-3 dark:border-sky-700 dark:bg-sky-900/20">
+            <p className="text-xs font-semibold text-sky-800 dark:text-sky-200">Invite family by email</p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <input
+                type="email"
+                value={inviteByEmail}
+                onChange={(event) => setInviteByEmail(event.target.value)}
+                placeholder="daughter@email.com"
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+              />
+              <input
+                type="text"
+                value={inviteByName}
+                onChange={(event) => setInviteByName(event.target.value)}
+                placeholder="Name (optional)"
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleSendEmailInvite()}
+              disabled={inviteByEmailBusy || !inviteByEmail.trim()}
+              className="mt-2 rounded-lg bg-sky-600 px-3 py-2 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-50"
+            >
+              {inviteByEmailBusy ? "Sending invite..." : `Send invite to ${groupNameDraft.trim() || group?.name || "group"}`}
+            </button>
+            <p className="mt-1 text-xs text-sky-700 dark:text-sky-300">
+              On next login, they will automatically see an accept/deny popup in Family tab.
+            </p>
           </div>
           <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
             Manage roles, remove members, and keep one private group for your travel crew.
