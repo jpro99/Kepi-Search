@@ -59,6 +59,38 @@ const OPEN_STREET_MAP_FALLBACK_STYLE: import("maplibre-gl").StyleSpecification =
   ],
 };
 
+function createMaptilerRasterStyle(
+  maptilerKey: string,
+  variant: "streets" | "hybrid",
+): import("maplibre-gl").StyleSpecification {
+  const encodedKey = encodeURIComponent(maptilerKey);
+  const tileUrl =
+    variant === "hybrid"
+      ? `https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}.jpg?key=${encodedKey}`
+      : `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=${encodedKey}`;
+
+  return {
+    version: 8,
+    sources: {
+      maptilerRaster: {
+        type: "raster",
+        tiles: [tileUrl],
+        tileSize: 256,
+        attribution: "© MapTiler © OpenStreetMap contributors",
+      },
+    },
+    layers: [
+      {
+        id: "maptiler-raster",
+        type: "raster",
+        source: "maptilerRaster",
+        minzoom: 0,
+        maxzoom: 22,
+      },
+    ],
+  };
+}
+
 export function FamilyMap({ members, locations, maptilerKey, height = 300, onMemberClick }: FamilyMapProps) {
   const MAP_LOAD_TIMEOUT_MS = 12_000;
   const mapEl = useRef<HTMLDivElement>(null);
@@ -144,7 +176,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
         const zoom = knownLocs.length === 1 ? 14 : knownLocs.length > 1 ? 10 : 4;
 
         const styleUrl = maptilerKey
-          ? `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`
+          ? createMaptilerRasterStyle(maptilerKey, "streets")
           : OPEN_STREET_MAP_FALLBACK_STYLE;
 
         const map = new ml.Map({
@@ -236,8 +268,8 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
   useEffect(() => {
     if (!mapRef.current || !maptilerKey || !ready || !usingMaptilerStyle) return;
     const style = satellite
-      ? `https://api.maptiler.com/maps/hybrid/style.json?key=${encodeURIComponent(maptilerKey)}`
-      : `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`;
+      ? createMaptilerRasterStyle(maptilerKey, "hybrid")
+      : createMaptilerRasterStyle(maptilerKey, "streets");
     mapRef.current.setStyle(style);
     mapRef.current.once("styledata", () => {
       setMapWarning(null);
