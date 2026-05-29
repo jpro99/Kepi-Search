@@ -7658,6 +7658,13 @@ export default function TravelAssistantPage() {
             </section>
           ) : (
             <section className="space-y-3">
+              {/* Family tracker — invite link + location sharing */}
+              <Suspense fallback={<div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 animate-pulse">Loading Family Tracker...</div>}>
+                <FamilyPanel
+                  isPremium={hasProAccess || isLifetime || isTrial}
+                  onUpgrade={() => openUpgradeModal("multi-trip", "Upgrade to Pro to unlock Family Tracker — real-time location sharing for your whole group.")}
+                />
+              </Suspense>
               {/* Share trip */}
               <ShareTripCard tripName={activeTrip?.name ?? "My Trip"} />
               <section
