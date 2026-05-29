@@ -13,6 +13,7 @@ import { verifyEnvFromExampleAtBoot } from "../../scripts/verify-env";
 import "./globals.css";
 
 verifyEnvFromExampleAtBoot();
+const CLIENT_CACHE_MIGRATION_VERSION = "kepi-client-cache-v3-20260529";
 
 function resolveSiteUrl(): URL {
   const rawBaseUrl =
@@ -117,6 +118,11 @@ export default async function RootLayout({
         <script
           dangerouslySetInnerHTML={{
             __html: `(function(){try{var _ktheme=localStorage.getItem('kepi-theme');var _kdark=_ktheme==='dark'||(_ktheme===null&&window.matchMedia('(prefers-color-scheme:dark)').matches);if(_kdark)document.documentElement.classList.add('dark');}catch(e){}})();`,
+          }}
+        />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var version='${CLIENT_CACHE_MIGRATION_VERSION}';var key='kepi-client-cache-migration-version';var current=localStorage.getItem(key);if(current===version){return;}localStorage.setItem(key,version);var clearCaches=('caches'in window)?caches.keys().then(function(cacheKeys){return Promise.all(cacheKeys.map(function(cacheKey){return caches.delete(cacheKey);}));}):Promise.resolve();var clearServiceWorkers=('serviceWorker'in navigator)?navigator.serviceWorker.getRegistrations().then(function(registrations){return Promise.all(registrations.map(function(reg){return reg.unregister();}));}):Promise.resolve();Promise.all([clearCaches,clearServiceWorkers]).finally(function(){setTimeout(function(){window.location.reload();},200);});}catch(e){}})();`,
           }}
         />
         <link rel="manifest" href="/manifest.json" />
