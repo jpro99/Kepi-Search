@@ -1,6 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getAirportProximity, type UserAirportStatus } from "@/lib/travelAssistant/airportGeo";
+import {
+  AIRLINE_PROGRAMS,
+  findProgram,
+  findTier,
+  getLoungesForAirport,
+  type AirlineStatusProgram,
+  type AirlineLoungeInfo,
+  type StatusTier,
+} from "@/lib/travelAssistant/airlineStatus";
+import type { TravelProfile } from "@/app/api/travel-profile/route";
 
 /* ─── Types ──────────────────────────────────────────────────── */
 interface FlightReservation {
@@ -29,11 +40,10 @@ interface FlightReservation {
 
 interface AirportModeProps {
   reservations: FlightReservation[];
-  /** Called when user wants to see all reservations */
   onViewReservations?: () => void;
 }
 
-/* ─── UTC parse (follows AGENTS.md rule — no new Date(localTimeString)) ── */
+/* ─── Time helpers ───────────────────────────────────────────── */
 function toUtcMs(localTime: string, timezone?: string): number {
   const s = localTime.trim().replace("T", " ").slice(0, 16);
   const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(s);
@@ -51,57 +61,272 @@ function toUtcMs(localTime: string, timezone?: string): number {
   } catch { return approxUtc; }
 }
 
-function msToHM(ms: number): { h: number; m: number; s: number } {
-  const totalSec = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  return { h, m, s };
-}
-
 function fmtCountdown(ms: number): string {
-  const { h, m, s } = msToHM(ms);
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
   if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
 }
 
 function localDisplay(localTime: string): string {
   const m = /(\d{2}):(\d{2})$/.exec(localTime.trim().slice(0, 16));
   if (!m) return "";
   const h = +m[1];
-  const min = m[2];
   const ampm = h >= 12 ? "PM" : "AM";
-  const h12 = h % 12 || 12;
-  return `${h12}:${min} ${ampm}`;
+  return `${h % 12 || 12}:${m[2]} ${ampm}`;
 }
 
-/* ─── Boarding phases ────────────────────────────────────────── */
-type Phase = "pre-airport" | "head-to-gate" | "boarding" | "final-call" | "departed" | "off";
-
-function getPhase(deptUtcMs: number, nowMs: number): Phase {
-  const minUntil = (deptUtcMs - nowMs) / 60_000;
-  if (minUntil > 180) return "off"; // >3h away — don't show
-  if (minUntil > 90) return "pre-airport";
-  if (minUntil > 45) return "head-to-gate";
-  if (minUntil > 20) return "boarding";
-  if (minUntil > 0) return "final-call";
-  if (minUntil > -60) return "departed";
-  return "off";
+function fmtTime(ms: number): string {
+  const d = new Date(ms);
+  const h = d.getHours();
+  const m = d.getMinutes().toString().padStart(2, "0");
+  return `${h % 12 || 12}:${m} ${h >= 12 ? "PM" : "AM"}`;
 }
 
-const PHASE_CONFIG: Record<Phase, { label: string; icon: string; bg: string; textColor: string }> = {
-  "off": { label: "", icon: "", bg: "", textColor: "" },
-  "pre-airport": { label: "Head to airport soon", icon: "🏃", bg: "from-sky-600 to-blue-700", textColor: "text-sky-100" },
-  "head-to-gate": { label: "Go to your gate now", icon: "🚶", bg: "from-amber-500 to-orange-600", textColor: "text-amber-50" },
-  "boarding": { label: "Boarding now", icon: "🛫", bg: "from-emerald-500 to-teal-600", textColor: "text-emerald-50" },
-  "final-call": { label: "Final boarding call!", icon: "🚨", bg: "from-red-500 to-red-700", textColor: "text-red-50" },
-  "departed": { label: "Flight departed", icon: "✈️", bg: "from-slate-500 to-slate-700", textColor: "text-slate-200" },
+/* ─── Location-aware phase ────────────────────────────────────── */
+type LocationPhase =
+  | "off"           // too far out
+  | "leave-soon"    // 90–180 min, not at airport
+  | "leave-now"     // 45–90 min, not at airport
+  | "check-in"      // at airport outer zone, before security
+  | "security"      // at airport, need to get through security
+  | "lounge"        // in terminal, lounge access available, time permits
+  | "head-to-gate"  // in terminal, should head to gate now
+  | "at-gate"       // boarding window, in terminal
+  | "final-call"    // <20 min
+  | "departed";
+
+interface PhaseConfig {
+  label: string;
+  sublabel: string;
+  icon: string;
+  bg: string;
+  urgent: boolean;
+}
+
+function getLocationPhase(
+  deptUtcMs: number,
+  nowMs: number,
+  locationStatus: UserAirportStatus,
+  hasLoungeAccess: boolean,
+  hasStatus: boolean,
+): LocationPhase {
+  const min = (deptUtcMs - nowMs) / 60_000;
+
+  if (min > 180) return "off";
+  if (min < 0) return min > -60 ? "departed" : "off";
+  if (min < 20) return "final-call";
+
+  // User is in the terminal (past security)
+  if (locationStatus === "in-terminal") {
+    if (min > 60 && hasLoungeAccess) return "lounge";
+    if (min > 30) return "head-to-gate";
+    return "at-gate";
+  }
+
+  // User is at the airport (check-in/landside zone)
+  if (locationStatus === "at-airport") {
+    if (min < 45) return "security"; // cutting it close
+    return "check-in";
+  }
+
+  // User is away from airport
+  if (min < 45) return "leave-now";
+  if (min < 90) return "leave-now";
+  return "leave-soon";
+}
+
+const PHASE_CONFIG: Record<LocationPhase, PhaseConfig> = {
+  off:          { label: "", sublabel: "", icon: "", bg: "", urgent: false },
+  "leave-soon": { label: "Flight today", sublabel: "Plan to leave for the airport", icon: "🗓", bg: "from-sky-600 to-blue-700", urgent: false },
+  "leave-now":  { label: "Leave for the airport", sublabel: "Head out now to arrive with time to spare", icon: "🚗", bg: "from-amber-500 to-orange-600", urgent: true },
+  "check-in":   { label: "You're at the airport", sublabel: "Head to check-in or security", icon: "🏛", bg: "from-sky-500 to-blue-600", urgent: false },
+  security:     { label: "Get through security now", sublabel: "Head to the TSA checkpoint", icon: "🛡", bg: "from-amber-500 to-orange-500", urgent: true },
+  lounge:       { label: "You're airside — enjoy the lounge", sublabel: "Plenty of time before boarding", icon: "🛋", bg: "from-indigo-500 to-violet-600", urgent: false },
+  "head-to-gate": { label: "Head to your gate", sublabel: "Make your way there now", icon: "🚶", bg: "from-amber-500 to-orange-600", urgent: true },
+  "at-gate":    { label: "You're at the gate ✓", sublabel: "Board when your group is called", icon: "🛫", bg: "from-emerald-500 to-teal-600", urgent: false },
+  "final-call": { label: "Final boarding call!", sublabel: "Get on the plane now", icon: "🚨", bg: "from-red-500 to-red-700", urgent: true },
+  departed:     { label: "Flight departed", sublabel: "Safe travels!", icon: "✈️", bg: "from-slate-500 to-slate-700", urgent: false },
 };
 
-/* ─── Component ──────────────────────────────────────────────── */
+/* ─── Leave-by calculator ─────────────────────────────────────── */
+function calcLeaveByMs(
+  deptUtcMs: number,
+  locationStatus: UserAirportStatus,
+  hasPrioritySecurity: boolean,
+  hasPrecheck: boolean,
+  hasLoungeAccess: boolean,
+): { leaveByMs: number; reason: string } {
+  // Time at airport before departure:
+  // Standard: 90 min domestic, 120 min international (simplified: 90)
+  // Priority security: saves ~20 min
+  // Precheck/GE: saves another 15 min
+  // Lounge: add 30 min buffer to enjoy it
+  let bufferMin = 90;
+  if (hasPrioritySecurity || hasPrecheck) bufferMin -= 20;
+  if (hasLoungeAccess) bufferMin += 30;
+  bufferMin = Math.max(40, bufferMin);
+  const reason = hasLoungeAccess
+    ? `${bufferMin} min allows time for lounge + gate`
+    : hasPrioritySecurity
+    ? `${bufferMin} min (priority security lane)`
+    : `${bufferMin} min for check-in + security`;
+  return { leaveByMs: deptUtcMs - bufferMin * 60_000, reason };
+}
+
+/* ─── Status setup modal ──────────────────────────────────────── */
+interface StatusSetupProps {
+  onSave: (profile: TravelProfile) => void;
+  onSkip: () => void;
+  existing: TravelProfile | null;
+}
+
+function StatusSetupModal({ onSave, onSkip, existing }: StatusSetupProps) {
+  const [airline, setAirline] = useState(existing?.airlineStatuses?.[0]?.airline ?? "");
+  const [tier, setTier] = useState(existing?.airlineStatuses?.[0]?.tier ?? "");
+  const [tsa, setTsa] = useState(existing?.tsa_precheck ?? false);
+  const [ge, setGe] = useState(existing?.global_entry ?? false);
+  const [clear, setClear] = useState(existing?.clear ?? false);
+  const [saving, setSaving] = useState(false);
+
+  const matchedProgram = useMemo(() => airline ? findProgram(airline) : null, [airline]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    const profile: TravelProfile = {
+      airlineStatuses: airline && tier ? [{ airline, tier, iata: matchedProgram?.iata[0] }] : [],
+      tsa_precheck: tsa,
+      global_entry: ge,
+      clear,
+    };
+    try {
+      await fetch("/api/travel-profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(profile),
+      });
+      onSave(profile);
+    } catch { onSave(profile); } // save locally even if API fails
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="rounded-3xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-5 space-y-4 shadow-xl">
+      <div>
+        <p className="font-bold text-slate-900 dark:text-slate-100 text-base">✈️ Your travel profile</p>
+        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+          Tell Kepi your status so it can route you through the airport correctly — lounge access, priority lanes, leave times.
+        </p>
+      </div>
+
+      {/* Airline selection */}
+      <div>
+        <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Airline</label>
+        <select
+          value={airline}
+          onChange={e => { setAirline(e.target.value); setTier(""); }}
+          className="mt-1 w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-slate-100"
+        >
+          <option value="">No status / not sure</option>
+          {AIRLINE_PROGRAMS.map(p => (
+            <option key={p.iata[0]} value={p.airline}>{p.airline} ({p.program})</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Status tier — only show if airline selected */}
+      {matchedProgram && matchedProgram.tiers.length > 0 && (
+        <div>
+          <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Status tier</label>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {matchedProgram.tiers.map(t => (
+              <button
+                key={t.tier}
+                type="button"
+                onClick={() => setTier(t.tier)}
+                className={`rounded-xl px-3 py-1.5 text-xs font-bold border transition ${
+                  tier === t.tier
+                    ? "bg-sky-600 text-white border-sky-600"
+                    : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                }`}
+              >
+                {t.tier}
+                {t.loungeAccess && <span className="ml-1 opacity-60">🛋</span>}
+              </button>
+            ))}
+          </div>
+          {tier && matchedProgram && (() => {
+            const t = findTier(matchedProgram, tier);
+            if (!t) return null;
+            return (
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                {t.loungeAccess ? "✅ Lounge access" : "❌ No lounge access"} ·{" "}
+                {t.priorityBoarding ? "Priority boarding" : "Standard boarding"} ·{" "}
+                {t.freeCheckedBags} free checked bag{t.freeCheckedBags !== 1 ? "s" : ""}
+              </p>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Security fast lanes */}
+      <div>
+        <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Security lanes</label>
+        <div className="mt-1 flex flex-wrap gap-2">
+          {[
+            { key: "tsa", label: "TSA PreCheck ✓", val: tsa, set: setTsa },
+            { key: "ge",  label: "Global Entry ✓",  val: ge,  set: setGe },
+            { key: "clear", label: "CLEAR ✓",      val: clear, set: setClear },
+          ].map(({ key, label, val, set }) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => set(!val)}
+              className={`rounded-xl px-3 py-1.5 text-xs font-bold border transition ${
+                val
+                  ? "bg-emerald-600 text-white border-emerald-600"
+                  : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={saving}
+          className="flex-1 rounded-xl bg-sky-600 py-2.5 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save my profile"}
+        </button>
+        <button
+          type="button"
+          onClick={onSkip}
+          className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800"
+        >
+          Skip
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Main component ──────────────────────────────────────────── */
 export function AirportMode({ reservations, onViewReservations }: AirportModeProps) {
   const [now, setNow] = useState(() => Date.now());
+  const [userLat, setUserLat] = useState<number | null>(null);
+  const [userLon, setUserLon] = useState<number | null>(null);
+  const watchRef = useRef<number | null>(null);
+  const [profile, setProfile] = useState<TravelProfile | null>(null);
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
 
   // Tick every second
   useEffect(() => {
@@ -109,54 +334,129 @@ export function AirportMode({ reservations, onViewReservations }: AirportModePro
     return () => clearInterval(id);
   }, []);
 
-  // Find the next upcoming flight within 3 hours or recently departed
+  // Load travel profile
+  useEffect(() => {
+    void fetch("/api/travel-profile", { cache: "no-store" })
+      .then(r => r.json())
+      .then((d: { profile?: TravelProfile }) => {
+        setProfile(d.profile ?? null);
+        setProfileLoaded(true);
+      })
+      .catch(() => setProfileLoaded(true));
+  }, []);
+
+  // Watch GPS
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    watchRef.current = navigator.geolocation.watchPosition(
+      pos => { setUserLat(pos.coords.latitude); setUserLon(pos.coords.longitude); },
+      () => null,
+      { enableHighAccuracy: false, maximumAge: 30_000, timeout: 15_000 }
+    );
+    return () => { if (watchRef.current !== null) navigator.geolocation.clearWatch(watchRef.current); };
+  }, []);
+
+  // Find active flight
   const activeFlight = useMemo(() => {
     const flights = reservations.filter(r => r.type === "flight");
-    const candidates = flights
+    return flights
       .map(f => ({ f, utcMs: toUtcMs(f.localTime, f.timezone) }))
       .filter(({ utcMs }) => !isNaN(utcMs) && (utcMs - now) / 60_000 < 180 && (now - utcMs) / 60_000 < 60)
-      .sort((a, b) => a.utcMs - b.utcMs);
-    return candidates[0] ?? null;
+      .sort((a, b) => a.utcMs - b.utcMs)[0] ?? null;
   }, [reservations, now]);
+
+  // Airport proximity
+  const proximity = useMemo(() =>
+    getAirportProximity(userLat, userLon, activeFlight?.f.flightDepartureAirport),
+    [userLat, userLon, activeFlight]
+  );
+
+  // Resolve status for this flight's airline
+  const { program, tier, lounges } = useMemo(() => {
+    if (!profile || !activeFlight) return { program: null, tier: null, lounges: [] };
+    const f = activeFlight.f;
+    const airlineHint = f.flightAirline ?? f.provider ?? "";
+    const st = profile.airlineStatuses?.[0];
+    if (!st) return { program: null, tier: null, lounges: [] };
+    // Match by profile airline first, then flight airline
+    const prog = findProgram(st.airline) ?? findProgram(airlineHint);
+    if (!prog) return { program: null, tier: null, lounges: [] };
+    const tierObj = findTier(prog, st.tier);
+    const apt = f.flightDepartureAirport ?? "";
+    const loungeList = tierObj?.loungeAccess ? getLoungesForAirport(prog, apt) : [];
+    return { program: prog, tier: tierObj, lounges: loungeList };
+  }, [profile, activeFlight]);
+
+  const hasLoungeAccess = Boolean(tier?.loungeAccess && lounges.length > 0);
+  const hasPrioritySecurity = Boolean(tier?.prioritySecurity || profile?.tsa_precheck || profile?.global_entry);
+  const hasPrecheck = Boolean(profile?.tsa_precheck || profile?.global_entry);
 
   if (!activeFlight) return null;
 
   const { f, utcMs: deptUtcMs } = activeFlight;
-  const phase = getPhase(deptUtcMs, now);
+  const phase = getLocationPhase(deptUtcMs, now, proximity.status, hasLoungeAccess, Boolean(tier));
   if (phase === "off") return null;
 
   const config = PHASE_CONFIG[phase];
   const msUntilDept = deptUtcMs - now;
   const isDelayed = (f.flightDelayMinutes ?? 0) > 0;
-  const delayMin = f.flightDelayMinutes ?? 0;
 
-  // "Leave now" trigger: 90 min before departure (head-to-gate phase)
-  const showLeaveNow = phase === "head-to-gate";
-  const showFinalCall = phase === "final-call";
+  const { leaveByMs, reason: leaveReason } = calcLeaveByMs(
+    deptUtcMs, proximity.status, hasPrioritySecurity, hasPrecheck, hasLoungeAccess
+  );
+  const msUntilLeave = leaveByMs - now;
+  const showLeaveCountdown = proximity.status === "away" && msUntilLeave > 0 && msUntilLeave < 3 * 3600_000;
+  const leavingLate = proximity.status === "away" && msUntilLeave < 0 && phase !== "departed";
+
+  // Show setup prompt if profile not loaded yet or no statuses set and we're within 3h
+  const showSetupPrompt = profileLoaded && !profile?.airlineStatuses?.length && !showSetup;
 
   return (
     <div className="space-y-3">
+      {/* Setup prompt — one-time, non-blocking */}
+      {showSetupPrompt && !showSetup && (
+        <div className="rounded-2xl border border-sky-200 dark:border-sky-500/30 bg-sky-50 dark:bg-sky-500/10 p-3 flex items-center gap-3">
+          <span className="text-xl shrink-0">🎖</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-sky-800 dark:text-sky-200">Do you have airline status?</p>
+            <p className="text-xs text-sky-600 dark:text-sky-400 mt-0.5">
+              Tell Kepi your tier — it'll route you through the lounge and give you the right leave time.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowSetup(true)}
+            className="shrink-0 rounded-xl bg-sky-600 px-3 py-1.5 text-xs font-bold text-white"
+          >
+            Set up
+          </button>
+        </div>
+      )}
+
+      {showSetup && (
+        <StatusSetupModal
+          existing={profile}
+          onSave={p => { setProfile(p); setShowSetup(false); }}
+          onSkip={() => setShowSetup(false)}
+        />
+      )}
+
       {/* Main airport card */}
       <div className={`relative overflow-hidden rounded-3xl bg-gradient-to-br ${config.bg} p-5 shadow-xl shadow-blue-900/30`}>
-        {/* Animated pulse for urgent phases */}
-        {(showFinalCall) && (
+        {config.urgent && (
           <div className="absolute inset-0 rounded-3xl bg-white/10 animate-pulse pointer-events-none" />
         )}
 
-        {/* Header row */}
+        {/* Header */}
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
               <span className="text-2xl">{config.icon}</span>
-              <p className={`text-sm font-bold uppercase tracking-widest ${config.textColor} opacity-80`}>
-                Airport Mode
-              </p>
+              <p className="text-white/70 text-xs font-bold uppercase tracking-widest">Airport Mode</p>
             </div>
-            <p className="mt-1 text-white text-xl font-bold leading-tight">
-              {config.label}
-            </p>
+            <p className="mt-1 text-white text-xl font-bold leading-tight">{config.label}</p>
+            <p className="text-white/70 text-xs mt-0.5">{config.sublabel}</p>
           </div>
-          {/* Countdown */}
           {phase !== "departed" && (
             <div className="text-right shrink-0">
               <p className="text-white/60 text-[10px] font-bold uppercase tracking-wider">Departs in</p>
@@ -167,14 +467,14 @@ export function AirportMode({ reservations, onViewReservations }: AirportModePro
           )}
         </div>
 
-        {/* Flight info strip */}
+        {/* Flight strip */}
         <div className="mt-4 rounded-2xl bg-white/15 backdrop-blur-sm border border-white/10 p-3">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="text-white font-bold text-base leading-tight truncate">
                 {f.flightAirline ?? f.provider}{f.flightNumber ? ` ${f.flightNumber}` : ""}
               </p>
-              <p className={`text-sm mt-0.5 ${config.textColor} opacity-70`}>
+              <p className="text-white/60 text-sm mt-0.5">
                 {f.flightDepartureAirport && f.flightArrivalAirport
                   ? `${f.flightDepartureAirport} → ${f.flightArrivalAirport}`
                   : f.title}
@@ -184,93 +484,353 @@ export function AirportMode({ reservations, onViewReservations }: AirportModePro
               <p className="text-white font-bold text-lg">
                 {localDisplay(f.flightDepartureTime ?? f.localTime)}
               </p>
-              {isDelayed && (
-                <p className="text-amber-300 text-xs font-bold">+{delayMin}m delay</p>
-              )}
+              {isDelayed && <p className="text-amber-300 text-xs font-bold">+{f.flightDelayMinutes}m delay</p>}
             </div>
           </div>
         </div>
 
-        {/* Gate + terminal row */}
+        {/* Gate / terminal / status */}
         <div className="mt-3 grid grid-cols-3 gap-2">
-          <div className="rounded-xl bg-white/10 p-2 text-center">
-            <p className="text-white/50 text-[9px] font-bold uppercase tracking-wider">Terminal</p>
-            <p className="text-white font-bold text-lg leading-tight mt-0.5">
-              {f.flightDepartureTerminal ?? "—"}
-            </p>
-          </div>
-          <div className="rounded-xl bg-white/10 p-2 text-center">
-            <p className="text-white/50 text-[9px] font-bold uppercase tracking-wider">Gate</p>
-            <p className="text-white font-bold text-lg leading-tight mt-0.5">
-              {f.flightDepartureGate ?? "—"}
-            </p>
-          </div>
-          <div className="rounded-xl bg-white/10 p-2 text-center">
-            <p className="text-white/50 text-[9px] font-bold uppercase tracking-wider">Status</p>
-            <p className={`font-bold text-sm leading-tight mt-0.5 ${
-              f.flightOnTime === false ? "text-amber-300" : "text-emerald-300"
-            }`}>
-              {f.flightStatus ?? (f.flightOnTime === false ? "Delayed" : "On time")}
-            </p>
-          </div>
-        </div>
-
-        {/* Leave Now banner */}
-        {showLeaveNow && (
-          <div className="mt-3 rounded-2xl border border-white/20 bg-white/20 backdrop-blur-sm p-3 flex items-center gap-3">
-            <span className="text-2xl">⏰</span>
-            <div>
-              <p className="text-white font-bold text-sm">Leave for the airport now</p>
-              <p className="text-white/70 text-xs">
-                Allow 90 min before departure for check-in and security.
+          {[
+            { label: "Terminal", value: f.flightDepartureTerminal },
+            { label: "Gate",     value: f.flightDepartureGate },
+            { label: "Status",   value: f.flightStatus ?? (f.flightOnTime === false ? "Delayed" : "On time"), color: f.flightOnTime === false ? "text-amber-300" : "text-emerald-300" },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="rounded-xl bg-white/10 p-2 text-center">
+              <p className="text-white/50 text-[9px] font-bold uppercase tracking-wider">{label}</p>
+              <p className={`font-bold text-base leading-tight mt-0.5 ${color ?? "text-white"}`}>
+                {value ?? "—"}
               </p>
             </div>
+          ))}
+        </div>
+
+        {/* Late warning */}
+        {leavingLate && (
+          <div className="mt-3 rounded-2xl border border-red-300/40 bg-red-500/20 p-3 flex items-center gap-2">
+            <span className="text-xl shrink-0">🚨</span>
+            <div>
+              <p className="text-white font-black text-sm">You should have left already</p>
+              <p className="text-white/70 text-xs">Leave immediately — you may be cutting it very close.</p>
+            </div>
           </div>
         )}
 
-        {/* Final call pulse message */}
-        {showFinalCall && (
-          <div className="mt-3 rounded-2xl border border-white/30 bg-white/25 p-3 text-center">
-            <p className="text-white font-black text-sm">🚨 Run to your gate!</p>
-            <p className="text-white/80 text-xs mt-0.5">Boarding closes very soon.</p>
+        {/* Leave-by countdown */}
+        {showLeaveCountdown && (
+          <div className="mt-3 rounded-2xl border border-white/20 bg-white/15 p-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-white font-bold text-sm">Leave by {fmtTime(leaveByMs)}</p>
+              <p className="text-white/60 text-xs mt-0.5">{leaveReason}</p>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-white/50 text-[10px] uppercase tracking-wider">In</p>
+              <p className="text-white font-black text-lg tabular-nums">{fmtCountdown(msUntilLeave)}</p>
+            </div>
           </div>
         )}
 
-        {/* Confirmation code */}
+        {/* Confirmation */}
         {f.confirmationCode && (
-          <p className={`mt-3 text-center text-[11px] font-mono ${config.textColor} opacity-60`}>
-            Confirmation: {f.confirmationCode}
+          <p className="mt-3 text-center text-[11px] font-mono text-white/50">
+            {f.confirmationCode}
           </p>
         )}
       </div>
 
-      {/* Tips row — contextual based on phase */}
-      {(phase === "pre-airport" || phase === "head-to-gate") && (
-        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-2">
-          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Before you go</p>
-          {[
-            { icon: "🪪", text: "Passport / ID in your carry-on" },
-            { icon: "📱", text: "Download boarding pass to phone" },
-            { icon: "🔋", text: "Phone fully charged?" },
-            { icon: "💊", text: "Medications in personal item" },
-          ].map(({ icon, text }) => (
-            <div key={text} className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-              <span>{icon}</span>
-              <span>{text}</span>
-            </div>
-          ))}
+      {/* Where you are right now */}
+      {proximity.status !== "unknown" && (
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 flex items-center gap-3">
+          <span className="text-lg shrink-0">
+            {proximity.status === "in-terminal" ? "✅" : proximity.status === "at-airport" ? "🏛" : "📍"}
+          </span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              {proximity.status === "in-terminal"
+                ? `You're airside at ${proximity.airport?.name ?? "the airport"}`
+                : proximity.status === "at-airport"
+                ? `You're at ${proximity.airport?.name ?? "the airport"}`
+                : `${proximity.airport ? `${(proximity.distanceKm ?? 0).toFixed(1)} km from ${proximity.airport.name}` : "Location tracked"}`}
+            </p>
+            <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
+              {proximity.status === "in-terminal"
+                ? "GPS shows you inside the terminal"
+                : proximity.status === "at-airport"
+                ? "GPS shows you at the airport — head to security"
+                : "Not yet at the airport"}
+            </p>
+          </div>
         </div>
+      )}
+
+      {/* Status badge + lounge info */}
+      {tier && (
+        <div className="rounded-2xl border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/10 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-bold text-indigo-900 dark:text-indigo-200">
+                🎖 {program?.airline} {tier.tier}
+              </p>
+              <p className="text-xs text-indigo-600 dark:text-indigo-400 mt-0.5">
+                {[
+                  tier.priorityBoarding && "Priority boarding",
+                  (tier.prioritySecurity || hasPrecheck) && "Priority security",
+                  profile?.tsa_precheck && "TSA PreCheck",
+                  profile?.global_entry && "Global Entry",
+                  profile?.clear && "CLEAR",
+                ].filter(Boolean).join(" · ")}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowSetup(true)}
+              className="text-xs text-indigo-500 dark:text-indigo-400 hover:underline"
+            >
+              Edit
+            </button>
+          </div>
+
+          {/* Lounge cards */}
+          {lounges.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-bold uppercase tracking-wider text-indigo-500 dark:text-indigo-400">
+                🛋 Your lounge{lounges.length > 1 ? "s" : ""} at {f.flightDepartureAirport}
+              </p>
+              {lounges.map((lounge, i) => (
+                <LoungeCard
+                  key={i}
+                  lounge={lounge}
+                  gate={f.flightDepartureGate}
+                  terminal={f.flightDepartureTerminal}
+                  deptUtcMs={deptUtcMs}
+                  now={now}
+                  hasPrecheck={hasPrecheck}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* No lounge at this airport */}
+          {tier.loungeAccess && lounges.length === 0 && f.flightDepartureAirport && (
+            <p className="text-xs text-indigo-500 dark:text-indigo-400">
+              No {program?.airline} lounge at {f.flightDepartureAirport} — check partner lounges or Priority Pass.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Airport walkthrough steps */}
+      <AirportWalkthrough
+        phase={phase}
+        locationStatus={proximity.status}
+        hasLoungeAccess={hasLoungeAccess}
+        hasPrioritySecurity={hasPrioritySecurity}
+        hasPrecheck={hasPrecheck}
+        hasClear={Boolean(profile?.clear)}
+        gate={f.flightDepartureGate}
+        terminal={f.flightDepartureTerminal}
+        lounges={lounges}
+        tier={tier}
+      />
+
+      {/* Pre-flight checklist */}
+      {(phase === "leave-soon" || phase === "leave-now") && (
+        <PreFlightChecklist />
       )}
 
       {onViewReservations && (
         <button
           type="button"
           onClick={onViewReservations}
-          className="w-full text-center text-xs text-slate-400 dark:text-slate-500 hover:text-sky-600 dark:hover:text-sky-400 py-1 transition"
+          className="w-full text-center text-xs text-slate-400 hover:text-sky-600 py-1 transition"
         >
           View all reservations →
         </button>
       )}
+    </div>
+  );
+}
+
+/* ─── Lounge card ─────────────────────────────────────────────── */
+function LoungeCard({ lounge, gate, terminal, deptUtcMs, now, hasPrecheck }: {
+  lounge: AirlineLoungeInfo;
+  gate?: string;
+  terminal?: string;
+  deptUtcMs: number;
+  now: number;
+  hasPrecheck: boolean;
+}) {
+  const minUntilDept = (deptUtcMs - now) / 60_000;
+  // Suggest leaving lounge 40 min before departure to reach gate
+  const leaveByMs = deptUtcMs - 40 * 60_000;
+  const msUntilLeave = leaveByMs - now;
+  const canEnjoySafely = minUntilDept > 50;
+
+  return (
+    <div className="rounded-xl bg-white dark:bg-slate-800 border border-indigo-100 dark:border-indigo-500/20 p-3 space-y-1.5">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-bold text-sm text-slate-900 dark:text-slate-100 truncate">{lounge.name}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">📍 {lounge.location}</p>
+        </div>
+        {lounge.hours && (
+          <span className="shrink-0 text-[10px] text-slate-400 bg-slate-100 dark:bg-slate-700 rounded-md px-1.5 py-0.5">
+            {lounge.hours}
+          </span>
+        )}
+      </div>
+      {lounge.gateProximityNote && (
+        <p className="text-xs text-indigo-600 dark:text-indigo-400">
+          🚶 {lounge.gateProximityNote}
+        </p>
+      )}
+      {gate && (
+        <p className="text-xs text-slate-600 dark:text-slate-300">
+          Your gate: <span className="font-bold">{terminal ? `${terminal} · ` : ""}{gate}</span>
+        </p>
+      )}
+      {canEnjoySafely ? (
+        <div className="rounded-lg bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1.5 flex items-center justify-between gap-2">
+          <p className="text-xs text-emerald-700 dark:text-emerald-300 font-medium">
+            ✅ Enough time — enjoy the lounge
+          </p>
+          <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300 shrink-0">
+            Leave by {new Date(leaveByMs).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 px-2.5 py-1.5">
+          <p className="text-xs text-amber-700 dark:text-amber-300 font-medium">
+            ⚠️ Tight — head straight to the gate instead
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Airport walkthrough steps ──────────────────────────────── */
+function AirportWalkthrough({ phase, locationStatus, hasLoungeAccess, hasPrioritySecurity,
+  hasPrecheck, hasClear, gate, terminal, lounges, tier }: {
+  phase: LocationPhase;
+  locationStatus: UserAirportStatus;
+  hasLoungeAccess: boolean;
+  hasPrioritySecurity: boolean;
+  hasPrecheck: boolean;
+  hasClear: boolean;
+  gate?: string;
+  terminal?: string;
+  lounges: AirlineLoungeInfo[];
+  tier: StatusTier | null;
+}) {
+  // Build the right step list based on where you are and your status
+  const steps = useMemo(() => {
+    const list: { icon: string; text: string; done: boolean }[] = [];
+
+    const atAirport = locationStatus === "at-airport" || locationStatus === "in-terminal";
+    const airside = locationStatus === "in-terminal";
+
+    if (!atAirport) {
+      list.push({ icon: "🚗", text: "Get to the airport", done: false });
+    }
+
+    if (!airside) {
+      if (tier?.freeCheckedBags) {
+        list.push({ icon: "🧳", text: `Check your bags — ${tier.freeCheckedBags} free with your status`, done: atAirport });
+      } else {
+        list.push({ icon: "🧳", text: "Drop checked bags at the counter", done: atAirport });
+      }
+      const secLabel = hasClear ? "CLEAR → TSA PreCheck lane (fastest)"
+        : hasPrecheck ? "TSA PreCheck lane (dedicated, no belt removal)"
+        : hasPrioritySecurity ? "Priority security lane"
+        : "Standard TSA security — allow extra time";
+      list.push({ icon: "🛡", text: secLabel, done: airside });
+    }
+
+    if (hasLoungeAccess && lounges.length > 0) {
+      const lounge = lounges[0];
+      list.push({ icon: "🛋", text: `${lounge.name} — ${lounge.location}`, done: false });
+      if (lounge.gateProximityNote) {
+        list.push({ icon: "⏱", text: `From lounge to gate: ${lounge.gateProximityNote}`, done: false });
+      }
+    }
+
+    if (gate) {
+      const gateLabel = terminal ? `Gate ${gate} · Terminal ${terminal}` : `Gate ${gate}`;
+      list.push({ icon: "🚪", text: `Head to ${gateLabel}`, done: phase === "at-gate" || phase === "final-call" || phase === "departed" });
+    } else {
+      list.push({ icon: "🚪", text: "Find your departure gate on the boards", done: false });
+    }
+
+    if (tier?.priorityBoarding) {
+      list.push({ icon: "🎖", text: `Priority boarding — listen for your group call`, done: phase === "departed" });
+    } else {
+      list.push({ icon: "🛫", text: "Board when your group is called", done: phase === "departed" });
+    }
+
+    return list;
+  }, [phase, locationStatus, hasLoungeAccess, hasPrioritySecurity, hasPrecheck, hasClear, gate, terminal, lounges, tier]);
+
+  if (phase === "off" || phase === "leave-soon") return null;
+
+  return (
+    <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+      <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Your airport path</p>
+      </div>
+      <div className="divide-y divide-slate-100 dark:divide-slate-800">
+        {steps.map((step, i) => (
+          <div key={i} className={`flex items-start gap-3 px-4 py-3 ${step.done ? "opacity-40" : ""}`}>
+            <div className="flex flex-col items-center shrink-0 mt-0.5">
+              <span className="text-base">{step.done ? "✅" : step.icon}</span>
+              {i < steps.length - 1 && (
+                <div className="w-px h-4 bg-slate-200 dark:bg-slate-700 mt-1" />
+              )}
+            </div>
+            <p className={`text-sm pt-0.5 ${step.done ? "line-through text-slate-400" : "text-slate-800 dark:text-slate-200"}`}>
+              {step.text}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Pre-flight checklist ───────────────────────────────────── */
+function PreFlightChecklist() {
+  const [checked, setChecked] = useState<Set<number>>(new Set());
+  const items = [
+    { icon: "🪪", text: "Passport / ID in your carry-on" },
+    { icon: "📱", text: "Boarding pass downloaded" },
+    { icon: "🔋", text: "Phone charged" },
+    { icon: "💊", text: "Medications in personal item" },
+    { icon: "💳", text: "Cards + local currency" },
+    { icon: "🔑", text: "House / hotel keys" },
+  ];
+  return (
+    <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-2">
+      <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Before you leave</p>
+      {items.map((item, i) => (
+        <button
+          key={i}
+          type="button"
+          onClick={() => setChecked(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; })}
+          className={`w-full flex items-center gap-3 rounded-xl px-3 py-2 text-left transition ${
+            checked.has(i) ? "bg-emerald-50 dark:bg-emerald-500/10" : "hover:bg-slate-50 dark:hover:bg-slate-800"
+          }`}
+        >
+          <div className={`h-5 w-5 shrink-0 rounded-full border-2 flex items-center justify-center ${
+            checked.has(i) ? "border-emerald-500 bg-emerald-500" : "border-slate-300 dark:border-slate-600"
+          }`}>
+            {checked.has(i) && <span className="text-white text-[10px] font-bold">✓</span>}
+          </div>
+          <span className="text-base">{item.icon}</span>
+          <span className={`text-sm ${checked.has(i) ? "line-through text-slate-400" : "text-slate-800 dark:text-slate-200"}`}>
+            {item.text}
+          </span>
+        </button>
+      ))}
     </div>
   );
 }
