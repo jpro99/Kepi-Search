@@ -145,6 +145,30 @@ async function sendInviteEmail(opts: {
   }
 }
 
+// ── Resolve membership record, handling all corrupted formats ────────────────
+function resolveMembership(raw: unknown, selfUserId: string): { ownerId: string; groupId: string; inviteCode: string } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+
+  // Unwrap double-nested ownerId: { "ownerId": { "ownerId": "...", "groupId": "..." }, "groupId": "..." }
+  let ownerId = r.ownerId;
+  let groupId = r.groupId as string ?? "";
+  const inviteCode = r.inviteCode as string ?? "";
+
+  // If ownerId is itself an object (corrupted double-nest), extract from it
+  if (ownerId && typeof ownerId === "object" && "ownerId" in (ownerId as object)) {
+    const nested = ownerId as Record<string, unknown>;
+    ownerId = nested.ownerId;
+    // Use the nested groupId (which should be the OWNER's group, not ours)
+    if (nested.groupId && typeof nested.groupId === "string") {
+      groupId = nested.groupId as string;
+    }
+  }
+
+  if (typeof ownerId !== "string" || !ownerId || ownerId === selfUserId) return null;
+  return { ownerId, groupId, inviteCode };
+}
+
 // ── GET ───────────────────────────────────────────────────────────────────────
 export async function GET(req: Request) {
   const { userId } = await auth();
@@ -153,12 +177,31 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const requestedGroupId = url.searchParams.get("groupId");
 
-  // Check if member of someone else's group
-  const membership = await kvStoreGet<{ ownerId: string; groupId: string; inviteCode: string }>(FAMILY_MEMBERSHIP_KEY, { userId });
-  if (membership && typeof membership.ownerId === "string" && membership.ownerId !== userId) {
+  // Read and self-heal membership record
+  const rawMembership = await kvStoreGet<unknown>(FAMILY_MEMBERSHIP_KEY, { userId });
+  const membership = resolveMembership(rawMembership, userId);
+
+  if (membership) {
+    // If membership was corrupted, rewrite it correctly
+    if (JSON.stringify(rawMembership) !== JSON.stringify(membership)) {
+      await kvStoreSet(FAMILY_MEMBERSHIP_KEY, membership, { userId });
+    }
+
     const ownerGroups = await loadGroups(membership.ownerId);
-    const memberGroup = ownerGroups.find(g => g.id === membership.groupId) ?? ownerGroups[0];
+    // Find the right group: prefer groupId match, fall back to any group containing this user
+    const memberGroup =
+      ownerGroups.find(g => g.id === membership.groupId && g.members.some(m => m.id === userId)) ??
+      ownerGroups.find(g => g.members.some(m => m.id === userId)) ??
+      (membership.groupId ? ownerGroups.find(g => g.id === membership.groupId) : null) ??
+      ownerGroups[0];
+
     if (memberGroup) {
+      // Fix groupId in membership if it was pointing to wrong group
+      if (membership.groupId !== memberGroup.id) {
+        await kvStoreSet(FAMILY_MEMBERSHIP_KEY,
+          { ownerId: membership.ownerId, groupId: memberGroup.id, inviteCode: membership.inviteCode || memberGroup.inviteCode },
+          { userId });
+      }
       const locs = Object.fromEntries(
         (await Promise.all(memberGroup.members.map(async m => {
           const loc = await kvStoreGet<z.infer<typeof LocationSchema>>(FAMILY_LOCATION_KEY(m.id), { userId: membership.ownerId });
@@ -167,6 +210,8 @@ export async function GET(req: Request) {
       );
       return NextResponse.json({ group: memberGroup, groups: [memberGroup], locations: locs, role: "member", myMemberId: userId });
     }
+    // Membership pointed to a group that no longer exists — clear it and fall through to own groups
+    await kvStoreSet(FAMILY_MEMBERSHIP_KEY, null, { userId });
   }
 
   // Load own groups
@@ -239,8 +284,9 @@ export async function POST(request: Request) {
       label: d.label,
     };
     let ns = userId;
-    const mem = await kvStoreGet<{ ownerId: string; groupId: string }>(FAMILY_MEMBERSHIP_KEY, { userId });
-    if (mem && mem.ownerId !== userId) ns = mem.ownerId;
+    const rawMem = await kvStoreGet<unknown>(FAMILY_MEMBERSHIP_KEY, { userId });
+    const mem = resolveMembership(rawMem, userId);
+    if (mem) ns = mem.ownerId;
     await kvStoreSet(FAMILY_LOCATION_KEY(userId), loc, { userId: ns });
     return NextResponse.json({ ok: true, location: loc });
   }
