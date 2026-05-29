@@ -24,7 +24,7 @@ const contentSecurityPolicy = [
   "base-uri 'self'",
   "frame-ancestors 'none'",
   "object-src 'none'",
-  "form-action 'self'",
+  "form-action 'self' https://*.clerk.com https://*.clerk.accounts.dev",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data: https://api.maptiler.com https://*.maptiler.com",
   "style-src 'self' 'unsafe-inline'",
