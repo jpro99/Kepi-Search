@@ -20,6 +20,7 @@ interface FamilyMember {
   sharingEnabled: boolean;
   visibility: "all-members" | "organizer-only";
   joinedAt: string;
+  imageUrl?: string | null;
 }
 
 interface FamilyGroup {
@@ -314,21 +315,39 @@ export function FamilyPanel({ isPremium, onUpgrade }: FamilyPanelProps) {
       )}
 
 
-      {/* Invite code */}
+      {/* One-tap invite link */}
       {group && (
-        <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 dark:border-sky-500/30 dark:bg-sky-500/10">
-          <p className="text-xs font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">Group invite code</p>
-          <div className="mt-1 flex items-center gap-2">
-            <p className="font-mono text-lg font-bold tracking-widest text-sky-900 dark:text-sky-100">{group.inviteCode}</p>
+        <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 dark:border-sky-500/30 dark:bg-sky-500/10 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">Invite family members</p>
+          <p className="text-xs text-sky-600 dark:text-sky-400">Send this link — they tap it and join instantly. No code needed.</p>
+          <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => void copyInviteCode()}
-              className="rounded-md border border-sky-300 px-2 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-100 dark:border-sky-600 dark:text-sky-300"
+              onClick={() => {
+                const link = `${window.location.origin}/join-family?code=${group.inviteCode}`;
+                void navigator.clipboard.writeText(link).then(() => setMessage("✅ Invite link copied — paste into a text or email"));
+              }}
+              className="flex-1 rounded-xl bg-sky-600 py-2.5 text-xs font-bold text-white hover:bg-sky-500"
             >
-              {copiedCode ? "Copied!" : "Copy"}
+              📋 Copy invite link
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const link = `${window.location.origin}/join-family?code=${group.inviteCode}`;
+                const text = `Join my Kepi family group so we can share locations during our trip! Tap this link to join: ${link}`;
+                if (navigator.share) {
+                  void navigator.share({ title: "Join my Kepi family group", text, url: link });
+                } else {
+                  void navigator.clipboard.writeText(text).then(() => setMessage("✅ Message copied — paste into a text or email"));
+                }
+              }}
+              className="rounded-xl border border-sky-400 bg-white px-3 py-2.5 text-xs font-bold text-sky-700 hover:bg-sky-50 dark:bg-transparent dark:text-sky-300"
+            >
+              📤 Share
             </button>
           </div>
-          <p className="mt-1 text-xs text-sky-600 dark:text-sky-400">Share this code with family members so they can join your group.</p>
+          <p className="text-[10px] text-sky-500 dark:text-sky-500">Code: <span className="font-mono font-bold">{group.inviteCode}</span></p>
         </div>
       )}
 
