@@ -54,22 +54,25 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
 
   // Rewrite style URLs through server proxy so API key never hits the browser
   const loadStyle = useCallback(async (url: string): Promise<Record<string, unknown>> => {
-    const res = await fetch(url);
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    // Proxy the style JSON fetch itself — direct MapTiler fetch fails (host_not_allowed)
+    const proxiedUrl = `${origin}/api/maptiles?url=${encodeURIComponent(url.replace(/[?&]key=[^&]*/g, "").replace(/\?$/, ""))}`;
+    const res = await fetch(proxiedUrl);
     const style = await res.json() as Record<string, unknown>;
 
-    const enc = (u: string): string => {
+    const proxyUrl = (u: string): string => {
       const clean = u.replace(/[?&]key=[^&]*/g, "").replace(/\?$/, "");
       const tokenMatch = clean.match(/^(.*?)(\{[^}]+\}.*)$/);
       if (tokenMatch) {
         const base = tokenMatch[1].replace(/\/$/, "");
-        const suffix = tokenMatch[2];
-        return `/api/maptiles?url=${encodeURIComponent(base)}&suffix=${suffix}`;
+        const suffix = tokenMatch[2]; // unencoded — MapLibre substitutes {range}/{fontstack} directly
+        return `${origin}/api/maptiles?url=${encodeURIComponent(base)}&suffix=${suffix}`;
       }
-      return `/api/maptiles?url=${encodeURIComponent(clean)}`;
+      return `${origin}/api/maptiles?url=${encodeURIComponent(clean)}`;
     };
 
     const rewrite = (v: unknown): unknown => {
-      if (typeof v === "string" && v.includes("api.maptiler.com")) return enc(v);
+      if (typeof v === "string" && v.includes("api.maptiler.com")) return proxyUrl(v);
       if (Array.isArray(v)) return v.map(rewrite);
       if (v && typeof v === "object") return Object.fromEntries(Object.entries(v as Record<string,unknown>).map(([k,val]) => [k, rewrite(val)]));
       return v;

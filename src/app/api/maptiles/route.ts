@@ -60,10 +60,12 @@ export async function GET(req: Request): Promise<Response> {
   const ct = upstream.headers.get("content-type") ?? "application/octet-stream";
   const body = await upstream.arrayBuffer();
 
-  // Tiles are immutable per zoom/x/y — cache aggressively
   const isPbf = ct.includes("pbf") || target.pathname.endsWith(".pbf");
+  const isStyleJson = ct.includes("json") || target.pathname.includes("style.json");
   const cacheControl = isPbf
     ? "public, max-age=86400, stale-while-revalidate=604800"
+    : isStyleJson
+    ? "public, max-age=300, stale-while-revalidate=60"  // style JSON: 5 min cache
     : "public, max-age=3600";
 
   return new Response(body, {
