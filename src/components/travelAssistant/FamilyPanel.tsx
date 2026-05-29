@@ -1,596 +1,587 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 
 interface LocationPoint {
-  lat: number;
-  lon: number;
-  accuracy?: number;
-  updatedAt: string;
-  memberId: string;
-  label?: string;
+  lat: number; lon: number; accuracy?: number;
+  updatedAt: string; memberId: string; label?: string;
 }
-
 interface FamilyMember {
-  id: string;
-  name: string;
-  email: string | null;
+  id: string; name: string; email: string | null;
   role: "organizer" | "adult" | "teen" | "child";
-  color: string;
-  sharingEnabled: boolean;
+  color: string; sharingEnabled: boolean;
   visibility: "all-members" | "organizer-only";
-  joinedAt: string;
-  imageUrl?: string | null;
+  joinedAt: string; imageUrl?: string | null;
 }
-
 interface FamilyGroup {
-  id: string;
-  name: string;
-  ownerId: string;
-  members: FamilyMember[];
-  inviteCode: string;
-  createdAt: string;
+  id: string; name: string; ownerId: string;
+  members: FamilyMember[]; inviteCode: string; createdAt: string;
 }
-
 interface FamilyPanelProps {
   isPremium: boolean;
   onUpgrade: () => void;
 }
 
 function timeAgo(iso: string): string {
-  const diffMs = Date.now() - Date.parse(iso);
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return "just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  return `${Math.floor(diffHr / 24)}d ago`;
+  const d = Math.floor((Date.now() - Date.parse(iso)) / 60_000);
+  if (d < 1) return "just now";
+  if (d < 60) return `${d}m ago`;
+  if (d < 1440) return `${Math.floor(d/60)}h ago`;
+  return `${Math.floor(d/1440)}d ago`;
 }
+function isStale(iso: string): boolean { return Date.now() - Date.parse(iso) > 10 * 60_000; }
 
-function isStale(iso: string): boolean {
-  return Date.now() - Date.parse(iso) > 10 * 60_000;
+// QR code using a simple CDN service
+function QRCode({ url }: { url: string }) {
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=10&data=${encodeURIComponent(url)}`;
+  return (
+    <div className="flex flex-col items-center gap-2">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={qrUrl} alt="QR Code" width={180} height={180} className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white p-2" />
+      <p className="text-[10px] text-slate-500 dark:text-slate-400">Scan to join on any device</p>
+    </div>
+  );
 }
 
 export function FamilyPanel({ isPremium, onUpgrade }: FamilyPanelProps) {
-  const [group, setGroup] = useState<FamilyGroup | null>(null);
+  const [groups, setGroups] = useState<FamilyGroup[]>([]);
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const [locations, setLocations] = useState<Record<string, LocationPoint>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [groupRole, setGroupRole] = useState<"owner" | "member">("owner");
+  const [myMemberId, setMyMemberId] = useState<string | null>(null);
+
+  // Add member form
   const [addingMember, setAddingMember] = useState(false);
-  const [newMemberName, setNewMemberName] = useState("");
-  const [newMemberEmail, setNewMemberEmail] = useState("");
-  const [newMemberRole, setNewMemberRole] = useState<"adult" | "teen" | "child">("adult");
-  const [sharingLocation, setSharingLocation] = useState(false);
-  const [copiedCode, setCopiedCode] = useState(false);
-  const [groupRole, setGroupRole] = useState<"owner" | "member" | null>(null);
-  const [hasGroup, setHasGroup] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newRole, setNewRole] = useState<"adult" | "teen" | "child">("adult");
+  const [sendingInvite, setSendingInvite] = useState(false);
+
+  // Invite / QR
+  const [showQR, setShowQR] = useState(false);
+  const [showInvitePanel, setShowInvitePanel] = useState(false);
+
+  // Group name editing
+  const [editingGroupName, setEditingGroupName] = useState(false);
+  const [groupNameDraft, setGroupNameDraft] = useState("");
+
+  // Join group
   const [joiningGroup, setJoiningGroup] = useState(false);
   const [joinCode, setJoinCode] = useState("");
   const [joinName, setJoinName] = useState("");
-  const [joinBusy, setJoinBusy] = useState(false);
 
-  const load = useCallback(async () => {
+  // Create new group
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+
+  // Location sharing
+  const [sharingLocation, setSharingLocation] = useState(false);
+  const watchIdRef = useRef<number | null>(null);
+
+  const activeGroup = useMemo(
+    () => groups.find(g => g.id === activeGroupId) ?? groups[0] ?? null,
+    [groups, activeGroupId]
+  );
+
+  const inviteLink = useMemo(
+    () => activeGroup ? `${typeof window !== "undefined" ? window.location.origin : "https://kepitravel.com"}/join-family?code=${activeGroup.inviteCode}` : "",
+    [activeGroup]
+  );
+
+  const load = useCallback(async (groupId?: string) => {
     try {
-      const res = await fetch("/api/family", { cache: "no-store" });
-      const data = await res.json() as { group: FamilyGroup; locations: Record<string, LocationPoint>; role?: "owner" | "member" };
-      setGroup(data.group);
+      const url = groupId ? `/api/family?groupId=${groupId}` : "/api/family";
+      const res = await fetch(url, { cache: "no-store" });
+      const data = await res.json() as {
+        group: FamilyGroup; groups?: FamilyGroup[];
+        locations: Record<string, LocationPoint>;
+        role?: "owner" | "member"; myMemberId?: string;
+      };
+      if (data.groups) setGroups(data.groups);
+      else if (data.group) setGroups([data.group]);
       setLocations(data.locations ?? {});
       setGroupRole(data.role ?? "owner");
-      setHasGroup(true);
+      if (data.myMemberId) setMyMemberId(data.myMemberId);
+      if (data.group) setActiveGroupId(data.group.id);
     } catch {
-      setMessage("Could not load family group.");
+      setMessage("Could not load family groups.");
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (!isPremium) {
-      const t = setTimeout(() => setLoading(false), 0);
-      return () => clearTimeout(t);
-    }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!isPremium) { setLoading(false); return; }
     void load();
   }, [isPremium, load]);
 
-  // Poll locations every 10s so the map stays live without a full refresh
+  // Poll locations every 10s
   useEffect(() => {
     if (!isPremium) return;
     const id = setInterval(() => {
       void fetch("/api/family", { cache: "no-store" })
         .then(r => r.json())
-        .then((d: { locations?: Record<string, LocationPoint> }) => {
-          if (d.locations) setLocations(d.locations);
-        })
+        .then((d: { locations?: Record<string, LocationPoint> }) => { if (d.locations) setLocations(d.locations); })
         .catch(() => null);
     }, 10_000);
     return () => clearInterval(id);
   }, [isPremium]);
 
-  const handleJoinGroup = useCallback(async () => {
-    if (!joinCode.trim()) { setMessage("Enter the invite code from the group organizer."); return; }
-    setJoinBusy(true);
-    setMessage(null);
-    try {
-      const res = await fetch("/api/family", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "join-group",
-          inviteCode: joinCode.trim().toUpperCase(),
-          name: joinName.trim() || "Family Member",
-        }),
-      });
-      const data = await res.json() as { ok?: boolean; group?: FamilyGroup; error?: string; joined?: boolean; alreadyMember?: boolean };
-      if (!res.ok || !data.ok) {
-        setMessage(data.error ?? "Invalid invite code.");
-        setJoinBusy(false);
-        return;
-      }
-      if (data.group) setGroup(data.group);
-      setGroupRole("member");
-      setJoiningGroup(false);
-      setJoinCode("");
-      setMessage(data.alreadyMember ? "You're already in this group." : "✅ Joined the group! You can now share your location.");
-      await load();
-    } catch {
-      setMessage("Failed to join group.");
-    } finally {
-      setJoinBusy(false);
-    }
-  }, [joinCode, joinName, load]);
-
-  const handleLeaveGroup = useCallback(async () => {
-    if (!confirm("Leave this family group?")) return;
-    setBusy(true);
-    try {
-      await fetch("/api/family", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "leave-group" }),
-      });
-      setGroupRole("owner");
-      setGroup(null);
-      setMessage("You've left the group.");
-      await load();
-    } catch {
-      setMessage("Failed to leave group.");
-    } finally {
-      setBusy(false);
-    }
-  }, [load]);
-
-  const watchIdRef = useRef<number | null>(null);
-
   const shareLocation = useCallback(() => {
-    if (!navigator.geolocation) {
-      setMessage("Geolocation not available on this device.");
-      return;
-    }
-    // Toggle off
+    if (!navigator.geolocation) { setMessage("Geolocation not available."); return; }
     if (sharingLocation) {
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-      }
+      if (watchIdRef.current !== null) { navigator.geolocation.clearWatch(watchIdRef.current); watchIdRef.current = null; }
       setSharingLocation(false);
       setMessage("Location sharing stopped.");
       return;
     }
     setSharingLocation(true);
-    setMessage("Getting your location…");
     watchIdRef.current = navigator.geolocation.watchPosition(
-      async (pos) => {
+      async pos => {
         try {
           await fetch("/api/family", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "update-location",
-              lat: pos.coords.latitude,
-              lon: pos.coords.longitude,
-              accuracy: pos.coords.accuracy,
-            }),
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "update-location", lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy }),
           });
-          setMessage("✅ Sharing live location with your family group.");
-          // Update local state immediately so the map reflects it
-          setLocations(prev => ({
-            ...prev,
-            // We don't know our own memberId here, but load() will refresh it
-          }));
-        } catch {
-          // Silent — keep watching, transient network errors are fine
-        }
+          setMessage("🟢 Sharing live location.");
+        } catch { /* silent */ }
       },
-      () => {
-        setMessage("Location permission denied. Enable in device settings.");
-        setSharingLocation(false);
-        watchIdRef.current = null;
-      },
+      () => { setMessage("Location permission denied."); setSharingLocation(false); watchIdRef.current = null; },
       { enableHighAccuracy: true, maximumAge: 5_000, timeout: 15_000 }
     );
   }, [sharingLocation]);
 
-  // Stop watching on unmount
-  useEffect(() => () => {
-    if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
-  }, []);
+  useEffect(() => () => { if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current); }, []);
 
   const handleAddMember = useCallback(async () => {
-    if (!newMemberName.trim()) { setMessage("Enter a name."); return; }
-    setBusy(true);
+    if (!newName.trim() || !activeGroup) { setMessage("Enter a name."); return; }
+    setBusy(true); setSendingInvite(Boolean(newEmail.trim()));
     try {
       const res = await fetch("/api/family", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "add-member",
-          name: newMemberName.trim(),
-          email: newMemberEmail.trim() || null,
-          role: newMemberRole,
+          groupId: activeGroup.id,
+          name: newName.trim(),
+          email: newEmail.trim() || null,
+          role: newRole,
+          inviteLink: newEmail.trim() ? inviteLink : undefined,
+          senderName: activeGroup.members[0]?.name ?? "Your organizer",
         }),
       });
-      const data = await res.json() as { group: FamilyGroup };
-      setGroup(data.group);
-      setNewMemberName("");
-      setNewMemberEmail("");
-      setAddingMember(false);
-      setMessage(`✅ ${newMemberName} added to your group.`);
-    } catch {
-      setMessage("Failed to add member.");
-    } finally {
-      setBusy(false);
-    }
-  }, [newMemberName, newMemberEmail, newMemberRole]);
+      const data = await res.json() as { group: FamilyGroup; groups: FamilyGroup[]; emailSent?: boolean; ok?: boolean };
+      if (data.groups) setGroups(data.groups);
+      else if (data.group) setGroups(prev => prev.map(g => g.id === data.group.id ? data.group : g));
+      setNewName(""); setNewEmail(""); setAddingMember(false);
+      const emailMsg = data.emailSent ? ` Invite email sent to ${newEmail}.` : newEmail ? " (Resend not configured — share the invite link manually.)" : "";
+      setMessage(`✅ ${newName} added.${emailMsg}`);
+    } catch { setMessage("Failed to add member."); }
+    finally { setBusy(false); setSendingInvite(false); }
+  }, [newName, newEmail, newRole, activeGroup, inviteLink]);
 
-  const handleRemoveMember = useCallback(async (memberId: string, name: string) => {
-    if (!confirm(`Remove ${name} from your family group?`)) return;
+  const handleSendInviteEmail = useCallback(async (email: string, name: string) => {
+    if (!activeGroup) return;
     setBusy(true);
     try {
       const res = await fetch("/api/family", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "remove-member", memberId }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "send-invite", groupId: activeGroup.id,
+          email, name, inviteLink,
+          senderName: activeGroup.members[0]?.name ?? "Your organizer",
+        }),
       });
-      const data = await res.json() as { group: FamilyGroup };
-      setGroup(data.group);
+      const data = await res.json() as { emailSent?: boolean };
+      setMessage(data.emailSent ? `✅ Invite sent to ${email}` : "Could not send email — share the link manually.");
+    } catch { setMessage("Failed to send invite."); }
+    finally { setBusy(false); }
+  }, [activeGroup, inviteLink]);
+
+  const handleRemoveMember = useCallback(async (memberId: string, name: string) => {
+    if (!activeGroup || !confirm(`Remove ${name}?`)) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/family", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "remove-member", groupId: activeGroup.id, memberId }),
+      });
+      const data = await res.json() as { group: FamilyGroup; groups: FamilyGroup[] };
+      if (data.groups) setGroups(data.groups);
       setMessage(`${name} removed.`);
-    } catch {
-      setMessage("Failed to remove member.");
-    } finally {
-      setBusy(false);
-    }
-  }, []);
+    } catch { setMessage("Failed."); }
+    finally { setBusy(false); }
+  }, [activeGroup]);
 
-  const handleToggleSharing = useCallback(async (memberId: string, current: boolean) => {
-    const res = await fetch("/api/family", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "update-member", memberId, sharingEnabled: !current }),
-    });
-    const data = await res.json() as { group: FamilyGroup };
-    setGroup(data.group);
-  }, []);
+  const handleUpdateGroupName = useCallback(async () => {
+    if (!activeGroup || !groupNameDraft.trim()) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/family", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update-group", groupId: activeGroup.id, groupName: groupNameDraft.trim() }),
+      });
+      const data = await res.json() as { groups: FamilyGroup[] };
+      if (data.groups) setGroups(data.groups);
+      setEditingGroupName(false);
+    } catch { setMessage("Failed to update name."); }
+    finally { setBusy(false); }
+  }, [activeGroup, groupNameDraft]);
 
-  const copyInviteCode = useCallback(async () => {
-    if (!group?.inviteCode) return;
-    await navigator.clipboard.writeText(group.inviteCode);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2000);
-  }, [group]);
+  const handleCreateGroup = useCallback(async () => {
+    if (!newGroupName.trim()) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/family", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create-group", groupName: newGroupName.trim() }),
+      });
+      const data = await res.json() as { group: FamilyGroup; groups: FamilyGroup[] };
+      if (data.groups) setGroups(data.groups);
+      if (data.group) setActiveGroupId(data.group.id);
+      setCreatingGroup(false); setNewGroupName("");
+    } catch { setMessage("Failed to create group."); }
+    finally { setBusy(false); }
+  }, [newGroupName]);
 
-  // Premium gate — only block if user has no group. Members of invited groups can always see.
-  if (!isPremium && !hasGroup) {
+  const handleJoinGroup = useCallback(async () => {
+    if (!joinCode.trim()) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/family", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "join-group", inviteCode: joinCode.trim().toUpperCase(), name: joinName.trim() || "Family Member" }),
+      });
+      const data = await res.json() as { ok?: boolean; group?: FamilyGroup; error?: string };
+      if (!res.ok || !data.ok) { setMessage(data.error ?? "Invalid code."); setBusy(false); return; }
+      if (data.group) setGroups([data.group]);
+      setGroupRole("member"); setJoiningGroup(false); setJoinCode(""); setJoinName("");
+      setMessage("✅ Joined! You can now share your location.");
+    } catch { setMessage("Failed to join."); }
+    finally { setBusy(false); }
+  }, [joinCode, joinName]);
+
+  const handleLeaveGroup = useCallback(async () => {
+    if (!confirm("Leave this group?")) return;
+    setBusy(true);
+    try {
+      await fetch("/api/family", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "leave-group" }) });
+      setGroupRole("owner"); void load();
+    } catch { setMessage("Failed."); }
+    finally { setBusy(false); }
+  }, [load]);
+
+  // ── Paywall ───────────────────────────────────────────────────────────────
+  if (!isPremium) {
     return (
-      <article className="rounded-2xl border border-sky-200 bg-gradient-to-br from-sky-50 to-white p-5 shadow-sm dark:border-sky-500/30 dark:from-sky-500/10 dark:to-slate-900">
+      <div className="rounded-3xl bg-white dark:bg-slate-900 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.08] p-5 space-y-4">
         <div className="flex items-center gap-3">
           <span className="text-2xl">👨‍👩‍👧</span>
           <div>
-            <h2 className="font-semibold">Family Tracker</h2>
-            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-sky-700 dark:bg-sky-500/20 dark:text-sky-300">Pro</span>
+            <h2 className="font-bold text-slate-900 dark:text-white">Family Groups</h2>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-[#007AFF]">Pro feature</span>
           </div>
         </div>
-        <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
-          See where every family member is in real time during your trip. Share locations, assign roles, and keep everyone on the same timeline — like Life360, built into your trip.
+        <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
+          See where everyone is in real time. Share locations, name your groups, and keep your whole crew on the same timeline.
         </p>
-        <ul className="mt-3 space-y-1 text-sm text-slate-600 dark:text-slate-300">
-          <li>📍 Real-time location sharing — consent-based, always in control</li>
-          <li>👤 Add family members — organizer, adult, teen, child roles</li>
-          <li>🔒 Per-member privacy controls — share with all or organizer only</li>
-          <li>🔔 Location alerts when members arrive at hotel or airport</li>
-        </ul>
-        <button
-          type="button"
-          onClick={onUpgrade}
-          className="mt-4 w-full rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-sky-500"
-        >
-          Upgrade to Pro to create a Family group
-        </button>
-      </article>
-    );
-  }
-
-  if (loading) {
-    return (
-      <article className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-        <p className="text-sm text-slate-500 animate-pulse">Loading family group...</p>
-      </article>
-    );
-  }
-
-  return (
-    <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <h2 className="font-semibold flex items-center gap-2">
-            <span>👨‍👩‍👧</span>
-            {group?.name ?? "My Family"}
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400">{group?.members.length ?? 0} members</p>
-        </div>
-        <button
-          type="button"
-          onClick={shareLocation}
-          className={`rounded-lg px-3 py-2 text-xs font-bold transition ${
-            sharingLocation
-              ? "bg-emerald-600 text-white hover:bg-emerald-700"
-              : "bg-sky-600 text-white hover:bg-sky-500"
-          }`}
-        >
-          {sharingLocation ? "🟢 Sharing live" : "📍 Share my location"}
+        <button type="button" onClick={onUpgrade} className="w-full rounded-2xl bg-[#007AFF] py-3 text-sm font-bold text-white">
+          Upgrade to Pro
         </button>
       </div>
+    );
+  }
 
-      {/* Live count — map now lives at /travel-assistant/live-map */}
-      {Object.keys(locations).length > 0 && (
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-          {Object.keys(locations).length} location{Object.keys(locations).length !== 1 ? "s" : ""} live
-        </p>
-      )}
+  if (loading) return (
+    <div className="rounded-3xl bg-white dark:bg-slate-900 ring-1 ring-black/[0.06] dark:ring-white/[0.08] p-5">
+      <div className="h-4 w-32 rounded bg-slate-200 dark:bg-slate-700 animate-pulse" />
+    </div>
+  );
 
-
-      {/* One-tap invite link */}
-      {group && (
-        <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 dark:border-sky-500/30 dark:bg-sky-500/10 space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">Invite family members</p>
-          <p className="text-xs text-sky-600 dark:text-sky-400">Send this link — they tap it and join instantly. No code needed.</p>
-          <div className="flex gap-2">
+  return (
+    <div className="space-y-3">
+      {/* Group switcher — multiple groups */}
+      {groups.length > 0 && (
+        <div className="rounded-3xl bg-white dark:bg-slate-900 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.08] overflow-hidden">
+          {/* Group header + name edit */}
+          <div className="flex items-center justify-between px-5 pt-4 pb-3 gap-2">
+            <div className="flex-1 min-w-0">
+              {editingGroupName ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    autoFocus
+                    value={groupNameDraft}
+                    onChange={e => setGroupNameDraft(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") void handleUpdateGroupName(); if (e.key === "Escape") setEditingGroupName(false); }}
+                    className="flex-1 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-1.5 text-sm font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-[#007AFF]"
+                  />
+                  <button type="button" onClick={() => void handleUpdateGroupName()} className="rounded-xl bg-[#007AFF] px-3 py-1.5 text-xs font-bold text-white">Save</button>
+                  <button type="button" onClick={() => setEditingGroupName(false)} className="text-slate-400 text-sm px-1">✕</button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  {/* Group tabs */}
+                  <div className="flex gap-1.5 overflow-x-auto">
+                    {groups.map(g => (
+                      <button
+                        key={g.id}
+                        type="button"
+                        onClick={() => { setActiveGroupId(g.id); void load(g.id); }}
+                        className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold transition ${
+                          g.id === (activeGroup?.id) ? "bg-[#007AFF] text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                        }`}
+                      >
+                        {g.name}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setCreatingGroup(true)}
+                      className="shrink-0 rounded-full px-3 py-1 text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 hover:text-[#007AFF]"
+                    >
+                      + New
+                    </button>
+                  </div>
+                  {groupRole === "owner" && (
+                    <button type="button" onClick={() => { setGroupNameDraft(activeGroup?.name ?? ""); setEditingGroupName(true); }} className="text-slate-400 hover:text-[#007AFF] text-xs shrink-0">
+                      ✏️
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
             <button
               type="button"
-              onClick={() => {
-                const link = `${window.location.origin}/join-family?code=${group.inviteCode}`;
-                void navigator.clipboard.writeText(link).then(() => setMessage("✅ Invite link copied — paste into a text or email"));
-              }}
-              className="flex-1 rounded-xl bg-sky-600 py-2.5 text-xs font-bold text-white hover:bg-sky-500"
+              onClick={shareLocation}
+              className={`shrink-0 flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition ${
+                sharingLocation ? "bg-emerald-500 text-white" : "bg-[#007AFF] text-white"
+              }`}
             >
-              📋 Copy invite link
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                const link = `${window.location.origin}/join-family?code=${group.inviteCode}`;
-                const text = `Join my Kepi family group so we can share locations during our trip! Tap this link to join: ${link}`;
-                if (navigator.share) {
-                  void navigator.share({ title: "Join my Kepi family group", text, url: link });
-                } else {
-                  void navigator.clipboard.writeText(text).then(() => setMessage("✅ Message copied — paste into a text or email"));
-                }
-              }}
-              className="rounded-xl border border-sky-400 bg-white px-3 py-2.5 text-xs font-bold text-sky-700 hover:bg-sky-50 dark:bg-transparent dark:text-sky-300"
-            >
-              📤 Share
+              <span>{sharingLocation ? "🟢" : "📍"}</span>
+              {sharingLocation ? "Live" : "Share me"}
             </button>
           </div>
-          <p className="text-[10px] text-sky-500 dark:text-sky-500">Code: <span className="font-mono font-bold">{group.inviteCode}</span></p>
-        </div>
-      )}
 
-      {/* Member list */}
-      <div className="space-y-2">
-        {group?.members.map((member) => {
-          const loc = locations[member.id];
-          const stale = loc ? isStale(loc.updatedAt) : true;
-          const hasLocation = Boolean(loc);
-          return (
-            <div key={member.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/60">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`inline-block h-3 w-3 rounded-full ring-2 ring-white dark:ring-slate-900 ${hasLocation && !stale ? "animate-pulse" : ""}`}
-                    style={{ backgroundColor: member.color }}
-                  />
-                  <span className="font-medium text-sm">{member.name}</span>
-                  <span className="text-xs text-slate-500 capitalize">{member.role}</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => void handleToggleSharing(member.id, member.sharingEnabled)}
-                    className={`rounded-md px-2 py-1 text-xs font-semibold ${
-                      member.sharingEnabled
-                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300"
-                        : "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
-                    }`}
+          {/* Create group form */}
+          {creatingGroup && (
+            <div className="px-5 pb-4 flex gap-2">
+              <input
+                autoFocus
+                value={newGroupName}
+                onChange={e => setNewGroupName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") void handleCreateGroup(); }}
+                placeholder="Group name (e.g. Japan Trip 2026)"
+                className="flex-1 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-sm"
+              />
+              <button type="button" onClick={() => void handleCreateGroup()} disabled={!newGroupName.trim()} className="rounded-xl bg-[#007AFF] px-4 py-2 text-sm font-bold text-white disabled:opacity-40">Create</button>
+              <button type="button" onClick={() => setCreatingGroup(false)} className="rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2 text-sm text-slate-500">✕</button>
+            </div>
+          )}
+
+          {/* Member list */}
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+            {(activeGroup?.members ?? []).map(member => {
+              const loc = locations[member.id];
+              const live = loc && !isStale(loc.updatedAt);
+              const isMe = member.id === myMemberId;
+              return (
+                <div key={member.id} className="flex items-center gap-3 px-5 py-3">
+                  <div
+                    className="h-10 w-10 shrink-0 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-sm"
+                    style={{ background: member.color }}
                   >
-                    {member.sharingEnabled ? "Sharing on" : "Sharing off"}
-                  </button>
-                  {member.id !== group?.ownerId && (
+                    {member.imageUrl
+                      ? <img src={member.imageUrl} className="w-full h-full object-cover rounded-full" alt={member.name} />
+                      : member.name.charAt(0).toUpperCase()
+                    }
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-sm text-slate-900 dark:text-white">
+                      {member.name}{isMe ? " (you)" : ""}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-1">
+                      <span className={`inline-block h-1.5 w-1.5 rounded-full ${!loc ? "bg-slate-300" : live ? "bg-emerald-400" : "bg-amber-400"}`} />
+                      {!loc ? "No location yet" : live ? `Live · ${timeAgo(loc.updatedAt)}` : `${timeAgo(loc.updatedAt)}`}
+                    </p>
+                    {member.email && !isMe && (
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5 truncate">{member.email}</p>
+                    )}
+                  </div>
+                  {/* Resend invite if they have email and no location yet */}
+                  {!isMe && member.email && !loc && groupRole === "owner" && (
+                    <button
+                      type="button"
+                      onClick={() => void handleSendInviteEmail(member.email!, member.name)}
+                      disabled={busy}
+                      className="shrink-0 rounded-lg bg-[#007AFF]/10 dark:bg-[#0A84FF]/20 px-2 py-1 text-[10px] font-bold text-[#007AFF] dark:text-[#0A84FF]"
+                    >
+                      Resend invite
+                    </button>
+                  )}
+                  {!isMe && groupRole === "owner" && (
                     <button
                       type="button"
                       onClick={() => void handleRemoveMember(member.id, member.name)}
                       disabled={busy}
-                      className="rounded-md px-2 py-1 text-xs text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-500/10"
+                      className="shrink-0 text-slate-300 dark:text-slate-600 hover:text-red-400 text-base px-1"
                     >
-                      Remove
+                      ×
                     </button>
                   )}
                 </div>
-              </div>
-              {/* Location status */}
-              <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                {hasLocation ? (
-                  <>
-                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${stale ? "bg-amber-400" : "bg-emerald-400"}`} />
-                    <span>{stale ? "Location stale — " : "Live — "}</span>
-                    <span>{timeAgo(loc!.updatedAt)}</span>
-                    {loc?.label && <span>· {loc.label}</span>}
-                  </>
-                ) : (
-                  <>
-                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-300 dark:bg-slate-600" />
-                    <span>No location shared yet</span>
-                  </>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
 
-      {/* Join/Leave for non-owners */}
-      {groupRole === "member" && (
-        <button
-          type="button"
-          onClick={() => void handleLeaveGroup()}
-          disabled={busy}
-          className="w-full rounded-xl border border-dashed border-rose-300 py-2.5 text-sm font-semibold text-rose-500 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-400"
-        >
-          Leave this group
-        </button>
+          {/* Live count */}
+          {Object.keys(locations).length > 0 && (
+            <div className="px-5 py-2 border-t border-slate-100 dark:border-slate-800">
+              <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                {Object.values(locations).filter(l => !isStale(l.updatedAt)).length} live location{Object.values(locations).filter(l => !isStale(l.updatedAt)).length !== 1 ? "s" : ""} · updates every 10s
+              </p>
+            </div>
+          )}
+        </div>
       )}
 
-      {/* Add member (owner only) */}
-      {groupRole === "owner" && !addingMember ? (
-        <div className="flex gap-2">
+      {/* Invite section */}
+      {activeGroup && groupRole === "owner" && (
+        <div className="rounded-3xl bg-white dark:bg-slate-900 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.08] overflow-hidden">
           <button
             type="button"
-            onClick={() => setAddingMember(true)}
-            className="flex-1 rounded-xl border border-dashed border-slate-300 py-2.5 text-sm font-semibold text-slate-500 hover:border-sky-400 hover:text-sky-600 dark:border-slate-700 dark:text-slate-400"
+            onClick={() => setShowInvitePanel(v => !v)}
+            className="w-full flex items-center justify-between px-5 py-4 text-left"
           >
-            + Add family member
+            <div>
+              <p className="font-semibold text-sm text-slate-900 dark:text-white">Invite to {activeGroup.name}</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Add by name/email · share link · QR code</p>
+            </div>
+            <span className="text-slate-400 text-lg">{showInvitePanel ? "▲" : "▼"}</span>
           </button>
-          {!joiningGroup && (
-            <button
-              type="button"
-              onClick={() => setJoiningGroup(true)}
-              className="rounded-xl border border-dashed border-sky-300 px-3 py-2.5 text-sm font-semibold text-sky-600 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-400"
-            >
-              Join a group
+
+          {showInvitePanel && (
+            <div className="border-t border-slate-100 dark:border-slate-800 px-5 pb-5 space-y-4">
+              {/* Add by name + email */}
+              {addingMember ? (
+                <div className="space-y-2 pt-4">
+                  <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Add person</p>
+                  <input
+                    type="text" autoFocus value={newName} onChange={e => setNewName(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") void handleAddMember(); }}
+                    placeholder="Name (e.g. Stephanie)"
+                    className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2.5 text-sm text-slate-900 dark:text-white"
+                  />
+                  <input
+                    type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") void handleAddMember(); }}
+                    placeholder="Email — invite will be sent automatically"
+                    className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2.5 text-sm text-slate-900 dark:text-white"
+                  />
+                  <div className="flex gap-2">
+                    {(["adult","teen","child"] as const).map(r => (
+                      <button key={r} type="button" onClick={() => setNewRole(r)}
+                        className={`flex-1 rounded-xl py-2 text-xs font-semibold capitalize transition ${newRole === r ? "bg-[#007AFF] text-white" : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"}`}>
+                        {r}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => void handleAddMember()} disabled={busy || !newName.trim()}
+                      className="flex-1 rounded-xl bg-[#007AFF] py-2.5 text-sm font-bold text-white disabled:opacity-40">
+                      {sendingInvite ? "Sending invite…" : busy ? "Adding…" : newEmail ? "Add & send invite" : "Add"}
+                    </button>
+                    <button type="button" onClick={() => { setAddingMember(false); setNewName(""); setNewEmail(""); }}
+                      className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2.5 text-sm text-slate-500">
+                      Cancel
+                    </button>
+                  </div>
+                  {newEmail && (
+                    <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                      {`An invite email with the join link will be sent to ${newEmail || "their inbox"} automatically.`}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <button type="button" onClick={() => setAddingMember(true)}
+                  className="w-full rounded-2xl border border-dashed border-[#007AFF]/40 dark:border-[#0A84FF]/30 py-3 mt-4 text-sm font-semibold text-[#007AFF] dark:text-[#0A84FF] hover:bg-[#007AFF]/5 transition">
+                  + Add family member
+                </button>
+              )}
+
+              {/* Share link */}
+              <div className="space-y-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Or share a link</p>
+                <div className="flex gap-2">
+                  <button type="button"
+                    onClick={() => void navigator.clipboard.writeText(inviteLink).then(() => setMessage("✅ Invite link copied!"))}
+                    className="flex-1 rounded-xl bg-slate-100 dark:bg-slate-800 py-2.5 text-xs font-bold text-slate-700 dark:text-slate-200">
+                    📋 Copy invite link
+                  </button>
+                  {typeof navigator !== "undefined" && "share" in navigator && (
+                    <button type="button"
+                      onClick={() => void navigator.share({ title: `Join ${activeGroup.name}`, text: `Join my Kepi family group: ${activeGroup.name}`, url: inviteLink })}
+                      className="rounded-xl bg-slate-100 dark:bg-slate-800 px-4 py-2.5 text-xs font-bold text-slate-700 dark:text-slate-200">
+                      📤 Share
+                    </button>
+                  )}
+                </div>
+                <p className="text-[10px] font-mono text-center text-slate-400 dark:text-slate-500">
+                  Code: <span className="font-bold">{activeGroup.inviteCode}</span>
+                </p>
+              </div>
+
+              {/* QR code toggle */}
+              <button type="button" onClick={() => setShowQR(v => !v)}
+                className="w-full text-center text-xs font-semibold text-[#007AFF] dark:text-[#0A84FF] py-1">
+                {showQR ? "Hide QR code" : "Show QR code"}
+              </button>
+              {showQR && <QRCode url={inviteLink} />}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Join a group */}
+      {groupRole === "member" ? (
+        <button type="button" onClick={() => void handleLeaveGroup()} disabled={busy}
+          className="w-full rounded-2xl border border-dashed border-red-200 dark:border-red-700 py-3 text-sm font-semibold text-red-500 dark:text-red-400">
+          Leave this group
+        </button>
+      ) : (
+        <div>
+          {joiningGroup ? (
+            <div className="rounded-3xl bg-white dark:bg-slate-900 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.08] p-5 space-y-3">
+              <p className="font-semibold text-sm text-slate-900 dark:text-white">Join a group</p>
+              <input type="text" value={joinName} onChange={e => setJoinName(e.target.value)} placeholder="Your name"
+                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2.5 text-sm" />
+              <input type="text" value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())}
+                placeholder="Invite code (e.g. A1B2C3D4)" autoCapitalize="characters" autoCorrect="off" spellCheck={false}
+                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2.5 text-sm font-mono uppercase tracking-widest" />
+              <div className="flex gap-2">
+                <button type="button" onClick={() => void handleJoinGroup()} disabled={busy || !joinCode.trim()}
+                  className="flex-1 rounded-xl bg-[#007AFF] py-2.5 text-sm font-bold text-white disabled:opacity-40">
+                  {busy ? "Joining…" : "Join group"}
+                </button>
+                <button type="button" onClick={() => setJoiningGroup(false)}
+                  className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2.5 text-sm text-slate-500">Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setJoiningGroup(true)}
+              className="w-full rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 py-3 text-sm font-semibold text-slate-400 dark:text-slate-500 hover:text-[#007AFF] hover:border-[#007AFF]/40 transition">
+              Join someone else's group
             </button>
           )}
         </div>
-      ) : (
-        <form
-          action="#"
-          onSubmit={(e) => { e.preventDefault(); void handleAddMember(); }}
-          className="rounded-xl border border-sky-200 bg-sky-50 p-3 space-y-2 dark:border-sky-500/30 dark:bg-sky-500/10"
-        >
-          <p className="text-xs font-semibold text-sky-800 dark:text-sky-200">Add family member</p>
-          <input
-            type="text"
-            value={newMemberName}
-            onChange={(e) => setNewMemberName(e.target.value)}
-            placeholder="Name (e.g. Sarah)"
-            autoComplete="name"
-            autoCapitalize="words"
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
-          />
-          <input
-            type="email"
-            value={newMemberEmail}
-            onChange={(e) => setNewMemberEmail(e.target.value)}
-            placeholder="Email (optional — for invite)"
-            autoComplete="email"
-            autoCapitalize="none"
-            autoCorrect="off"
-            inputMode="email"
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
-          />
-          <select
-            value={newMemberRole}
-            onChange={(e) => setNewMemberRole(e.target.value as "adult" | "teen" | "child")}
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
-          >
-            <option value="adult">Adult</option>
-            <option value="teen">Teen</option>
-            <option value="child">Child</option>
-          </select>
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={busy || !newMemberName.trim()}
-              className="flex-1 rounded-lg bg-sky-600 py-2 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50"
-            >
-              {busy ? "Adding..." : "Add member"}
-            </button>
-            <button
-              type="button"
-              onClick={() => { setAddingMember(false); setNewMemberName(""); setNewMemberEmail(""); }}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
-
-      {joiningGroup && (
-        <form
-          action="#"
-          onSubmit={(e) => { e.preventDefault(); void handleJoinGroup(); }}
-          className="rounded-xl border border-sky-200 bg-sky-50 p-3 space-y-2 dark:border-sky-500/30 dark:bg-sky-500/10"
-        >
-          <p className="text-xs font-semibold text-sky-800 dark:text-sky-200">Join a family group</p>
-          <input
-            type="text"
-            value={joinName}
-            onChange={(e) => setJoinName(e.target.value)}
-            placeholder="Your name (e.g. Sarah)"
-            autoComplete="name"
-            autoCapitalize="words"
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
-          />
-          <input
-            type="text"
-            value={joinCode}
-            onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-            placeholder="Group invite code (e.g. A1B2C3D4)"
-            autoComplete="off"
-            autoCapitalize="characters"
-            autoCorrect="off"
-            spellCheck={false}
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm uppercase tracking-widest dark:border-slate-700 dark:bg-slate-900"
-          />
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={joinBusy || !joinCode.trim()}
-              className="flex-1 rounded-lg bg-sky-600 py-2 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50"
-            >
-              {joinBusy ? "Joining..." : "Join group"}
-            </button>
-            <button
-              type="button"
-              onClick={() => { setJoiningGroup(false); setJoinCode(""); setJoinName(""); }}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
       )}
 
       {message && (
-        <p className={`text-xs ${message.startsWith("✅") ? "text-emerald-700 dark:text-emerald-300" : "text-rose-600 dark:text-rose-400"}`}>
+        <p className={`text-xs px-1 ${message.startsWith("✅") || message.startsWith("🟢") ? "text-emerald-700 dark:text-emerald-300" : "text-red-600 dark:text-red-400"}`}>
           {message}
         </p>
       )}
-
-      <p className="text-xs text-slate-400 dark:text-slate-500">
-        Location sharing is consent-based. Each member controls their own sharing. You can turn it off at any time.
-      </p>
-    </article>
+    </div>
   );
 }
