@@ -52,6 +52,20 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
   const streetsUrl = useMemo(() => `https://api.maptiler.com/maps/streets-v2/style.json?key=${encodeURIComponent(maptilerKey)}`, [maptilerKey]);
   const hybridUrl  = useMemo(() => `https://api.maptiler.com/maps/hybrid/style.json?key=${encodeURIComponent(maptilerKey)}`, [maptilerKey]);
 
+  // Rewrite style URLs through server proxy so API key never hits the browser
+  const loadStyle = useCallback(async (url: string): Promise<Record<string, unknown>> => {
+    const res = await fetch(url);
+    const style = await res.json() as Record<string, unknown>;
+    const enc = (u: string) => `/api/maptiles?url=${encodeURIComponent(u.replace(/[?&]key=[^&]*/g, ""))}`;
+    const rewrite = (v: unknown): unknown => {
+      if (typeof v === "string" && v.includes("api.maptiler.com")) return enc(v);
+      if (Array.isArray(v)) return v.map(rewrite);
+      if (v && typeof v === "object") return Object.fromEntries(Object.entries(v as Record<string,unknown>).map(([k,val]) => [k, rewrite(val)]));
+      return v;
+    };
+    return rewrite(style) as Record<string, unknown>;
+  }, []);
+
   // Place/move markers — update existing ones in place (no flicker)
   const placeMarkers = useCallback((map: unknown) => {
     import("maplibre-gl").then((ml) => {
@@ -163,10 +177,11 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
         : [-118.2437, 34.0522];
       const zoom = knownLocs.length === 1 ? 14 : knownLocs.length > 1 ? 10 : 4;
 
+      const style = await loadStyle(streetsUrl);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const map = new (ml as any).Map({
         container: mapEl.current,
-        style: streetsUrl,
+        style,
         center, zoom,
         attributionControl: false,
         fadeDuration: 0,
@@ -207,12 +222,12 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
   // Toggle satellite — swap style without reinitialising
   useEffect(() => {
     if (!mapRef.current || !isLoaded) return;
-    const style = satellite ? hybridUrl : streetsUrl;
-    mapRef.current.setStyle(style);
-    mapRef.current.once("styledata", () => {
-      if (mapRef.current) placeMarkers(mapRef.current);
+    void loadStyle(satellite ? hybridUrl : streetsUrl).then(style => {
+      if (!mapRef.current) return;
+      mapRef.current.setStyle(style);
+      mapRef.current.once("styledata", () => { if (mapRef.current) placeMarkers(mapRef.current); });
     });
-  }, [satellite, hybridUrl, streetsUrl, isLoaded, placeMarkers]);
+  }, [satellite, hybridUrl, streetsUrl, isLoaded, placeMarkers, loadStyle]);
 
   // Resize after fullscreen transition
   useEffect(() => {

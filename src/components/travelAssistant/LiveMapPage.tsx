@@ -46,12 +46,33 @@ function timeAgo(iso: string): string {
 function isStale(iso: string) { return Date.now() - Date.parse(iso) > 10 * 60_000; }
 
 /* ─── Map style builders ─────────────────────────────────────── */
-// Vector GL styles — full Google Maps quality: buildings, POIs, smooth labels, fast
+// Rewrite all MapTiler URLs in a style object to go through our server proxy.
+// This keeps the API key server-side and avoids the host_not_allowed 403.
+function proxyStyleUrls(style: Record<string, unknown>): Record<string, unknown> {
+  const enc = (url: string) => `/api/maptiles?url=${encodeURIComponent(url.replace(/[?&]key=[^&]*/g, ""))}`;
+
+  const rewrite = (v: unknown): unknown => {
+    if (typeof v === "string" && v.includes("api.maptiler.com")) return enc(v);
+    if (Array.isArray(v)) return v.map(rewrite);
+    if (v && typeof v === "object") {
+      return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, val]) => [k, rewrite(val)]));
+    }
+    return v;
+  };
+
+  return rewrite(style) as Record<string, unknown>;
+}
+
+async function loadProxiedStyle(styleUrl: string): Promise<Record<string, unknown>> {
+  const res = await fetch(styleUrl);
+  const style = await res.json() as Record<string, unknown>;
+  return proxyStyleUrls(style);
+}
+
 function streetsStyleUrl(key: string) {
   return `https://api.maptiler.com/maps/streets-v2/style.json?key=${key}`;
 }
 function satelliteStyleUrl(key: string) {
-  // Hybrid = satellite imagery + vector labels/roads on top
   return `https://api.maptiler.com/maps/hybrid/style.json?key=${key}`;
 }
 
@@ -213,10 +234,13 @@ export function LiveMapPage() {
         const zoom = locs.length === 1 ? 14 : locs.length > 1 ? 11 : 4;
         const key = encodeURIComponent(maptilerKey);
 
+        const styleUrl = satellite ? satelliteStyleUrl(key) : streetsStyleUrl(key);
+        const style = await loadProxiedStyle(styleUrl);
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const map = new (ml as any).Map({
           container: mapEl.current,
-          style: satellite ? satelliteStyleUrl(key) : streetsStyleUrl(key),
+          style,
           center, zoom,
           maxZoom: 20,
           // Don't cap pixelRatio — let MapLibre decide; capping to 1 makes it blurry on Retina
@@ -269,8 +293,12 @@ export function LiveMapPage() {
   useEffect(() => {
     if (!mapRef.current || !maptilerKey || !isLoaded) return;
     const key = encodeURIComponent(maptilerKey);
-    mapRef.current.setStyle(satellite ? satelliteStyleUrl(key) : streetsStyleUrl(key));
-    mapRef.current.once("styledata", () => { if (mapRef.current) placeMarkers(mapRef.current); });
+    const styleUrl = satellite ? satelliteStyleUrl(key) : streetsStyleUrl(key);
+    void loadProxiedStyle(styleUrl).then(style => {
+      if (!mapRef.current) return;
+      mapRef.current.setStyle(style);
+      mapRef.current.once("styledata", () => { if (mapRef.current) placeMarkers(mapRef.current); });
+    });
   }, [satellite, maptilerKey, isLoaded, placeMarkers]);
 
   /* ── Fit all members ── */
