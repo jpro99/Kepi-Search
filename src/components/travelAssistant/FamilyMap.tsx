@@ -17,6 +17,7 @@ interface FamilyMember {
   name: string;
   color: string;
   sharingEnabled: boolean;
+  imageUrl?: string | null;
 }
 
 interface FamilyMapProps {
@@ -42,64 +43,72 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
   const mapEl = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null);
-  // Ref-based loaded flag so the error handler closure always sees the current value
-  const isLoadedRef = useRef(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [satellite, setSatellite] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  const [statusMsg, setStatusMsg] = useState<string>("Loading map...");
-  const [isError, setIsError] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Place markers - called ONLY after map fires "load" event, passing the map directly
+  const key = encodeURIComponent(maptilerKey);
+  const streetsUrl = `https://api.maptiler.com/maps/streets-v2/style.json?key=${key}`;
+  const hybridUrl = `https://api.maptiler.com/maps/hybrid/style.json?key=${key}`;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const placeMarkers = useCallback((map: any) => {
     import("maplibre-gl").then((ml) => {
-      // Remove all existing markers
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       map._kepiMarkers?.forEach((m: any) => m.remove());
       map._kepiMarkers = [];
-
       members.forEach(member => {
         const loc = locations[member.id];
         if (!loc) return;
-
         const stale = isStale(loc.updatedAt);
+
         const wrap = document.createElement("div");
-        wrap.style.cssText = "cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;";
+        wrap.style.cssText = "cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;";
 
+        // Avatar — photo if available, else initial
         const av = document.createElement("div");
-        av.style.cssText = [
-          `width:46px;height:46px;border-radius:50%;`,
-          `background:${stale ? "#64748b" : member.color};`,
-          `border:3px solid white;box-shadow:0 2px 10px rgba(0,0,0,0.3);`,
-          `display:flex;align-items:center;justify-content:center;`,
-          `font-size:17px;font-weight:800;color:white;`,
-          `font-family:system-ui,sans-serif;position:relative;`,
-        ].join("");
-        av.textContent = member.name.charAt(0).toUpperCase();
+        av.style.cssText = `
+          width:48px;height:48px;border-radius:50%;
+          border:3px solid ${stale ? "#94a3b8" : member.color};
+          box-shadow:0 2px 12px rgba(0,0,0,0.35);
+          overflow:hidden;position:relative;
+          background:${stale ? "#64748b" : member.color};
+          display:flex;align-items:center;justify-content:center;
+        `;
 
+        if (member.imageUrl) {
+          const img = document.createElement("img");
+          img.src = member.imageUrl;
+          img.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:50%;";
+          img.onerror = () => {
+            img.style.display = "none";
+            av.textContent = member.name.charAt(0).toUpperCase();
+            av.style.cssText += "font-size:18px;font-weight:800;color:white;font-family:system-ui,sans-serif;";
+          };
+          av.appendChild(img);
+        } else {
+          const init = document.createElement("span");
+          init.textContent = member.name.charAt(0).toUpperCase();
+          init.style.cssText = "font-size:18px;font-weight:800;color:white;font-family:system-ui,sans-serif;";
+          av.appendChild(init);
+        }
+
+        // Pulse ring for live location
         if (!stale) {
           const ring = document.createElement("div");
-          ring.style.cssText = [
-            `position:absolute;inset:-6px;border-radius:50%;`,
-            `border:2px solid ${member.color};`,
-            `animation:kpulse 2s ease-out infinite;`,
-          ].join("");
+          ring.style.cssText = `position:absolute;inset:-7px;border-radius:50%;border:2.5px solid ${member.color};animation:kpulse 2s ease-out infinite;pointer-events:none;`;
           av.appendChild(ring);
         }
 
+        // Name label
         const lbl = document.createElement("div");
-        lbl.style.cssText = [
-          `background:white;border-radius:6px;padding:2px 7px;`,
-          `font-size:11px;font-weight:700;color:#0f172a;`,
-          `box-shadow:0 1px 4px rgba(0,0,0,0.15);`,
-          `white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis;`,
-        ].join("");
+        lbl.style.cssText = "background:white;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700;color:#0f172a;box-shadow:0 1px 5px rgba(0,0,0,0.18);white-space:nowrap;max-width:90px;overflow:hidden;text-overflow:ellipsis;";
         lbl.textContent = member.name;
 
         wrap.appendChild(av);
         wrap.appendChild(lbl);
+
         wrap.addEventListener("click", () => {
           setSelected(p => p === member.id ? null : member.id);
           onMemberClick?.(member.id);
@@ -109,141 +118,58 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
         const marker = new (ml as any).Marker({ element: wrap, anchor: "bottom" })
           .setLngLat([loc.lon, loc.lat])
           .addTo(map);
-
-        // Store marker ON the map object so it survives re-renders
         map._kepiMarkers.push(marker);
       });
     }).catch(console.error);
   }, [members, locations, onMemberClick]);
 
-  // Init map effect — depends on maptilerKey so it re-runs when key changes
+  // Init map
   useEffect(() => {
     const el = mapEl.current;
-    if (!el) return;
-
+    if (!el || !maptilerKey) return;
     let cancelled = false;
-    isLoadedRef.current = false;
-    setIsLoaded(false);
-    setIsError(false);
-    setStatusMsg("Loading map...");
 
-    // Destroy previous instance
     if (mapRef.current) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mapRef.current._kepiMarkers?.forEach((m: any) => m.remove());
       mapRef.current.remove();
       mapRef.current = null;
+      setIsLoaded(false);
     }
 
     void (async () => {
-      try {
-        if (cancelled || !mapEl.current) return;
+      const ml = await import("maplibre-gl");
+      if (cancelled || !mapEl.current) return;
 
-        const ml = await import("maplibre-gl");
-        if (cancelled || !mapEl.current) return;
+      const knownLocs = members.map(m => locations[m.id]).filter(Boolean) as LocationPoint[];
+      const center: [number, number] = knownLocs.length > 0
+        ? [knownLocs.reduce((s, l) => s + l.lon, 0) / knownLocs.length, knownLocs.reduce((s, l) => s + l.lat, 0) / knownLocs.length]
+        : [-118.2437, 34.0522];
+      const zoom = knownLocs.length === 1 ? 14 : knownLocs.length > 1 ? 10 : 4;
 
-        const knownLocs = members.map(m => locations[m.id]).filter(Boolean) as LocationPoint[];
-        const center: [number, number] = knownLocs.length > 0
-          ? [
-              knownLocs.reduce((s, l) => s + l.lon, 0) / knownLocs.length,
-              knownLocs.reduce((s, l) => s + l.lat, 0) / knownLocs.length,
-            ]
-          : [-118.2437, 34.0522];
-        const zoom = knownLocs.length === 1 ? 14 : knownLocs.length > 1 ? 10 : 4;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const map = new (ml as any).Map({
+        container: mapEl.current,
+        style: streetsUrl,
+        center, zoom,
+        attributionControl: false,
+        fadeDuration: 0,
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      map.addControl(new (ml as any).NavigationControl({ showCompass: false }), "top-right");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      map.addControl(new (ml as any).AttributionControl({ compact: true }), "bottom-right");
 
-        // Inline raster style for Streets — tiles load as <img> fetches, no web-worker
-        // XHR needed. This is the same mechanism satellite uses. MapTiler serves 512px
-        // PNG streets tiles up to zoom 20.
-        const key = encodeURIComponent(maptilerKey);
-        const streetsRasterStyle = {
-          version: 8 as const,
-          sources: {
-            "streets-raster": {
-              type: "raster" as const,
-              // @2x tiles = actual 512px PNGs — matches tileSize:512 exactly, no stretching
-              tiles: [`https://api.maptiler.com/maps/streets/{z}/{x}/{y}@2x.png?key=${key}`],
-              tileSize: 512,
-              maxzoom: 20,
-              attribution: "© MapTiler © OpenStreetMap contributors",
-            },
-          },
-          layers: [
-            {
-              id: "streets-raster-layer",
-              type: "raster" as const,
-              source: "streets-raster",
-              minzoom: 0,
-              maxzoom: 22,
-            },
-          ],
-        };
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const map = new (ml as any).Map({
-          container: mapEl.current,
-          style: streetsRasterStyle,
-          center,
-          zoom,
-          maxZoom: 20,
-          // Match device pixel ratio so tiles render crisp on retina/high-DPI screens
-          pixelRatio: typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 2) : 1,
-          attributionControl: false,
-        });
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        map.addControl(new (ml as any).NavigationControl({ showCompass: false }), "top-right");
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        map.addControl(new (ml as any).AttributionControl({ compact: true }), "bottom-right");
-
-        // "style.load" fires when style is parsed — does NOT wait for tiles
-        // This is more reliable than "load" which waits for all tiles to render
-        map.on("style.load", () => {
-          if (cancelled) return;
-          isLoadedRef.current = true;
-          setIsLoaded(true);
-          setIsError(false);
-          setStatusMsg("");
-          placeMarkers(map);
-        });
-
-        // Also handle "load" as a fallback (fires after tiles)
-        map.on("load", () => {
-          if (cancelled) return;
-          isLoadedRef.current = true;
-          setIsLoaded(true);
-          setIsError(false);
-        });
-
-        // Place markers again once map is idle (all tiles loaded/settled)
-        map.once("idle", () => {
-          if (cancelled) return;
-          setIsLoaded(true);
-          placeMarkers(map);
-        });
-
-        // Show MapLibre errors on screen — BUT only for critical init failures.
-        // Tile-level fetch errors (status 0 / AJAXError) after the map has already
-        // loaded are transient network blips; showing the overlay would clobber a
-        // working map. Only show the overlay if the map hasn't loaded yet.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        map.on("error", (e: any) => {
-          const msg = String(e?.error?.message ?? e?.error?.statusCode ?? e?.message ?? "unknown error");
-          console.warn("[FamilyMap]", msg, e);
-          // Post-load tile errors (AJAXError / Failed to fetch) are non-fatal — log only
-          if (isLoadedRef.current) return;
-          if (!cancelled) {
-            setIsError(true);
-            setStatusMsg(`Map error: ${msg}`);
-          }
-        });
-
-        mapRef.current = map;
-      } catch (err) {
-        if (!cancelled) {
-          setIsError(true);
-          setStatusMsg(`Map failed to initialize: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
+      map.on("load", () => {
+        if (cancelled) return;
+        setIsLoaded(true);
+        placeMarkers(map);
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      map.on("error", (e: any) => {
+        console.warn("[FamilyMap]", e?.error?.message ?? e?.message);
+      });
+      mapRef.current = map;
     })();
 
     return () => {
@@ -254,75 +180,27 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
         mapRef.current.remove();
         mapRef.current = null;
       }
-      isLoadedRef.current = false;
       setIsLoaded(false);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [maptilerKey]); // re-init ONLY when key changes
+  }, [maptilerKey]);
 
-  // Re-place markers when locations or members change (after map is loaded)
+  // Update markers when data changes
   useEffect(() => {
     if (mapRef.current && isLoaded) placeMarkers(mapRef.current);
   }, [placeMarkers, isLoaded]);
 
-  // Satellite toggle — both styles are raster so no worker XHR needed
+  // Toggle satellite/streets
   useEffect(() => {
-    if (!mapRef.current || !maptilerKey || !isLoaded) return;
-    const key = encodeURIComponent(maptilerKey);
-    // Satellite: use MapTiler hybrid style.json (raster, already works)
-    // Streets: inline raster style object (same as init — avoids worker XHR)
-    // Both styles use @2x raster tiles (actual 512px images, no stretching)
-    const satelliteStyle = {
-      version: 8 as const,
-      sources: {
-        "satellite-raster": {
-          type: "raster" as const,
-          // @2x JPG = 512px satellite tiles — sharp on retina/high-DPI screens
-          tiles: [`https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}@2x.jpg?key=${key}`],
-          tileSize: 512,
-          maxzoom: 20,
-          attribution: "© MapTiler © OpenStreetMap contributors",
-        },
-      },
-      layers: [
-        {
-          id: "satellite-raster-layer",
-          type: "raster" as const,
-          source: "satellite-raster",
-          minzoom: 0,
-          maxzoom: 22,
-        },
-      ],
-    };
-    const streetsStyle = {
-      version: 8 as const,
-      sources: {
-        "streets-raster": {
-          type: "raster" as const,
-          // @2x PNG = 512px street tiles — sharp on retina/high-DPI screens
-          tiles: [`https://api.maptiler.com/maps/streets/{z}/{x}/{y}@2x.png?key=${key}`],
-          tileSize: 512,
-          maxzoom: 20,
-          attribution: "© MapTiler © OpenStreetMap contributors",
-        },
-      },
-      layers: [
-        {
-          id: "streets-raster-layer",
-          type: "raster" as const,
-          source: "streets-raster",
-          minzoom: 0,
-          maxzoom: 22,
-        },
-      ],
-    };
-    mapRef.current.setStyle(satellite ? satelliteStyle : streetsStyle);
+    if (!mapRef.current || !isLoaded) return;
+    mapRef.current.setStyle(satellite ? hybridUrl : streetsUrl);
     mapRef.current.once("styledata", () => {
       if (mapRef.current) placeMarkers(mapRef.current);
     });
-  }, [satellite, maptilerKey, placeMarkers, isLoaded]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [satellite]);
 
-  // Resize map on fullscreen change
+  // Resize on fullscreen
   useEffect(() => {
     const t = setTimeout(() => mapRef.current?.resize(), 100);
     return () => clearTimeout(t);
@@ -332,10 +210,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
     if (!mapRef.current) return;
     const locs = members.map(m => locations[m.id]).filter(Boolean) as LocationPoint[];
     if (locs.length === 0) return;
-    if (locs.length === 1) {
-      mapRef.current.flyTo({ center: [locs[0].lon, locs[0].lat], zoom: 14 });
-      return;
-    }
+    if (locs.length === 1) { mapRef.current.flyTo({ center: [locs[0].lon, locs[0].lat], zoom: 14 }); return; }
     import("maplibre-gl").then(({ LngLatBounds }) => {
       const b = new LngLatBounds();
       locs.forEach(l => b.extend([l.lon, l.lat]));
@@ -348,103 +223,93 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
 
   return (
     <>
-      <style>{`
-        @keyframes kpulse {
-          0% { transform: scale(0.9); opacity: 0.7; }
-          100% { transform: scale(1.9); opacity: 0; }
-        }
-      `}</style>
-
+      <style>{`@keyframes kpulse{0%{transform:scale(0.9);opacity:0.7}100%{transform:scale(1.9);opacity:0}}`}</style>
       <div
-        className={fullscreen ? "fixed inset-0 z-[9000]" : "relative w-full rounded-2xl overflow-hidden"}
+        className={fullscreen ? "fixed inset-0 z-[9000]" : "relative w-full rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700"}
         style={{ height: fullscreen ? "100dvh" : height }}
       >
-        {/* Map canvas — always rendered, always full size */}
-        <div
-          ref={mapEl}
-          style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
-        />
+        <div ref={mapEl} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
 
-        {/* No spinner overlay — map renders as it loads. Dark bg = tiles loading. */}
-
-        {/* Error overlay — ONLY shown when key is actually rejected */}
-        {isError && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/90 p-5 text-center z-10 gap-3">
-            <span className="text-3xl">🗺</span>
-            <p className="text-sm text-red-300 max-w-xs leading-relaxed">{statusMsg}</p>
-            <a
-              href="https://cloud.maptiler.com/account/keys"
-              target="_blank"
-              rel="noreferrer"
-              className="rounded-xl bg-sky-600 px-4 py-2 text-xs font-bold text-white"
-            >
-              Open MapTiler Keys →
-            </a>
-          </div>
-        )}
-
-        {/* Controls — always on top */}
+        {/* Controls */}
         <div className="absolute top-3 left-3 z-20 flex flex-col gap-1.5">
-          {maptilerKey && (
-            <button
-              type="button"
-              onClick={() => setSatellite(v => !v)}
-              className={`rounded-xl px-3 py-1.5 text-xs font-bold shadow-lg ${
-                satellite ? "bg-sky-600 text-white" : "bg-white/90 text-slate-800 backdrop-blur"
-              }`}
-            >
-              {satellite ? "🛰 Satellite" : "🗺 Streets"}
-            </button>
-          )}
+          <button type="button" onClick={() => setSatellite(v => !v)}
+            className={`rounded-xl px-3 py-1.5 text-xs font-bold shadow-lg ${satellite ? "bg-sky-600 text-white" : "bg-white/90 text-slate-800"}`}>
+            {satellite ? "🛰 Satellite" : "🗺 Streets"}
+          </button>
           {Object.keys(locations).length > 0 && (
-            <button
-              type="button"
-              onClick={fitAll}
-              className="rounded-xl bg-white/90 backdrop-blur px-3 py-1.5 text-xs font-bold text-slate-800 shadow-lg"
-            >
+            <button type="button" onClick={fitAll}
+              className="rounded-xl bg-white/90 px-3 py-1.5 text-xs font-bold text-slate-800 shadow-lg">
               👁 Fit all
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setFullscreen(v => !v)}
-            className="rounded-xl bg-white/90 backdrop-blur px-3 py-1.5 text-xs font-bold text-slate-800 shadow-lg"
-          >
+          <button type="button" onClick={() => setFullscreen(v => !v)}
+            className="rounded-xl bg-white/90 px-3 py-1.5 text-xs font-bold text-slate-800 shadow-lg">
             {fullscreen ? "✕ Close" : "⛶ Expand"}
           </button>
         </div>
 
-        {/* Selected member info card */}
+        {/* Member list overlay — bottom of map, scrollable */}
+        <div className="absolute bottom-0 left-0 right-0 z-20 px-2 pb-2">
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+            {members.map(m => {
+              const loc = locations[m.id];
+              const hasLoc = Boolean(loc);
+              const stale = loc ? isStale(loc.updatedAt) : true;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => {
+                    setSelected(p => p === m.id ? null : m.id);
+                    if (loc && mapRef.current) {
+                      mapRef.current.flyTo({ center: [loc.lon, loc.lat], zoom: 15, duration: 600 });
+                    }
+                  }}
+                  className={`flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-semibold shadow-md transition ${
+                    selected === m.id
+                      ? "bg-sky-600 text-white"
+                      : "bg-white/90 text-slate-800"
+                  }`}
+                >
+                  {/* Mini avatar */}
+                  <div className="h-5 w-5 rounded-full overflow-hidden shrink-0 flex items-center justify-center text-[9px] font-black text-white"
+                    style={{ background: m.color }}>
+                    {m.imageUrl
+                      ? <img src={m.imageUrl} className="w-full h-full object-cover" alt={m.name} />
+                      : m.name.charAt(0).toUpperCase()
+                    }
+                  </div>
+                  <span className="truncate max-w-[60px]">{m.name}</span>
+                  <span className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${!hasLoc ? "bg-slate-300" : stale ? "bg-amber-400" : "bg-emerald-400"}`} />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Selected member detail card */}
         {selMember && selLoc && (
-          <div className="absolute bottom-3 left-3 right-14 z-20 rounded-2xl bg-white/95 backdrop-blur p-3 shadow-xl dark:bg-slate-900/95">
+          <div className="absolute top-3 right-3 left-3 z-20 rounded-2xl bg-white/95 p-3 shadow-xl dark:bg-slate-900/95 mx-auto max-w-[280px] ml-auto"
+            style={{ top: 3, right: 3, left: "auto" }}>
             <div className="flex items-center gap-2">
-              <div
-                className="h-8 w-8 shrink-0 rounded-full flex items-center justify-center text-sm font-bold text-white"
-                style={{ background: selMember.color }}
-              >
-                {selMember.name.charAt(0).toUpperCase()}
+              <div className="h-10 w-10 shrink-0 rounded-full overflow-hidden border-2 flex items-center justify-center font-bold text-white text-sm"
+                style={{ background: selMember.color, borderColor: selMember.color }}>
+                {selMember.imageUrl
+                  ? <img src={selMember.imageUrl} className="w-full h-full object-cover" alt={selMember.name} />
+                  : selMember.name.charAt(0).toUpperCase()
+                }
               </div>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold">{selMember.name}</p>
+              <div className="min-w-0 flex-1">
+                <p className="font-bold text-sm text-slate-900 dark:text-white truncate">{selMember.name}</p>
                 <p className="text-xs text-slate-500">
-                  {isStale(selLoc.updatedAt)
-                    ? `⚠ ${timeAgo(selLoc.updatedAt)} — may be outdated`
-                    : `🟢 Live · ${timeAgo(selLoc.updatedAt)}`}
+                  {isStale(selLoc.updatedAt) ? `⚠ ${timeAgo(selLoc.updatedAt)}` : `🟢 ${timeAgo(selLoc.updatedAt)}`}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setSelected(null)}
-                className="ml-auto shrink-0 text-slate-400 text-lg leading-none"
-              >
-                ✕
-              </button>
+              <button type="button" onClick={() => setSelected(null)} className="text-slate-400 text-base shrink-0">✕</button>
             </div>
           </div>
         )}
       </div>
-
-      {/* Spacer when fullscreen so page doesn't collapse */}
       {fullscreen && <div style={{ height: 300 }} />}
     </>
   );
