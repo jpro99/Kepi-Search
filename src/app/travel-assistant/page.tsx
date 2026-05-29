@@ -3393,6 +3393,7 @@ export default function TravelAssistantPage() {
 
   // Derive location status for AI guidance — must be after consumerReservationsSorted
   const guidanceLocationStatus = useMemo((): "away" | "at-airport" | "in-terminal" | "airborne" | "unknown" => {
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     const nowMs = Date.now();
 
     // Check if currently airborne: a flight departed in the last 14 hours and hasn't arrived yet

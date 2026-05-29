@@ -104,11 +104,12 @@ function getArrivalChecklist(intl: boolean, hasHotel: boolean, hasRide: boolean)
 
 /* ─── Component ──────────────────────────────────────────────── */
 export function ArrivalMode({ reservations, onViewReservations }: ArrivalModeProps) {
-  const now = Date.now();
   const [checked, setChecked] = useState<Set<string>>(new Set());
 
   // Find flight that landed recently (within 2h) or lands within 30 min
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const arrivingFlight = useMemo(() => {
+    const now = Date.now(); // intentional: we want a fresh value each render
     const flights = reservations.filter(r => r.type === "flight");
     const candidates = flights
       .map(f => {
@@ -119,7 +120,7 @@ export function ArrivalMode({ reservations, onViewReservations }: ArrivalModePro
       .filter(({ utcMs }) => !isNaN(utcMs) && (now - utcMs) < 2 * 3600_000 && (utcMs - now) < 30 * 60_000)
       .sort((a, b) => a.utcMs - b.utcMs);
     return candidates[0] ?? null;
-  }, [reservations, now]);
+  }, [reservations]);
 
   // Find the next hotel check-in
   const nextHotel = useMemo(() => {

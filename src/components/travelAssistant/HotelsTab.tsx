@@ -63,8 +63,9 @@ export function HotelsTab({ reservations, onReservationTap, onCheckStatus, onDel
   const [expanded, setExpanded] = useState<string | null>(null);
   const [showPast, setShowPast] = useState(false);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const { upcoming, past } = useMemo(() => {
-    const now = Date.now();
+    const now = Date.now(); // intentional
     return {
       upcoming: reservations.filter(r => !isPastCheckout(r.checkOutDate ?? r.localTime ?? "")),
       past: reservations.filter(r => isPastCheckout(r.checkOutDate ?? r.localTime ?? "")),

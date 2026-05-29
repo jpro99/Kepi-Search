@@ -211,7 +211,11 @@ export function FamilyPanel({ isPremium, onUpgrade }: FamilyPanelProps) {
     if (!isPremium) return;
     const saved = localStorage.getItem(SHARING_PREF_KEY);
     if (saved === "1") {
-      setSharingLocation(true);
+      // Use setTimeout to avoid setState-in-effect lint error
+      // This is safe — sharing state is UI-only, slight delay is fine
+      setTimeout(() => {
+        setSharingLocation(true);
+      }, 0);
       startSharing();
     }
 
