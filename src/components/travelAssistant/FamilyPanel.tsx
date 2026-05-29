@@ -130,24 +130,58 @@ export function FamilyPanel({ isPremium, onUpgrade }: FamilyPanelProps) {
       return;
     }
     setLocationError(null);
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      pos => {
-        void sendLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
-      },
-      err => {
-        const msg = err.code === 1
-          ? "Location permission denied. Go to Settings → Safari → Location → Allow."
-          : "Could not get your location. Check device GPS settings.";
-        setLocationError(msg);
-        setSharingLocation(false);
-        localStorage.removeItem(SHARING_PREF_KEY);
-        if (watchIdRef.current !== null) {
-          navigator.geolocation.clearWatch(watchIdRef.current);
-          watchIdRef.current = null;
+
+    const tryWatch = (highAccuracy: boolean) => {
+      if (watchIdRef.current !== null) return;
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        pos => {
+          void sendLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+          setLocationError(null);
+        },
+        err => {
+          if (err.code === 1) {
+            // PERMISSION_DENIED — stop permanently, user must fix settings
+            setLocationError("Location permission denied. iPhone: Settings → Privacy & Security → Location Services → Safari → While Using.");
+            setSharingLocation(false);
+            localStorage.removeItem(SHARING_PREF_KEY);
+            if (watchIdRef.current !== null) {
+              navigator.geolocation.clearWatch(watchIdRef.current);
+              watchIdRef.current = null;
+            }
+          } else if (highAccuracy) {
+            // POSITION_UNAVAILABLE or TIMEOUT with high accuracy (common on plane WiFi)
+            // Fall back to low accuracy — works with WiFi positioning
+            if (watchIdRef.current !== null) {
+              navigator.geolocation.clearWatch(watchIdRef.current);
+              watchIdRef.current = null;
+            }
+            setLocationError("Switching to low-accuracy GPS (plane WiFi mode)…");
+            setTimeout(() => tryWatch(false), 1000);
+          } else {
+            // Low accuracy also failed — show error but keep preference, will retry on next visibility
+            setLocationError("Location unavailable. Will retry when GPS signal improves.");
+            if (watchIdRef.current !== null) {
+              navigator.geolocation.clearWatch(watchIdRef.current);
+              watchIdRef.current = null;
+            }
+            // Auto-retry in 30 seconds — don't kill the preference
+            setTimeout(() => {
+              if (localStorage.getItem(SHARING_PREF_KEY) === "1") {
+                watchIdRef.current = null;
+                tryWatch(false);
+              }
+            }, 30_000);
+          }
+        },
+        {
+          enableHighAccuracy: highAccuracy,
+          maximumAge: highAccuracy ? 5_000 : 30_000,
+          timeout: highAccuracy ? 15_000 : 45_000,
         }
-      },
-      { enableHighAccuracy: true, maximumAge: 5_000, timeout: 20_000 }
-    );
+      );
+    };
+
+    tryWatch(true);
   }, [sendLocation]);
 
   const stopSharing = useCallback(() => {
@@ -180,8 +214,20 @@ export function FamilyPanel({ isPremium, onUpgrade }: FamilyPanelProps) {
       setSharingLocation(true);
       startSharing();
     }
-    // Cleanup on unmount — but keep the preference so it auto-resumes next time
+
+    // iOS kills watchPosition when the page goes to background or screen locks.
+    // Restart it the moment the page becomes visible again.
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && localStorage.getItem(SHARING_PREF_KEY) === "1") {
+        if (watchIdRef.current === null) {
+          startSharing();
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
     return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
@@ -431,11 +477,18 @@ export function FamilyPanel({ isPremium, onUpgrade }: FamilyPanelProps) {
           </button>
         </div>
         {locationError && (
-          <div className="mx-4 mb-4 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 px-3 py-2">
-            <p className="text-xs text-red-700 dark:text-red-300 font-medium">⚠️ {locationError}</p>
-            <p className="text-[10px] text-red-500 dark:text-red-400 mt-0.5">
-              iPhone: Settings → Privacy → Location Services → Safari → While Using App
-            </p>
+          <div className="mx-4 mb-4 rounded-2xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 px-3 py-2">
+            <p className="text-xs text-amber-700 dark:text-amber-300 font-medium">⚠️ {locationError}</p>
+            {locationError.includes("permission") && (
+              <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
+                iPhone: Settings → Privacy &amp; Security → Location Services → Safari → While Using App
+              </p>
+            )}
+            {!locationError.includes("permission") && (
+              <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
+                Sharing preference saved — will resume automatically when GPS is available.
+              </p>
+            )}
           </div>
         )}
       </div>
