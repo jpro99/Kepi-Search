@@ -98,7 +98,7 @@ export async function GET() {
         })
       );
       const memberLocations = Object.fromEntries(memberLocationEntries.filter(([, v]) => v !== null));
-      return NextResponse.json({ group: memberGroup, locations: memberLocations, role: "member" });
+      return NextResponse.json({ group: memberGroup, locations: memberLocations, role: "member", currentUserId: userId });
     }
   }
 
@@ -113,7 +113,7 @@ export async function GET() {
   );
   const locations = Object.fromEntries(locationEntries.filter(([, v]) => v !== null));
 
-  return NextResponse.json({ group, locations, role: "owner" });
+  return NextResponse.json({ group, locations, role: "owner", currentUserId: userId });
 }
 
 // POST - update own location
@@ -135,6 +135,7 @@ export async function POST(request: Request) {
     sharingEnabled: z.boolean().optional(),
     visibility: z.enum(["all-members", "organizer-only"]).optional(),
     groupName: z.string().max(60).optional(),
+    inviteCode: z.string().optional(),
   }).safeParse(body);
 
   if (!parsed.success) {
@@ -142,82 +143,13 @@ export async function POST(request: Request) {
   }
 
   const { action } = parsed.data;
-  const group = await kvStoreGet<z.infer<typeof FamilyGroupSchema>>(FAMILY_GROUP_KEY, { userId });
-  if (!group) return NextResponse.json({ error: "No family group found" }, { status: 404 });
-
-  if (action === "update-location") {
-    const { lat, lon, accuracy, label } = parsed.data;
-    if (lat === undefined || lon === undefined) {
-      return NextResponse.json({ error: "lat and lon required" }, { status: 400 });
-    }
-    const location: z.infer<typeof LocationSchema> = {
-      lat, lon,
-      accuracy: accuracy ?? undefined,
-      updatedAt: new Date().toISOString(),
-      memberId: userId,
-      label: label ?? undefined,
-    };
-    await kvStoreSet(FAMILY_LOCATION_KEY(userId), location, { userId });
-    return NextResponse.json({ ok: true, location });
-  }
-
-  if (action === "add-member") {
-    const { name, email, role } = parsed.data;
-    if (!name) return NextResponse.json({ error: "name required" }, { status: 400 });
-    const newMember: z.infer<typeof MemberSchema> = {
-      id: generateId(),
-      name,
-      email: email ?? null,
-      role: role ?? "adult",
-      color: nextColor(group.members),
-      sharingEnabled: true,
-      visibility: "all-members",
-      joinedAt: new Date().toISOString(),
-    };
-    group.members.push(newMember);
-    await kvStoreSet(FAMILY_GROUP_KEY, group, { userId });
-    return NextResponse.json({ ok: true, member: newMember, group });
-  }
-
-  if (action === "remove-member") {
-    const { memberId } = parsed.data;
-    if (!memberId || memberId === userId) {
-      return NextResponse.json({ error: "Cannot remove yourself" }, { status: 400 });
-    }
-    group.members = group.members.filter(m => m.id !== memberId);
-    await kvStoreSet(FAMILY_GROUP_KEY, group, { userId });
-    return NextResponse.json({ ok: true, group });
-  }
-
-  if (action === "update-member") {
-    const { memberId, sharingEnabled, visibility, name } = parsed.data;
-    if (!memberId) return NextResponse.json({ error: "memberId required" }, { status: 400 });
-    group.members = group.members.map(m => {
-      if (m.id !== memberId) return m;
-      return {
-        ...m,
-        ...(name !== undefined ? { name } : {}),
-        ...(sharingEnabled !== undefined ? { sharingEnabled } : {}),
-        ...(visibility !== undefined ? { visibility } : {}),
-      };
-    });
-    await kvStoreSet(FAMILY_GROUP_KEY, group, { userId });
-    return NextResponse.json({ ok: true, group });
-  }
-
-  if (action === "update-group") {
-    const { groupName } = parsed.data;
-    if (groupName) group.name = groupName;
-    await kvStoreSet(FAMILY_GROUP_KEY, group, { userId });
-    return NextResponse.json({ ok: true, group });
-  }
-
   if (action === "join-group") {
     const { inviteCode } = parsed.data;
     if (!inviteCode) return NextResponse.json({ error: "inviteCode required" }, { status: 400 });
 
+    const normalizedInviteCode = inviteCode.toUpperCase();
     // Look up which user owns this group via the invite index
-    const ownerUserId = await kvStoreGet<string>(FAMILY_INVITE_INDEX_KEY(inviteCode.toUpperCase()), { userId });
+    const ownerUserId = await kvStoreGet<string>(FAMILY_INVITE_INDEX_KEY(normalizedInviteCode), { userId });
     if (!ownerUserId) {
       return NextResponse.json({ error: "Invalid invite code. Ask the group organizer for the correct code." }, { status: 404 });
     }
@@ -234,7 +166,7 @@ export async function POST(request: Request) {
     // Check if already a member
     if (ownerGroup.members.some(m => m.id === userId)) {
       // Already a member - store membership reference and return group
-      await kvStoreSet(FAMILY_MEMBERSHIP_KEY, { ownerId: ownerUserId, inviteCode: inviteCode.toUpperCase() }, { userId });
+      await kvStoreSet(FAMILY_MEMBERSHIP_KEY, { ownerId: ownerUserId, inviteCode: normalizedInviteCode }, { userId });
       return NextResponse.json({ ok: true, group: ownerGroup, alreadyMember: true });
     }
 
@@ -253,15 +185,104 @@ export async function POST(request: Request) {
     await kvStoreSet(FAMILY_GROUP_KEY, ownerGroup, { userId: ownerUserId });
 
     // Store membership reference for this user so they can find the group
-    await kvStoreSet(FAMILY_MEMBERSHIP_KEY, { ownerId: ownerUserId, inviteCode: inviteCode.toUpperCase() }, { userId });
+    await kvStoreSet(FAMILY_MEMBERSHIP_KEY, { ownerId: ownerUserId, inviteCode: normalizedInviteCode }, { userId });
 
     logger.info("User joined family group.", { userId, ownerId: ownerUserId });
     return NextResponse.json({ ok: true, group: ownerGroup, joined: true });
   }
 
+  const membership = await kvStoreGet<{ ownerId: string; inviteCode: string }>(FAMILY_MEMBERSHIP_KEY, { userId });
+  const groupNamespaceUserId =
+    membership && membership.ownerId !== userId ? membership.ownerId : userId;
+  const group = await kvStoreGet<z.infer<typeof FamilyGroupSchema>>(FAMILY_GROUP_KEY, { userId: groupNamespaceUserId });
+  if (!group) return NextResponse.json({ error: "No family group found" }, { status: 404 });
+
+  if (action === "update-location") {
+    const { lat, lon, accuracy, label } = parsed.data;
+    if (lat === undefined || lon === undefined) {
+      return NextResponse.json({ error: "lat and lon required" }, { status: 400 });
+    }
+    const ownerNamespaceUserId =
+      membership && membership.ownerId !== userId ? membership.ownerId : userId;
+    const location: z.infer<typeof LocationSchema> = {
+      lat, lon,
+      accuracy: accuracy ?? undefined,
+      updatedAt: new Date().toISOString(),
+      memberId: userId,
+      label: label ?? undefined,
+    };
+    await kvStoreSet(FAMILY_LOCATION_KEY(userId), location, { userId: ownerNamespaceUserId });
+    return NextResponse.json({ ok: true, location });
+  }
+
+  if (action === "add-member") {
+    if (group.ownerId !== userId) {
+      return NextResponse.json({ error: "Only group owners can add members." }, { status: 403 });
+    }
+    const { name, email, role } = parsed.data;
+    if (!name) return NextResponse.json({ error: "name required" }, { status: 400 });
+    const newMember: z.infer<typeof MemberSchema> = {
+      id: generateId(),
+      name,
+      email: email ?? null,
+      role: role ?? "adult",
+      color: nextColor(group.members),
+      sharingEnabled: true,
+      visibility: "all-members",
+      joinedAt: new Date().toISOString(),
+    };
+    group.members.push(newMember);
+    await kvStoreSet(FAMILY_GROUP_KEY, group, { userId: groupNamespaceUserId });
+    return NextResponse.json({ ok: true, member: newMember, group });
+  }
+
+  if (action === "remove-member") {
+    if (group.ownerId !== userId) {
+      return NextResponse.json({ error: "Only group owners can remove members." }, { status: 403 });
+    }
+    const { memberId } = parsed.data;
+    if (!memberId || memberId === userId) {
+      return NextResponse.json({ error: "Cannot remove yourself" }, { status: 400 });
+    }
+    group.members = group.members.filter(m => m.id !== memberId);
+    await kvStoreSet(FAMILY_GROUP_KEY, group, { userId: groupNamespaceUserId });
+    return NextResponse.json({ ok: true, group });
+  }
+
+  if (action === "update-member") {
+    const { memberId, sharingEnabled, visibility, name, role } = parsed.data;
+    if (!memberId) return NextResponse.json({ error: "memberId required" }, { status: 400 });
+    const isOwner = group.ownerId === userId;
+    const isSelfUpdate = memberId === userId;
+    if (!isOwner && !isSelfUpdate) {
+      return NextResponse.json({ error: "Only owners can update other members." }, { status: 403 });
+    }
+    group.members = group.members.map(m => {
+      if (m.id !== memberId) return m;
+      return {
+        ...m,
+        ...(name !== undefined ? { name } : {}),
+        ...(sharingEnabled !== undefined ? { sharingEnabled } : {}),
+        ...(visibility !== undefined ? { visibility } : {}),
+        ...(isOwner && role !== undefined ? { role } : {}),
+      };
+    });
+    await kvStoreSet(FAMILY_GROUP_KEY, group, { userId: groupNamespaceUserId });
+    return NextResponse.json({ ok: true, group });
+  }
+
+  if (action === "update-group") {
+    if (group.ownerId !== userId) {
+      return NextResponse.json({ error: "Only group owners can update group settings." }, { status: 403 });
+    }
+    const { groupName } = parsed.data;
+    if (groupName) group.name = groupName;
+    await kvStoreSet(FAMILY_GROUP_KEY, group, { userId: groupNamespaceUserId });
+    return NextResponse.json({ ok: true, group });
+  }
+
   if (action === "leave-group") {
     // Remove self from owner's group
-    const membership = await kvStoreGet<{ ownerId: string; inviteCode: string }>(FAMILY_MEMBERSHIP_KEY, { userId });
     if (!membership) return NextResponse.json({ error: "Not in a group." }, { status: 400 });
 
     const ownerGroup = await kvStoreGet<z.infer<typeof FamilyGroupSchema>>(FAMILY_GROUP_KEY, { userId: membership.ownerId });
