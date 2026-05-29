@@ -54,6 +54,21 @@ interface FamilyPanelProps {
   maptilerKey?: string;
 }
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+}
+
+interface LocationPermissionDiagnostics {
+  permissionState: "granted" | "prompt" | "denied" | "unsupported";
+  secureContext: boolean;
+  geolocationAvailable: boolean;
+  sampledAt: string | null;
+  accuracyMeters: number | null;
+  speedKmh: number | null;
+  message: string;
+}
+
 function timeAgo(iso: string): string {
   const diffMs = Date.now() - Date.parse(iso);
   const diffMin = Math.floor(diffMs / 60_000);
@@ -139,12 +154,17 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
   const [inviteByEmail, setInviteByEmail] = useState("");
   const [inviteByName, setInviteByName] = useState("");
   const [inviteByEmailBusy, setInviteByEmailBusy] = useState(false);
+  const [creatingGroup, setCreatingGroup] = useState(false);
   const [joiningGroup, setJoiningGroup] = useState(false);
   const [joinCode, setJoinCode] = useState(inviteCodeFromUrl);
   const [joinName, setJoinName] = useState("");
   const [joinBusy, setJoinBusy] = useState(false);
   const [incomingInviteCode, setIncomingInviteCode] = useState<string | null>(inviteCodeFromUrl || null);
   const [pendingEmailInvites, setPendingEmailInvites] = useState<PendingFamilyEmailInvite[]>([]);
+  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
+  const [locationWizardExpanded, setLocationWizardExpanded] = useState(false);
+  const [locationDiagnosticsBusy, setLocationDiagnosticsBusy] = useState(false);
+  const [locationDiagnostics, setLocationDiagnostics] = useState<LocationPermissionDiagnostics | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const lastLocationSentAtRef = useRef<number>(0);
   const lastAcceptedSampleRef = useRef<LocationSample | null>(null);
@@ -160,26 +180,31 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
       : `${window.location.origin}/travel-assistant?tab=family&${INVITE_QUERY_PARAM}=${group.inviteCode}`
     : "";
   const activePendingEmailInvite = pendingEmailInvites.find((invite) => invite.status === "pending") ?? null;
+  const isAppleMobile = typeof navigator !== "undefined" && /iphone|ipad|ipod/iu.test(navigator.userAgent);
+  const isStandalonePwa =
+    typeof window !== "undefined" &&
+    (window.matchMedia("(display-mode: standalone)").matches ||
+      (typeof navigator !== "undefined" && (navigator as Navigator & { standalone?: boolean }).standalone === true));
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/family", { cache: "no-store" });
+      const res = await fetch("/api/family?autoCreate=0", { cache: "no-store" });
       const data = await res.json() as {
-        group: FamilyGroup;
+        group: FamilyGroup | null;
         locations: Record<string, LocationPoint>;
-        role?: "owner" | "member";
+        role?: "owner" | "member" | null;
         currentUserId?: string;
         pendingEmailInvites?: PendingFamilyEmailInvite[];
       };
       setGroup(data.group);
       setLocations(data.locations ?? {});
-      setGroupRole(data.role ?? "owner");
+      setGroupRole(data.role ?? (data.group ? "owner" : null));
       setCurrentUserId(data.currentUserId ?? null);
       setGroupNameDraft(data.group?.name ?? "");
       const nextPendingInvites = Array.isArray(data.pendingEmailInvites) ? data.pendingEmailInvites : [];
       setPendingEmailInvites(nextPendingInvites);
       // Non-premium users can access family only when invited into an existing group.
-      setHasGroup((data.role ?? "owner") === "member" || nextPendingInvites.length > 0);
+      setHasGroup(Boolean(data.group) || (data.role ?? null) === "member" || nextPendingInvites.length > 0);
     } catch {
       setMessage("Could not load family group.");
     } finally {
@@ -201,6 +226,25 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
       }
     };
   }, [geolocationSupported]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onBeforeInstallPrompt = (event: Event) => {
+      const installEvent = event as BeforeInstallPromptEvent;
+      installEvent.preventDefault();
+      setInstallPromptEvent(installEvent);
+    };
+    const onAppInstalled = () => {
+      setInstallPromptEvent(null);
+      setMessage("✅ Kepi app installed. Location tracking runs more reliably from the app icon.");
+    };
+    window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+    window.addEventListener("appinstalled", onAppInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", onAppInstalled);
+    };
+  }, []);
 
   const clearInviteQueryParam = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -435,6 +479,10 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
   }, [currentUserId, geolocationSupported, handleToggleSharing]);
 
   const startLiveLocationSharing = useCallback(async (silent = false) => {
+    if (!group) {
+      setMessage("Create or join a family group first, then enable live sharing.");
+      return false;
+    }
     if (!geolocationSupported) {
       setMessage("Geolocation is unavailable on this device/browser.");
       return false;
@@ -505,7 +553,7 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
       setMessage("✅ Live location sharing is on for your group.");
     }
     return true;
-  }, [currentUserId, geolocationSupported, handleToggleSharing, pushLocationUpdate, stopLiveLocationSharing]);
+  }, [currentUserId, geolocationSupported, group, handleToggleSharing, pushLocationUpdate, stopLiveLocationSharing]);
 
   const toggleLiveLocationSharing = useCallback(async () => {
     if (liveSharingEnabled) {
@@ -609,6 +657,128 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
     }
   }, [group, groupNameDraft]);
 
+  const handleCreateGroup = useCallback(async () => {
+    const nextName = groupNameDraft.trim();
+    if (!nextName) {
+      setMessage("Enter a group name before creating your family group.");
+      return;
+    }
+    setCreatingGroup(true);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/family", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create-group", groupName: nextName }),
+      });
+      const data = await res.json() as { ok?: boolean; group?: FamilyGroup; error?: string; alreadyExists?: boolean };
+      if (!res.ok || !data.ok || !data.group) {
+        setMessage(data.error ?? "Could not create group.");
+        return;
+      }
+      setGroup(data.group);
+      setGroupRole("owner");
+      setHasGroup(true);
+      setGroupNameDraft(data.group.name);
+      setMessage(data.alreadyExists ? "Using your existing family group." : "✅ Group created. Invite family by email below.");
+      await load();
+    } catch {
+      setMessage("Could not create group.");
+    } finally {
+      setCreatingGroup(false);
+    }
+  }, [groupNameDraft, load]);
+
+  const runLocationDiagnostics = useCallback(async () => {
+    const secureContext = typeof window !== "undefined" ? window.isSecureContext : false;
+    const geolocationAvailable = geolocationSupported;
+    if (!geolocationAvailable) {
+      setLocationDiagnostics({
+        permissionState: "unsupported",
+        secureContext,
+        geolocationAvailable,
+        sampledAt: null,
+        accuracyMeters: null,
+        speedKmh: null,
+        message: "This browser does not support geolocation. Use Safari/Chrome on a HTTPS site.",
+      });
+      return;
+    }
+    setLocationDiagnosticsBusy(true);
+    let permissionState: LocationPermissionDiagnostics["permissionState"] = "unsupported";
+    try {
+      if (typeof navigator !== "undefined" && "permissions" in navigator && navigator.permissions?.query) {
+        const result = await navigator.permissions.query({ name: "geolocation" });
+        permissionState = result.state;
+      } else {
+        permissionState = "unsupported";
+      }
+    } catch {
+      permissionState = "unsupported";
+    }
+
+    try {
+      const sample = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 12000,
+          maximumAge: 0,
+        });
+      });
+      const speedMps = typeof sample.coords.speed === "number" && Number.isFinite(sample.coords.speed)
+        ? Math.max(0, sample.coords.speed)
+        : null;
+      setLocationDiagnostics({
+        permissionState: permissionState === "unsupported" ? "granted" : permissionState,
+        secureContext,
+        geolocationAvailable,
+        sampledAt: new Date(sample.timestamp || Date.now()).toISOString(),
+        accuracyMeters: Number.isFinite(sample.coords.accuracy) ? Math.round(sample.coords.accuracy) : null,
+        speedKmh: speedMps !== null ? Math.round(speedMps * 3.6) : null,
+        message: "Location access is working. Enable 'Share live location' to publish updates to your group.",
+      });
+    } catch (error) {
+      const geoError = error as GeolocationPositionError;
+      const denied = Number(geoError?.code) === 1 || permissionState === "denied";
+      setLocationDiagnostics({
+        permissionState: denied ? "denied" : permissionState,
+        secureContext,
+        geolocationAvailable,
+        sampledAt: null,
+        accuracyMeters: null,
+        speedKmh: null,
+        message: denied
+          ? "Location permission is denied. Open browser/app settings and allow precise location for Kepi."
+          : "Could not read your location. Move outdoors, confirm GPS is on, then try again.",
+      });
+    } finally {
+      setLocationDiagnosticsBusy(false);
+    }
+  }, [geolocationSupported]);
+
+  const handleInstallApp = useCallback(async () => {
+    if (installPromptEvent) {
+      try {
+        await installPromptEvent.prompt();
+        const result = await installPromptEvent.userChoice.catch(() => ({ outcome: "dismissed", platform: "unknown" }));
+        setInstallPromptEvent(null);
+        if (result.outcome === "accepted") {
+          setMessage("✅ Kepi install started. Open the app icon for best location reliability.");
+        } else {
+          setMessage("Install prompt dismissed. You can still add Kepi from your browser menu.");
+        }
+      } catch {
+        setMessage("Could not open install prompt. Use your browser menu -> Install app.");
+      }
+      return;
+    }
+    if (isAppleMobile) {
+      setMessage("On iPhone/iPad: Safari -> Share -> Add to Home Screen. Apple does not allow automatic install prompts.");
+      return;
+    }
+    setMessage("Install option is not currently available. In Chrome/Edge, open the browser menu and choose 'Install app'.");
+  }, [installPromptEvent, isAppleMobile]);
+
   const handleSendEmailInvite = useCallback(async () => {
     const email = inviteByEmail.trim().toLowerCase();
     if (!email || !email.includes("@")) {
@@ -630,6 +800,8 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
       const data = await res.json() as {
         ok?: boolean;
         emailSent?: boolean;
+        hasKepiAccount?: boolean;
+        deliveryMode?: "in-app-account" | "email-signup";
         warning?: string | null;
         error?: string;
       };
@@ -639,11 +811,19 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
       }
       setInviteByEmail("");
       setInviteByName("");
-      setMessage(
-        data.emailSent
-          ? "✅ Invite sent. They will see an accept/deny popup on next login."
-          : `✅ Invite queued. ${data.warning ?? "They will still see an in-app popup on login."}`,
-      );
+      if (data.deliveryMode === "in-app-account") {
+        setMessage(
+          data.emailSent
+            ? "✅ Invite sent to an existing Kepi account. They will get an in-app accept/deny popup."
+            : `✅ Invite queued for an existing Kepi account. ${data.warning ?? "They will get an in-app popup shortly."}`,
+        );
+      } else {
+        setMessage(
+          data.emailSent
+            ? "✅ Invite email sent with sign-up link. After sign-up, Kepi will auto-prompt accept/deny."
+            : `✅ Invite queued for sign-up flow. ${data.warning ?? "They will be prompted after creating an account."}`,
+        );
+      }
       await load();
     } catch {
       setMessage("Could not send email invite.");
@@ -794,6 +974,191 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
     );
   }
 
+  if (!group) {
+    return (
+      <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h2 className="font-semibold flex items-center gap-2">
+              <span>👨‍👩‍👧</span>
+              Family Tracker
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">No group created yet</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setLocationWizardExpanded((current) => !current)}
+            className="rounded-lg border border-sky-300 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-500/10"
+          >
+            {locationWizardExpanded ? "Hide fix location" : "Fix location setup"}
+          </button>
+        </div>
+
+        {activePendingEmailInvite || incomingInviteCode ? (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-500/30 dark:bg-emerald-500/10">
+            <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">You were invited to a family group</p>
+            <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-300">
+              {activePendingEmailInvite ? (
+                <>
+                  <span className="font-semibold">{activePendingEmailInvite.inviterName ?? "A family member"}</span> invited you to{" "}
+                  <span className="font-semibold">{activePendingEmailInvite.groupName}</span>. Invite code{" "}
+                  <span className="font-mono font-bold">{activePendingEmailInvite.inviteCode}</span>.
+                </>
+              ) : (
+                <>
+                  Invite code <span className="font-mono font-bold">{incomingInviteCode}</span>.
+                </>
+              )}{" "}
+              Accept to start premium live tracking together.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                onClick={() => void handleAcceptIncomingInvite()}
+                disabled={joinBusy}
+                className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+              >
+                {joinBusy ? "Joining..." : "Accept invite"}
+              </button>
+              <button
+                type="button"
+                onClick={handleDenyIncomingInvite}
+                className="rounded-lg border border-emerald-300 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
+              >
+                Deny
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 dark:border-sky-500/30 dark:bg-sky-500/10">
+            <p className="text-xs font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">Step 1: Create your group</p>
+            <div className="mt-2 flex gap-2">
+              <input
+                type="text"
+                value={groupNameDraft}
+                onChange={(event) => setGroupNameDraft(event.target.value)}
+                placeholder="Family group name (e.g. Japan Crew)"
+                className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+              />
+              <button
+                type="button"
+                onClick={() => void handleCreateGroup()}
+                disabled={!groupNameDraft.trim() || creatingGroup}
+                className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-bold text-white hover:bg-sky-500 disabled:opacity-50"
+              >
+                {creatingGroup ? "Creating..." : "Create group"}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-sky-700 dark:text-sky-300">
+              After the group is created, you can invite by email and members will get in-app accept/deny prompts.
+            </p>
+          </div>
+        )}
+
+        {!joiningGroup ? (
+          <button
+            type="button"
+            onClick={() => setJoiningGroup(true)}
+            className="w-full rounded-xl border border-dashed border-sky-300 py-2.5 text-sm font-semibold text-sky-600 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-400 dark:hover:bg-sky-500/10"
+          >
+            Join an existing group with code
+          </button>
+        ) : null}
+
+        {joiningGroup && (
+          <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 space-y-2 dark:border-sky-500/30 dark:bg-sky-500/10">
+            <p className="text-xs font-semibold text-sky-800 dark:text-sky-200">Join a family group</p>
+            <input
+              type="text"
+              value={joinName}
+              onChange={(e) => setJoinName(e.target.value)}
+              placeholder="Your name (e.g. Sarah)"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+            />
+            <input
+              type="text"
+              value={joinCode}
+              onChange={(e) => setJoinCode(toUpperInviteCode(e.target.value))}
+              placeholder="Group invite code (e.g. A1B2C3D4)"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm uppercase tracking-widest dark:border-slate-700 dark:bg-slate-900"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void handleJoinGroup()}
+                disabled={joinBusy || !joinCode.trim()}
+                className="flex-1 rounded-lg bg-sky-600 py-2 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-50"
+              >
+                {joinBusy ? "Joining..." : "Join group"}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setJoiningGroup(false); setJoinCode(""); setJoinName(""); }}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {locationWizardExpanded ? (
+          <div className="rounded-xl border border-dashed border-slate-300 p-3 text-xs text-slate-600 dark:border-slate-700 dark:text-slate-300">
+            <p className="font-semibold text-slate-700 dark:text-slate-200">Fix location permissions (guided)</p>
+            <ol className="mt-2 list-inside list-decimal space-y-1">
+              <li>Keep GPS turned on and battery saver off for Kepi.</li>
+              <li>Allow Precise Location for this browser/app.</li>
+              <li>Enable background location if available (Android app mode).</li>
+              <li>Install Kepi to home screen for faster relaunch and better stability.</li>
+            </ol>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void runLocationDiagnostics()}
+                disabled={locationDiagnosticsBusy}
+                className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-700 disabled:opacity-50 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-white"
+              >
+                {locationDiagnosticsBusy ? "Checking..." : "Run diagnostics"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleInstallApp()}
+                className="rounded-lg border border-sky-300 px-3 py-2 text-xs font-semibold text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-500/10"
+              >
+                {installPromptEvent ? "Install Kepi app" : "Install instructions"}
+              </button>
+            </div>
+            {locationDiagnostics ? (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900">
+                <p>Permission: <span className="font-semibold">{locationDiagnostics.permissionState}</span></p>
+                <p>Secure context: <span className="font-semibold">{locationDiagnostics.secureContext ? "yes" : "no"}</span></p>
+                <p>Geolocation API: <span className="font-semibold">{locationDiagnostics.geolocationAvailable ? "available" : "missing"}</span></p>
+                {locationDiagnostics.sampledAt ? (
+                  <p>
+                    Last sample: <span className="font-semibold">{new Date(locationDiagnostics.sampledAt).toLocaleString()}</span>
+                    {locationDiagnostics.accuracyMeters !== null ? ` (±${locationDiagnostics.accuracyMeters}m)` : ""}
+                  </p>
+                ) : null}
+                <p className="mt-1">{locationDiagnostics.message}</p>
+              </div>
+            ) : null}
+            <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+              {isAppleMobile
+                ? "iPhone/iPad: Apple requires manual Add to Home Screen in Safari; apps cannot auto-install."
+                : "Android/desktop Chrome can show an install prompt automatically when criteria are met."}
+            </p>
+          </div>
+        ) : null}
+
+        {message && (
+          <p className={`text-xs ${message.startsWith("✅") ? "text-emerald-700 dark:text-emerald-300" : "text-rose-600 dark:text-rose-400"}`}>
+            {message}
+          </p>
+        )}
+      </article>
+    );
+  }
+
   return (
     <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4">
       {/* Header */}
@@ -938,7 +1303,7 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
 
       {groupRole === "owner" ? (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/60">
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Group management</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Step 1: Group management</p>
           <div className="mt-2 flex gap-2">
             <input
               type="text"
@@ -957,7 +1322,7 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
             </button>
           </div>
           <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50 p-3 dark:border-sky-700 dark:bg-sky-900/20">
-            <p className="text-xs font-semibold text-sky-800 dark:text-sky-200">Invite family by email</p>
+            <p className="text-xs font-semibold text-sky-800 dark:text-sky-200">Step 2: Invite family by email</p>
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
               <input
                 type="email"
@@ -983,7 +1348,7 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
               {inviteByEmailBusy ? "Sending invite..." : `Send invite to ${groupNameDraft.trim() || group?.name || "group"}`}
             </button>
             <p className="mt-1 text-xs text-sky-700 dark:text-sky-300">
-              On next login, they will automatically see an accept/deny popup in Family tab.
+              Existing Kepi users receive an in-app invite popup automatically; new users get a sign-up invite link first.
             </p>
           </div>
           <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
@@ -1197,15 +1562,66 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
         </p>
       )}
 
-      <div className="rounded-xl border border-dashed border-slate-300 p-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
-        <p className="font-semibold text-slate-600 dark:text-slate-300">Permission + privacy</p>
+      <div className="rounded-xl border border-dashed border-slate-300 p-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-300">
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-semibold text-slate-600 dark:text-slate-200">Fix location permissions</p>
+          <button
+            type="button"
+            onClick={() => setLocationWizardExpanded((current) => !current)}
+            className="rounded-md border border-sky-300 px-2 py-1 text-[11px] font-semibold text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-500/10"
+          >
+            {locationWizardExpanded ? "Hide" : "Open wizard"}
+          </button>
+        </div>
         <p className="mt-1">
-          Sharing is consent-based. Once location permission is granted, members can pause/resume sharing from this screen without extra prompts in most browsers.
+          Sharing is consent-based. Once granted, members can pause/resume from this screen without re-prompting in most browsers.
         </p>
-        {!geolocationSupported ? (
-          <p className="mt-1 text-rose-600 dark:text-rose-400">
-            This browser does not support geolocation. Use Safari/Chrome mobile with HTTPS.
-          </p>
+        {locationWizardExpanded ? (
+          <div className="mt-3 space-y-2">
+            <ol className="list-inside list-decimal space-y-1">
+              <li>Allow precise location for Kepi in browser/app settings.</li>
+              <li>Keep GPS on and disable power-saving restrictions.</li>
+              <li>Use the installed app icon where possible for stable tracking.</li>
+            </ol>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void runLocationDiagnostics()}
+                disabled={locationDiagnosticsBusy}
+                className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-700 disabled:opacity-50 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-white"
+              >
+                {locationDiagnosticsBusy ? "Checking..." : "Run diagnostics"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleInstallApp()}
+                className="rounded-lg border border-sky-300 px-3 py-2 text-xs font-semibold text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-500/10"
+              >
+                {installPromptEvent ? "Install Kepi app" : "Install instructions"}
+              </button>
+            </div>
+            {locationDiagnostics ? (
+              <div className="rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900">
+                <p>Permission: <span className="font-semibold">{locationDiagnostics.permissionState}</span></p>
+                <p>Secure context: <span className="font-semibold">{locationDiagnostics.secureContext ? "yes" : "no"}</span></p>
+                {locationDiagnostics.sampledAt ? (
+                  <p>
+                    Last sample: <span className="font-semibold">{new Date(locationDiagnostics.sampledAt).toLocaleString()}</span>
+                    {locationDiagnostics.accuracyMeters !== null ? ` (±${locationDiagnostics.accuracyMeters}m)` : ""}
+                    {locationDiagnostics.speedKmh !== null ? `, ${locationDiagnostics.speedKmh} km/h` : ""}
+                  </p>
+                ) : null}
+                <p className="mt-1">{locationDiagnostics.message}</p>
+              </div>
+            ) : null}
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              {isAppleMobile
+                ? "Apple does not allow automatic app installation prompts. Use Safari -> Share -> Add to Home Screen."
+                : isStandalonePwa
+                  ? "Kepi is already installed on this device."
+                  : "Android can show an install prompt automatically when browser criteria are met."}
+            </p>
+          </div>
         ) : null}
       </div>
     </article>

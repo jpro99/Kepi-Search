@@ -17,6 +17,7 @@ const FAMILY_MEMBERSHIP_KEY = "family:membership"; // stores { ownerId, inviteCo
 const FAMILY_GROUP_EMAIL_INVITES_KEY = "family:email-invites";
 const FAMILY_EMAIL_INVITE_NAMESPACE = "family-email-invite-queue";
 const FAMILY_EMAIL_INVITE_QUEUE_KEY = (email: string) => `family:email-invite:${email.trim().toLowerCase()}`;
+const FAMILY_USER_INVITE_QUEUE_KEY = (targetUserId: string) => `family:user-invite:${targetUserId.trim()}`;
 
 const MemberSchema = z.object({
   id: z.string(),
@@ -96,6 +97,44 @@ function normalizeInviteCode(value: string): string {
   return value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, "");
 }
 
+function mergePendingInviteLists(
+  left: Array<z.infer<typeof FamilyEmailInviteSchema>>,
+  right: Array<z.infer<typeof FamilyEmailInviteSchema>>,
+): Array<z.infer<typeof FamilyEmailInviteSchema>> {
+  const merged = new Map<string, z.infer<typeof FamilyEmailInviteSchema>>();
+  [...left, ...right].forEach((invite) => {
+    const existing = merged.get(invite.id);
+    if (!existing) {
+      merged.set(invite.id, invite);
+      return;
+    }
+    if (Date.parse(invite.createdAt) > Date.parse(existing.createdAt)) {
+      merged.set(invite.id, invite);
+    }
+  });
+  return [...merged.values()].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
+async function resolveUserIdByEmail(email: string): Promise<string | null> {
+  try {
+    const clerkServer = await import("@clerk/nextjs/server");
+    const client = await clerkServer.clerkClient();
+    const result = await client.users.getUserList({
+      emailAddress: [email.trim().toLowerCase()],
+      limit: 1,
+    });
+    const target = Array.isArray(result.data) ? result.data[0] : null;
+    return target?.id ?? null;
+  } catch (error) {
+    logger.warn("Unable to resolve user by email for family invite routing.", {
+      scope: "api/family",
+      email,
+      error: error instanceof Error ? error.message : "unknown",
+    });
+    return null;
+  }
+}
+
 async function joinGroupByInviteCode(args: {
   userId: string;
   inviteCode: string;
@@ -146,21 +185,28 @@ async function joinGroupByInviteCode(args: {
 }
 
 // GET - fetch group and all member locations
-export async function GET() {
+export async function GET(request: Request) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const url = new URL(request.url);
+  const shouldAutoCreateGroup = url.searchParams.get("autoCreate") !== "0";
   const currentUserEmail = await resolveUserPrimaryEmail(userId);
-  const pendingEmailInvites = currentUserEmail
+  const pendingEmailInvitesByEmail = currentUserEmail
     ? (await kvStoreGet<Array<z.infer<typeof FamilyEmailInviteSchema>>>(FAMILY_EMAIL_INVITE_QUEUE_KEY(currentUserEmail), {
         userId: FAMILY_EMAIL_INVITE_NAMESPACE,
       })) ?? []
     : [];
-  const activePendingEmailInvites = pendingEmailInvites.filter((invite) => invite.status === "pending");
+  const pendingEmailInvitesByUser = (await kvStoreGet<Array<z.infer<typeof FamilyEmailInviteSchema>>>(
+    FAMILY_USER_INVITE_QUEUE_KEY(userId),
+    { userId: FAMILY_EMAIL_INVITE_NAMESPACE },
+  )) ?? [];
+  const mergedPendingInvites = mergePendingInviteLists(pendingEmailInvitesByEmail, pendingEmailInvitesByUser);
+  const activePendingEmailInvites = mergedPendingInvites.filter((invite) => invite.status === "pending");
 
   let group = await kvStoreGet<z.infer<typeof FamilyGroupSchema>>(FAMILY_GROUP_KEY, { userId });
 
   // Create default group if none exists
-  if (!group) {
+  if (!group && shouldAutoCreateGroup) {
     group = {
       id: generateId(),
       name: "My Family",
@@ -207,6 +253,16 @@ export async function GET() {
     }
   }
 
+  if (!group) {
+    return NextResponse.json({
+      group: null,
+      locations: {},
+      role: null,
+      currentUserId: userId,
+      pendingEmailInvites: activePendingEmailInvites,
+    });
+  }
+
   // Fetch locations for all members of own group
   const locationEntries = await Promise.all(
     group.members.map(async (member) => {
@@ -240,6 +296,7 @@ export async function POST(request: Request) {
       "remove-member",
       "update-member",
       "update-group",
+      "create-group",
       "join-group",
       "leave-group",
       "send-email-invite",
@@ -269,6 +326,34 @@ export async function POST(request: Request) {
   }
 
   const { action } = parsed.data;
+  if (action === "create-group") {
+    const existingGroup = await kvStoreGet<z.infer<typeof FamilyGroupSchema>>(FAMILY_GROUP_KEY, { userId });
+    if (existingGroup) {
+      return NextResponse.json({ ok: true, group: existingGroup, alreadyExists: true });
+    }
+    const requestedName = parsed.data.groupName?.trim() ?? "";
+    const newGroup: z.infer<typeof FamilyGroupSchema> = {
+      id: generateId(),
+      name: requestedName || "My Family",
+      ownerId: userId,
+      members: [{
+        id: userId,
+        name: "Me",
+        email: null,
+        role: "organizer",
+        color: MEMBER_COLORS[0],
+        sharingEnabled: true,
+        visibility: "all-members",
+        joinedAt: new Date().toISOString(),
+      }],
+      inviteCode: generateId().slice(0, 8).toUpperCase(),
+      createdAt: new Date().toISOString(),
+    };
+    await kvStoreSet(FAMILY_GROUP_KEY, newGroup, { userId });
+    await kvStoreSet(FAMILY_INVITE_INDEX_KEY(newGroup.inviteCode), userId, { userId });
+    return NextResponse.json({ ok: true, group: newGroup, created: true });
+  }
+
   if (action === "join-group") {
     const joinResult = await joinGroupByInviteCode({
       userId,
@@ -292,15 +377,18 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "inviteId required" }, { status: 400 });
     }
     const currentUserEmail = await resolveUserPrimaryEmail(userId);
-    if (!currentUserEmail) {
-      return NextResponse.json({ error: "No verified email found on this account." }, { status: 400 });
-    }
-
-    const inviteQueue = (await kvStoreGet<Array<z.infer<typeof FamilyEmailInviteSchema>>>(
-      FAMILY_EMAIL_INVITE_QUEUE_KEY(currentUserEmail),
+    const inviteQueueByEmail = currentUserEmail
+      ? (await kvStoreGet<Array<z.infer<typeof FamilyEmailInviteSchema>>>(
+          FAMILY_EMAIL_INVITE_QUEUE_KEY(currentUserEmail),
+          { userId: FAMILY_EMAIL_INVITE_NAMESPACE },
+        )) ?? []
+      : [];
+    const inviteQueueByUser = (await kvStoreGet<Array<z.infer<typeof FamilyEmailInviteSchema>>>(
+      FAMILY_USER_INVITE_QUEUE_KEY(userId),
       { userId: FAMILY_EMAIL_INVITE_NAMESPACE },
     )) ?? [];
-    const targetInvite = inviteQueue.find((invite) => invite.id === inviteId);
+    const mergedInviteQueue = mergePendingInviteLists(inviteQueueByEmail, inviteQueueByUser);
+    const targetInvite = mergedInviteQueue.find((invite) => invite.id === inviteId);
     if (!targetInvite) {
       return NextResponse.json({ error: "Invite not found." }, { status: 404 });
     }
@@ -319,12 +407,22 @@ export async function POST(request: Request) {
       }
 
       const respondedAt = new Date().toISOString();
-      const updatedQueue = inviteQueue.map((invite) =>
+      const updatedQueueByEmail = inviteQueueByEmail.map((invite) =>
         invite.id === inviteId
           ? { ...invite, status: "accepted", respondedAt }
           : invite
       );
-      await kvStoreSet(FAMILY_EMAIL_INVITE_QUEUE_KEY(currentUserEmail), updatedQueue, {
+      if (currentUserEmail) {
+        await kvStoreSet(FAMILY_EMAIL_INVITE_QUEUE_KEY(currentUserEmail), updatedQueueByEmail, {
+          userId: FAMILY_EMAIL_INVITE_NAMESPACE,
+        });
+      }
+      const updatedQueueByUser = inviteQueueByUser.map((invite) =>
+        invite.id === inviteId
+          ? { ...invite, status: "accepted", respondedAt }
+          : invite
+      );
+      await kvStoreSet(FAMILY_USER_INVITE_QUEUE_KEY(userId), updatedQueueByUser, {
         userId: FAMILY_EMAIL_INVITE_NAMESPACE,
       });
 
@@ -348,12 +446,22 @@ export async function POST(request: Request) {
     }
 
     const respondedAt = new Date().toISOString();
-    const updatedQueue = inviteQueue.map((invite) =>
+    const updatedQueueByEmail = inviteQueueByEmail.map((invite) =>
       invite.id === inviteId
         ? { ...invite, status: "declined", respondedAt }
         : invite
     );
-    await kvStoreSet(FAMILY_EMAIL_INVITE_QUEUE_KEY(currentUserEmail), updatedQueue, {
+    if (currentUserEmail) {
+      await kvStoreSet(FAMILY_EMAIL_INVITE_QUEUE_KEY(currentUserEmail), updatedQueueByEmail, {
+        userId: FAMILY_EMAIL_INVITE_NAMESPACE,
+      });
+    }
+    const updatedQueueByUser = inviteQueueByUser.map((invite) =>
+      invite.id === inviteId
+        ? { ...invite, status: "declined", respondedAt }
+        : invite
+    );
+    await kvStoreSet(FAMILY_USER_INVITE_QUEUE_KEY(userId), updatedQueueByUser, {
       userId: FAMILY_EMAIL_INVITE_NAMESPACE,
     });
 
@@ -391,6 +499,8 @@ export async function POST(request: Request) {
     }
 
     const inviterName = group.members.find((member) => member.id === userId)?.name ?? null;
+    const existingAccountUserId = await resolveUserIdByEmail(invitedEmail);
+    const hasKepiAccount = Boolean(existingAccountUserId);
     const inviteRecord: z.infer<typeof FamilyEmailInviteSchema> = {
       id: generateId(),
       ownerId: userId,
@@ -428,6 +538,16 @@ export async function POST(request: Request) {
     await kvStoreSet(FAMILY_EMAIL_INVITE_QUEUE_KEY(invitedEmail), nextRecipientQueue, {
       userId: FAMILY_EMAIL_INVITE_NAMESPACE,
     });
+    if (existingAccountUserId) {
+      const directUserQueue = (await kvStoreGet<Array<z.infer<typeof FamilyEmailInviteSchema>>>(
+        FAMILY_USER_INVITE_QUEUE_KEY(existingAccountUserId),
+        { userId: FAMILY_EMAIL_INVITE_NAMESPACE },
+      )) ?? [];
+      const nextDirectUserQueue = [inviteRecord, ...directUserQueue].slice(0, 100);
+      await kvStoreSet(FAMILY_USER_INVITE_QUEUE_KEY(existingAccountUserId), nextDirectUserQueue, {
+        userId: FAMILY_EMAIL_INVITE_NAMESPACE,
+      });
+    }
 
     const appBase =
       process.env.NEXT_PUBLIC_APP_URL?.trim() ||
@@ -436,6 +556,7 @@ export async function POST(request: Request) {
       "http://localhost:3000";
     const normalizedBase = appBase.startsWith("http") ? appBase.replace(/\/$/u, "") : `https://${appBase.replace(/\/$/u, "")}`;
     const inviteUrl = `${normalizedBase}/travel-assistant?tab=family&familyInvite=${encodeURIComponent(group.inviteCode)}`;
+    const signUpUrl = `${normalizedBase}/sign-up?redirect_url=${encodeURIComponent(inviteUrl)}&email_address=${encodeURIComponent(invitedEmail)}`;
 
     let emailSent = false;
     let warning: string | null = null;
@@ -446,9 +567,11 @@ export async function POST(request: Request) {
         <div style="font-family:Arial,sans-serif;line-height:1.5;color:#0f172a">
           <h2 style="margin-bottom:8px;color:#0c4a6e">You're invited to a family travel group</h2>
           <p><strong>${inviterName ?? "A family member"}</strong> invited you to join <strong>${group.name}</strong> on Kepi.</p>
-          <p>When you log in, Kepi will show an in-app popup to accept or deny this invitation.</p>
+          <p>${hasKepiAccount
+            ? "When you log in, Kepi will show an in-app popup to accept or deny this invitation."
+            : "Create your Kepi account first, then the app will automatically show an in-app popup to accept or deny this invitation."}</p>
           <p style="margin:16px 0">
-            <a href="${inviteUrl}" style="background:#0284c7;color:white;text-decoration:none;padding:10px 14px;border-radius:8px;font-weight:700">Open invite</a>
+            <a href="${hasKepiAccount ? inviteUrl : signUpUrl}" style="background:#0284c7;color:white;text-decoration:none;padding:10px 14px;border-radius:8px;font-weight:700">${hasKepiAccount ? "Open invite" : "Create account & open invite"}</a>
           </p>
           <p>Invite code: <strong style="font-family:monospace;letter-spacing:0.08em">${group.inviteCode}</strong></p>
           <p style="font-size:12px;color:#475569">If the button doesn't open the app directly, log in to Kepi and open Family tab.</p>
@@ -477,6 +600,8 @@ export async function POST(request: Request) {
       ok: true,
       invite: inviteRecord,
       emailSent,
+      hasKepiAccount,
+      deliveryMode: hasKepiAccount ? "in-app-account" : "email-signup",
       warning,
     });
   }
