@@ -49,7 +49,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: "Failed to generate invite code: " + (err instanceof Error ? err.message : String(err)) }, { status: 500 });
     }
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://kepi-search.vercel.app";
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim() || process.env.APP_URL?.trim() || "https://kepitravel.com";
     const redeemUrl = `${appUrl}/redeem?code=${encodeURIComponent(record.code)}`;
 
     const resend = getResendClient();
