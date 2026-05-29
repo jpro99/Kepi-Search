@@ -56,7 +56,18 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
   const loadStyle = useCallback(async (url: string): Promise<Record<string, unknown>> => {
     const res = await fetch(url);
     const style = await res.json() as Record<string, unknown>;
-    const enc = (u: string) => `/api/maptiles?url=${encodeURIComponent(u.replace(/[?&]key=[^&]*/g, ""))}`;
+
+    const enc = (u: string): string => {
+      const clean = u.replace(/[?&]key=[^&]*/g, "").replace(/\?$/, "");
+      const tokenMatch = clean.match(/^(.*?)(\{[^}]+\}.*)$/);
+      if (tokenMatch) {
+        const base = tokenMatch[1].replace(/\/$/, "");
+        const suffix = tokenMatch[2];
+        return `/api/maptiles?url=${encodeURIComponent(base)}&suffix=${encodeURIComponent(suffix)}`;
+      }
+      return `/api/maptiles?url=${encodeURIComponent(clean)}`;
+    };
+
     const rewrite = (v: unknown): unknown => {
       if (typeof v === "string" && v.includes("api.maptiler.com")) return enc(v);
       if (Array.isArray(v)) return v.map(rewrite);

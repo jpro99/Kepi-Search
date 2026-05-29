@@ -35,8 +35,11 @@ export async function GET(req: Request): Promise<Response> {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Inject API key server-side — strip any client-supplied key first
-  target.searchParams.delete("key");
+  // Reconstruct full URL — suffix contains template tokens already substituted by MapLibre
+  const suffix = searchParams.get("suffix");
+  if (suffix) {
+    target = new URL(target.toString().replace(/\/$/, "") + "/" + decodeURIComponent(suffix));
+  }
   target.searchParams.set("key", MAPTILER_KEY);
 
   const upstream = await fetch(target.toString(), {

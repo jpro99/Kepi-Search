@@ -49,7 +49,26 @@ function isStale(iso: string) { return Date.now() - Date.parse(iso) > 10 * 60_00
 // Rewrite all MapTiler URLs in a style object to go through our server proxy.
 // This keeps the API key server-side and avoids the host_not_allowed 403.
 function proxyStyleUrls(style: Record<string, unknown>): Record<string, unknown> {
-  const enc = (url: string) => `/api/maptiles?url=${encodeURIComponent(url.replace(/[?&]key=[^&]*/g, ""))}`;
+  // Rewrite a MapTiler URL to go through our server proxy.
+  // Special case: glyphs URLs contain {fontstack} and {range} template tokens
+  // that MapLibre substitutes at runtime — they must survive as literal braces
+  // in the final URL, so we encode the base URL but leave the tokens outside.
+  const enc = (url: string): string => {
+    // Strip any existing key param
+    const clean = url.replace(/[?&]key=[^&]*/g, "").replace(/\?$/, "");
+
+    // Check for MapLibre template tokens like {range} or {fontstack}
+    // e.g. "https://api.maptiler.com/fonts/{fontstack}/{range}.pbf"
+    const tokenMatch = clean.match(/^(.*?)(\{[^}]+\}.*)$/);
+    if (tokenMatch) {
+      // Proxy just the base portion, keep the token suffix as-is
+      const base = tokenMatch[1].replace(/\/$/, "");
+      const suffix = tokenMatch[2]; // e.g. "{fontstack}/{range}.pbf"
+      return `/api/maptiles?url=${encodeURIComponent(base)}&suffix=${encodeURIComponent(suffix)}`;
+    }
+
+    return `/api/maptiles?url=${encodeURIComponent(clean)}`;
+  };
 
   const rewrite = (v: unknown): unknown => {
     if (typeof v === "string" && v.includes("api.maptiler.com")) return enc(v);
