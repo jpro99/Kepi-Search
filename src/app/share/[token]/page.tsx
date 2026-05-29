@@ -29,8 +29,9 @@ function formatTime(localTime: string): string {
   return new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
-export default async function SharePage({ params }: { params: { token: string } }) {
-  const raw = await getSafeRedisClient()?.get(`share:trip:${params.token}`);
+export default async function SharePage({ params }: { params: Promise<{ token: string }> }) {
+  const { token } = await params;
+  const raw = await getSafeRedisClient()?.get(`share:trip:${token}`);
   if (!raw) notFound();
 
   const trip = JSON.parse(typeof raw === "string" ? raw : JSON.stringify(raw)) as ShareSnapshot;
