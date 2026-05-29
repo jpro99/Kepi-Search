@@ -69,12 +69,15 @@ const OPEN_STREET_MAP_FALLBACK_STYLE: import("maplibre-gl").StyleSpecification =
 function createMaptilerRasterStyle(
   maptilerKey: string,
   variant: "streets" | "hybrid",
+  useHighDensityTiles: boolean,
 ): import("maplibre-gl").StyleSpecification {
   const encodedKey = encodeURIComponent(maptilerKey);
+  const highDensitySuffix = useHighDensityTiles ? "@2x" : "";
+  const tileSize = useHighDensityTiles ? 512 : 256;
   const tileUrl =
     variant === "hybrid"
-      ? `https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}.jpg?key=${encodedKey}`
-      : `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=${encodedKey}`;
+      ? `https://api.maptiler.com/maps/hybrid/{z}/{x}/{y}${highDensitySuffix}.jpg?key=${encodedKey}`
+      : `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}${highDensitySuffix}.png?key=${encodedKey}`;
 
   return {
     version: 8,
@@ -82,7 +85,7 @@ function createMaptilerRasterStyle(
       maptilerRaster: {
         type: "raster",
         tiles: [tileUrl],
-        tileSize: 256,
+        tileSize,
         attribution: "© MapTiler © OpenStreetMap contributors",
       },
     },
@@ -93,6 +96,10 @@ function createMaptilerRasterStyle(
         source: "maptilerRaster",
         minzoom: 0,
         maxzoom: 22,
+        paint: {
+          "raster-resampling": "linear",
+          "raster-fade-duration": 0,
+        },
       },
     ],
   };
@@ -100,6 +107,8 @@ function createMaptilerRasterStyle(
 
 export function FamilyMap({ members, locations, maptilerKey, height = 300, onMemberClick }: FamilyMapProps) {
   const MAP_LOAD_TIMEOUT_MS = 12_000;
+  const useHighDensityTiles =
+    typeof window !== "undefined" && window.devicePixelRatio >= 1.5;
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<import("maplibre-gl").Map | null>(null);
   const markersRef = useRef<Map<string, import("maplibre-gl").Marker>>(new Map());
@@ -190,7 +199,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
         const zoom = knownLocs.length === 1 ? 14 : knownLocs.length > 1 ? 10 : 4;
 
         const styleUrl = maptilerKey
-          ? createMaptilerRasterStyle(maptilerKey, "streets")
+          ? createMaptilerRasterStyle(maptilerKey, "streets", useHighDensityTiles)
           : OPEN_STREET_MAP_FALLBACK_STYLE;
 
         const map = new ml.Map({
@@ -198,7 +207,11 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
           style: styleUrl,
           center,
           zoom,
+          maxZoom: 20,
           attributionControl: false,
+          antialias: true,
+          dragRotate: false,
+          pitchWithRotate: false,
         });
 
         map.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
@@ -282,14 +295,14 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
   useEffect(() => {
     if (!mapRef.current || !maptilerKey || !ready || !usingMaptilerStyle) return;
     const style = satellite
-      ? createMaptilerRasterStyle(maptilerKey, "hybrid")
-      : createMaptilerRasterStyle(maptilerKey, "streets");
+      ? createMaptilerRasterStyle(maptilerKey, "hybrid", useHighDensityTiles)
+      : createMaptilerRasterStyle(maptilerKey, "streets", useHighDensityTiles);
     mapRef.current.setStyle(style);
     mapRef.current.once("styledata", () => {
       setMapWarning(null);
       void syncMarkers();
     });
-  }, [satellite, maptilerKey, syncMarkers, ready, usingMaptilerStyle]);
+  }, [satellite, maptilerKey, syncMarkers, ready, usingMaptilerStyle, useHighDensityTiles]);
 
   // Resize when fullscreen changes
   useEffect(() => {
