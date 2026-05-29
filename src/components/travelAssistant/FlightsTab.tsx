@@ -71,10 +71,21 @@ export function FlightsTab({ reservations, onReservationTap, onCheckStatus, onDe
   const [showPast, setShowPast] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const { upcoming, past } = useMemo(() => ({
-    upcoming: reservations.filter(r => !isCompleted(r)),
-    past: reservations.filter(r => isCompleted(r)),
-  }), [reservations]);
+  const { upcoming, past } = useMemo(() => {
+    // Deduplicate: same flightNumber + same date = same flight
+    const seen = new Set<string>();
+    const deduped = reservations.filter(r => {
+      if (!r.flightNumber) return true;
+      const key = `${r.flightNumber.replace(/\s+/g, "").toUpperCase()}_${(r.flightDate ?? r.localTime ?? "").slice(0, 10)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return {
+      upcoming: deduped.filter(r => !isCompleted(r)),
+      past: deduped.filter(r => isCompleted(r)),
+    };
+  }, [reservations]);
 
   const shown = showPast ? [...upcoming, ...past] : upcoming;
 

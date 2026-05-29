@@ -3388,7 +3388,26 @@ export default function TravelAssistantPage() {
 
   // Derive location status for AI guidance — must be after consumerReservationsSorted
   const guidanceLocationStatus = useMemo((): "away" | "at-airport" | "in-terminal" | "airborne" | "unknown" => {
-    const nextFlight = consumerReservationsSorted.find(r => r.type === "flight" && (Date.parse((r as unknown as Record<string,string>).localTime ?? "") - Date.now()) / 60_000 > -120);
+    const nowMs = Date.now();
+
+    // Check if currently airborne: a flight departed in the last 14 hours and hasn't arrived yet
+    // This is the most important case — "away" from all airports mid-ocean ≠ "away from airport"
+    const airborne = consumerReservationsSorted.find(r => {
+      if (r.type !== "flight") return false;
+      const rr = r as unknown as Record<string, string>;
+      const depLocal = rr.flightDepartureTime ?? rr.localTime ?? "";
+      const arrLocal = rr.flightArrivalTime ?? "";
+      const depMs = depLocal ? Date.parse(depLocal.replace("T"," ").slice(0, 16).replace(" ","T")) : NaN;
+      const arrMs = arrLocal ? Date.parse(arrLocal.replace("T"," ").slice(0, 16).replace(" ","T")) : NaN;
+      // If departed (depMs in past) and either not yet arrived or arrival unknown but < 14h since dep
+      const departed = !isNaN(depMs) && nowMs > depMs;
+      const notYetArrived = isNaN(arrMs) ? (nowMs - depMs < 14 * 3600_000) : nowMs < arrMs + 30 * 60_000;
+      return departed && notYetArrived;
+    });
+    if (airborne) return "airborne";
+
+    // GPS-based airport proximity
+    const nextFlight = consumerReservationsSorted.find(r => r.type === "flight" && (Date.parse((r as unknown as Record<string,string>).localTime ?? "") - nowMs) / 60_000 > -120);
     const deptIata = (nextFlight as unknown as Record<string,string> | undefined)?.flightDepartureAirport;
     const proximity = getAirportProximity(guidanceUserLat, guidanceUserLon, deptIata);
     return proximity.status === "unknown" ? "unknown" : proximity.status;
@@ -6675,39 +6694,75 @@ export default function TravelAssistantPage() {
             </section>
           ) : consumerTab === "trip" ? (
             <section className="space-y-4">
-              <NextUpCard
-                reservations={consumerReservationsSorted}
-                tripName={activeTrip?.name ?? "Your trip"}
-                onReservationTap={(id) => openDrawer("reservation", id)}
-                locationStatus={guidanceLocationStatus}
-                nearestAirport={guidanceNearestAirport}
-              />
-
-              <OnTrackButton
-                reservations={consumerReservationsSorted}
-                tripName={activeTrip?.name ?? "Your trip"}
-                locationStatus={guidanceLocationStatus}
-                nearestAirport={guidanceNearestAirport}
-              />
-              {tripDaysAway !== null && tripDaysAway <= 1 && (
-                <button
-                  type="button"
-                  onClick={() => setTravelDayOpen(true)}
-                  className="w-full rounded-2xl bg-gradient-to-r from-[#0c2461] via-[#1a56b0] to-[#0ea5e9] px-4 py-3.5 text-left shadow-lg shadow-blue-900/40 transition"
-                >
-                  <p className="text-xs font-bold uppercase tracking-widest text-sky-200">Today&apos;s travel plan</p>
-                  <div className="mt-1 flex items-center justify-between">
-                    <p className="text-lg font-bold text-white">Travel Day →</p>
-                    <span className="text-2xl">✈️</span>
+              {/* ── Airborne mode: calm, no panic ── */}
+              {guidanceLocationStatus === "airborne" ? (
+                <div className="rounded-3xl overflow-hidden bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 shadow-xl">
+                  <div className="px-5 pt-5 pb-3">
+                    <div className="flex items-center gap-3">
+                      <span className="text-3xl">✈️</span>
+                      <div>
+                        <p className="text-[11px] font-bold uppercase tracking-widest text-sky-300 opacity-80">In Flight</p>
+                        <p className="text-xl font-bold text-white leading-tight mt-0.5">You're on your way</p>
+                      </div>
+                    </div>
+                    <p className="text-sm text-sky-100/70 mt-3 leading-relaxed">
+                      Everything is taken care of. Sit back and relax — Kepi will alert you when it's time to prepare for landing.
+                    </p>
                   </div>
-                  <p className="text-xs text-sky-100 mt-0.5">Timeline · Leave by time · What to expect</p>
-                </button>
+                  {/* Next leg preview */}
+                  {nextUpcomingFlight && (() => {
+                    const nf = nextUpcomingFlight as Reservation & { flightDepartureAirport?: string; flightArrivalAirport?: string; flightNumber?: string };
+                    return nf.flightDepartureAirport && nf.flightArrivalAirport ? (
+                      <div className="mx-4 mb-4 rounded-2xl bg-white/10 px-4 py-3 flex items-center justify-between">
+                        <div>
+                          <p className="text-[10px] text-sky-200/60 font-semibold uppercase tracking-wider">Next up</p>
+                          <p className="text-white font-bold text-base mt-0.5">
+                            {nf.flightDepartureAirport} → {nf.flightArrivalAirport}
+                          </p>
+                          <p className="text-sky-200/70 text-xs mt-0.5">
+                            {nf.flightNumber ?? nf.provider} · {formatConsumerReservationTime(nextUpcomingFlight.localTime)}
+                          </p>
+                        </div>
+                        <span className="text-2xl opacity-50">›</span>
+                      </div>
+                    ) : null;
+                  })()}
+                </div>
+              ) : (
+                <>
+                  <NextUpCard
+                    reservations={consumerReservationsSorted}
+                    tripName={activeTrip?.name ?? "Your trip"}
+                    onReservationTap={(id) => openDrawer("reservation", id)}
+                    locationStatus={guidanceLocationStatus}
+                    nearestAirport={guidanceNearestAirport}
+                  />
+                  <OnTrackButton
+                    reservations={consumerReservationsSorted}
+                    tripName={activeTrip?.name ?? "Your trip"}
+                    locationStatus={guidanceLocationStatus}
+                    nearestAirport={guidanceNearestAirport}
+                  />
+                  {tripDaysAway !== null && tripDaysAway <= 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setTravelDayOpen(true)}
+                      className="w-full rounded-2xl bg-gradient-to-r from-[#0c2461] via-[#1a56b0] to-[#0ea5e9] px-4 py-3.5 text-left shadow-lg shadow-blue-900/40 transition"
+                    >
+                      <p className="text-xs font-bold uppercase tracking-widest text-sky-200">Today&apos;s travel plan</p>
+                      <div className="mt-1 flex items-center justify-between">
+                        <p className="text-lg font-bold text-white">Travel Day →</p>
+                        <span className="text-2xl">✈️</span>
+                      </div>
+                      <p className="text-xs text-sky-100 mt-0.5">Timeline · Leave by time · What to expect</p>
+                    </button>
+                  )}
+                  <GapAlerts
+                    reservations={consumerReservationsSorted}
+                    onActionTap={(tab) => navigateToConsumerTab(tab as ConsumerTab)}
+                  />
+                </>
               )}
-
-              <GapAlerts
-                reservations={consumerReservationsSorted}
-                onActionTap={(tab) => navigateToConsumerTab(tab as ConsumerTab)}
-              />
               <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
@@ -6771,10 +6826,13 @@ export default function TravelAssistantPage() {
                 </button>
               ) : null}
 
-              <AirportMode
-                reservations={consumerReservationsSorted}
-                onViewReservations={() => navigateToConsumerTab("flights")}
-              />
+              {/* Suppress AirportMode when airborne — irrelevant to someone already flying */}
+              {guidanceLocationStatus !== "airborne" && (
+                <AirportMode
+                  reservations={consumerReservationsSorted}
+                  onViewReservations={() => navigateToConsumerTab("flights")}
+                />
+              )}
 
               <ArrivalMode
                 reservations={consumerReservationsSorted}

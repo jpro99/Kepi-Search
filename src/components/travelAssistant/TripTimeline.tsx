@@ -368,16 +368,25 @@ export function TripTimeline({ reservations, tripName, tripStartDate, tripDaysAw
   const days = useMemo((): DayEntry[] => {
     if (reservations.length === 0 && !tripStartDate) return [];
 
-    const resDates = reservations.map((r) => reservationDateKey(r)).filter(Boolean).sort();
+    // Deduplicate: same flightNumber + same date = same flight, keep first
+    const seen = new Set<string>();
+    const dedupedReservations = reservations.filter(r => {
+      if (r.type !== "flight" || !r.flightNumber) return true;
+      const key = `${r.flightNumber.replace(/\s+/g, "").toUpperCase()}_${flightDateKey(r)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    const resDates = dedupedReservations.map((r) => reservationDateKey(r)).filter(Boolean).sort();
     const firstDateKey = tripStartDate?.slice(0, 10) ?? resDates[0] ?? new Date().toISOString().slice(0, 10);
     const lastDateKey = resDates[resDates.length - 1] ?? firstDateKey;
     const today = new Date().toISOString().slice(0, 10);
 
-    // Always start from the first reservation date so past days show
     const startKey = firstDateKey < today ? firstDateKey : today < lastDateKey ? today : firstDateKey;
 
     const map = new Map<string, TimelineReservation[]>();
-    for (const r of reservations) {
+    for (const r of dedupedReservations) {
       const key = reservationDateKey(r);
       if (!key) continue;
       const arr = map.get(key) ?? [];
