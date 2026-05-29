@@ -118,6 +118,13 @@ export function FamilyPanel({ isPremium, onUpgrade }: FamilyPanelProps) {
     void load();
   }, [isPremium, load]);
 
+  useEffect(() => {
+    if (!isPremium) return;
+    const handler = () => { void load(); };
+    window.addEventListener("kepi:family-reload", handler);
+    return () => window.removeEventListener("kepi:family-reload", handler);
+  }, [isPremium, load]);
+
   // Poll locations every 10s
   useEffect(() => {
     if (!isPremium) return;

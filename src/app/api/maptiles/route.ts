@@ -1,24 +1,23 @@
 import { NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
 
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
+// MAPTILER_KEY = server-only key with NO domain restrictions (for proxy use)
+// NEXT_PUBLIC_MAPTILER_KEY = browser key with domain allowlist (kept for reference only)
+// The proxy always uses the server key so MapTiler never sees "unknown origin"
 const MAPTILER_KEY =
-  process.env.NEXT_PUBLIC_MAPTILER_KEY ||
-  process.env.MAPTILER_KEY ||
-  process.env.NEXT_PUBLIC_MAPLIBRE_KEY ||
+  process.env.MAPTILER_KEY ||          // server-only, no domain restrictions — preferred
   process.env.MAPTILER_API_KEY ||
+  process.env.NEXT_PUBLIC_MAPTILER_KEY || // fallback: browser key (may fail if allowlist set)
+  process.env.NEXT_PUBLIC_MAPLIBRE_KEY ||
   "";
 
 // Proxy MapTiler requests so the API key never leaves the server.
-// MapLibre style URLs are rewritten client-side to route through here.
-// Usage: /api/maptiles?url=https://api.maptiler.com/tiles/v3/4/3/7.pbf
+// No auth gate — map tiles are not sensitive, and auth fails on unreliable
+// connections (plane WiFi, tunnels) causing the whole map to break.
+// The key itself never reaches the browser — that's the security model.
 export async function GET(req: Request): Promise<Response> {
-  // Auth gate — only signed-in users can use the proxy
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
   const { searchParams } = new URL(req.url);
   const raw = searchParams.get("url");
   if (!raw) return NextResponse.json({ error: "Missing url" }, { status: 400 });

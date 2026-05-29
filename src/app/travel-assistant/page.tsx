@@ -1841,7 +1841,7 @@ export default function TravelAssistantPage() {
         imageUrl: user.imageUrl ?? null,
       }),
     }).then(r => r.json()).then((d: { ok?: boolean; error?: string }) => {
-      if (d.ok) setToast("✅ Joined family group! Go to the Family tab to share your location.");
+      if (d.ok) { setToast("✅ Joined! Go to More → Family to share your location."); window.dispatchEvent(new CustomEvent("kepi:family-reload")); }
       else setToast(d.error ?? "Could not join family group.");
     }).catch(() => setToast("Could not join family group."));
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6364,15 +6364,14 @@ export default function TravelAssistantPage() {
               className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)]"
             />
           </label>
-          {activeDrawer.kind === "review" &&
-          (drawerDraft.type === "flight" ||
+          {(drawerDraft.type === "flight" ||
             /\bflight\b/iu.test(`${drawerDraft.title} ${drawerDraft.provider}`) ||
             /\b[A-Z]{2,3}\s?\d{1,4}[A-Z]?\b/u.test(drawerDraft.title)) ? (
-            <section className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 p-3">
-              <p className="text-xs font-semibold text-cyan-100">Flight lookup</p>
-              <div className="mt-2 grid gap-3 md:grid-cols-3">
+            <section className="rounded-xl border border-sky-200 dark:border-sky-500/40 bg-sky-50 dark:bg-sky-500/10 p-4 space-y-3">
+              <p className="text-xs font-bold uppercase tracking-wider text-sky-700 dark:text-sky-300">Flight details</p>
+              <div className="grid gap-3 grid-cols-2">
                 <label className="block">
-                  <span className="mb-1 block text-xs text-cyan-100/90">Flight number</span>
+                  <span className="mb-1 block text-xs text-sky-700 dark:text-sky-300">Flight number</span>
                   <input
                     value={drawerDraft.flightNumber ?? ""}
                     onChange={(event) =>
@@ -6383,7 +6382,7 @@ export default function TravelAssistantPage() {
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-xs text-cyan-100/90">Airline</span>
+                  <span className="mb-1 block text-xs text-sky-700 dark:text-sky-300">Airline</span>
                   <input
                     value={drawerDraft.flightAirline ?? ""}
                     onChange={(event) =>
@@ -6394,13 +6393,67 @@ export default function TravelAssistantPage() {
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-xs text-cyan-100/90">Date</span>
+                  <span className="mb-1 block text-xs text-sky-700 dark:text-sky-300">Date</span>
                   <input
                     type="date"
                     value={drawerDraft.flightDate ?? ""}
                     onChange={(event) =>
                       setDrawerDraft((prev) => ({ ...prev, flightDate: event.target.value }))
                     }
+                    className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)] text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-sky-700 dark:text-sky-300">From (IATA)</span>
+                  <input
+                    value={drawerDraft.flightDepartureAirport ?? ""}
+                    onChange={(event) => setDrawerDraft((prev) => ({ ...prev, flightDepartureAirport: event.target.value.toUpperCase() }))}
+                    placeholder="HND"
+                    className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)] text-sm font-mono"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-sky-700 dark:text-sky-300">To (IATA)</span>
+                  <input
+                    value={drawerDraft.flightArrivalAirport ?? ""}
+                    onChange={(event) => setDrawerDraft((prev) => ({ ...prev, flightArrivalAirport: event.target.value.toUpperCase() }))}
+                    placeholder="ONT"
+                    className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)] text-sm font-mono"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-sky-700 dark:text-sky-300">Depart time</span>
+                  <input
+                    value={drawerDraft.flightDepartureTime ?? ""}
+                    onChange={(event) => setDrawerDraft((prev) => ({ ...prev, flightDepartureTime: event.target.value }))}
+                    placeholder="2026-05-29 21:20"
+                    className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)] text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-sky-700 dark:text-sky-300">Arrive time</span>
+                  <input
+                    value={drawerDraft.flightArrivalTime ?? ""}
+                    onChange={(event) => setDrawerDraft((prev) => ({ ...prev, flightArrivalTime: event.target.value }))}
+                    placeholder="2026-05-30 08:00"
+                    className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)] text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-sky-700 dark:text-sky-300">Gate</span>
+                  <input
+                    value={drawerDraft.flightDepartureGate ?? ""}
+                    onChange={(event) => setDrawerDraft((prev) => ({ ...prev, flightDepartureGate: event.target.value.toUpperCase() }))}
+                    placeholder="A14"
+                    className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)] text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-sky-700 dark:text-sky-300">Terminal</span>
+                  <input
+                    value={drawerDraft.flightDepartureTerminal ?? ""}
+                    onChange={(event) => setDrawerDraft((prev) => ({ ...prev, flightDepartureTerminal: event.target.value.toUpperCase() }))}
+                    placeholder="2"
                     className="w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2 text-[var(--text-primary)] text-sm"
                   />
                 </label>

@@ -53,9 +53,18 @@ function fmtDate(localTime: string): string {
 }
 
 function isCompleted(r: Reservation): boolean {
-  const t = (r.flightDepartureTime ?? r.localTime ?? "").slice(0, 16);
-  const ms = Date.parse(t.replace(" ", "T"));
-  return !isNaN(ms) && Date.now() - ms > 4 * 3600_000;
+  // Use arrival time if available (most accurate)
+  const arrStr = (r.flightArrivalTime ?? "").slice(0, 16);
+  const arrMs = arrStr ? Date.parse(arrStr.replace(" ", "T")) : NaN;
+  if (!isNaN(arrMs)) {
+    // Flight is past if arrival was more than 1 hour ago
+    return Date.now() - arrMs > 3600_000;
+  }
+  // Fall back to departure time + generous buffer for long-haul
+  // HND→HNL is ~8h, HNL→ONT is ~5h — use 18h buffer so nothing disappears mid-flight
+  const depStr = (r.flightDepartureTime ?? r.localTime ?? "").slice(0, 16);
+  const depMs = depStr ? Date.parse(depStr.replace(" ", "T")) : NaN;
+  return !isNaN(depMs) && Date.now() - depMs > 18 * 3600_000;
 }
 
 function statusBadge(r: Reservation) {
