@@ -874,6 +874,154 @@ function resolveFlightAirports(reservation: Reservation): { departureAirport: st
   };
 }
 
+interface AirportCoordinate {
+  lat: number;
+  lon: number;
+}
+
+const AIRPORT_COORDINATES: Record<string, AirportCoordinate> = {
+  HND: { lat: 35.5494, lon: 139.7798 },
+  NRT: { lat: 35.772, lon: 140.3929 },
+  KIX: { lat: 34.4347, lon: 135.244 },
+  ITM: { lat: 34.7855, lon: 135.4382 },
+  CTS: { lat: 42.7752, lon: 141.6922 },
+  FUK: { lat: 33.5859, lon: 130.451 },
+  GMP: { lat: 37.5583, lon: 126.7906 },
+  ICN: { lat: 37.4602, lon: 126.4407 },
+  PUS: { lat: 35.1795, lon: 128.9382 },
+  HNL: { lat: 21.3187, lon: -157.9225 },
+  OGG: { lat: 20.8986, lon: -156.4305 },
+  KOA: { lat: 19.7388, lon: -156.0456 },
+  LIH: { lat: 21.975, lon: -159.3389 },
+  LAX: { lat: 33.9416, lon: -118.4085 },
+  SFO: { lat: 37.6213, lon: -122.379 },
+  SJC: { lat: 37.3639, lon: -121.9289 },
+  OAK: { lat: 37.7126, lon: -122.2197 },
+  SEA: { lat: 47.4502, lon: -122.3088 },
+  PDX: { lat: 45.5898, lon: -122.5951 },
+  SAN: { lat: 32.7338, lon: -117.1933 },
+  LAS: { lat: 36.084, lon: -115.1537 },
+  PHX: { lat: 33.4342, lon: -112.0116 },
+  DEN: { lat: 39.8561, lon: -104.6737 },
+  DFW: { lat: 32.8998, lon: -97.0403 },
+  IAH: { lat: 29.9902, lon: -95.3368 },
+  ORD: { lat: 41.9742, lon: -87.9073 },
+  ATL: { lat: 33.6407, lon: -84.4277 },
+  CLT: { lat: 35.214, lon: -80.9431 },
+  MIA: { lat: 25.7959, lon: -80.2871 },
+  JFK: { lat: 40.6413, lon: -73.7781 },
+  EWR: { lat: 40.6895, lon: -74.1745 },
+  BOS: { lat: 42.3656, lon: -71.0096 },
+  IAD: { lat: 38.9531, lon: -77.4565 },
+  YYZ: { lat: 43.6777, lon: -79.6248 },
+  YVR: { lat: 49.1967, lon: -123.1815 },
+  CDG: { lat: 49.0097, lon: 2.5479 },
+  LHR: { lat: 51.47, lon: -0.4543 },
+  AMS: { lat: 52.31, lon: 4.7683 },
+  FRA: { lat: 50.0379, lon: 8.5622 },
+  DXB: { lat: 25.2532, lon: 55.3657 },
+  SIN: { lat: 1.3644, lon: 103.9915 },
+  SYD: { lat: -33.9399, lon: 151.1753 },
+  MEL: { lat: -37.669, lon: 144.841 },
+};
+
+function getAirportCoordinate(airportCode: string): AirportCoordinate | null {
+  const normalized = airportCode.trim().toUpperCase();
+  return AIRPORT_COORDINATES[normalized] ?? null;
+}
+
+function haversineDistanceKm(a: AirportCoordinate, b: AirportCoordinate): number {
+  const toRad = (value: number): number => (value * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const deltaLat = toRad(b.lat - a.lat);
+  const deltaLon = toRad(b.lon - a.lon);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const sinDeltaLat = Math.sin(deltaLat / 2);
+  const sinDeltaLon = Math.sin(deltaLon / 2);
+  const h =
+    sinDeltaLat * sinDeltaLat +
+    Math.cos(lat1) * Math.cos(lat2) * sinDeltaLon * sinDeltaLon;
+  return 2 * earthRadiusKm * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function formatDurationCompact(valueMs: number): string {
+  if (!Number.isFinite(valueMs) || valueMs <= 0) return "0m";
+  const totalMinutes = Math.max(1, Math.round(valueMs / 60_000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours <= 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
+}
+
+interface FlightProgressSnapshot {
+  phase: "preflight" | "in-flight" | "arrived";
+  progress: number;
+  remainingMs: number;
+  totalDistanceKm: number | null;
+  coveredDistanceKm: number | null;
+  remainingDistanceKm: number | null;
+  speedKmh: number | null;
+  departureCode: string;
+  arrivalCode: string;
+}
+
+function getFlightProgressSnapshot(reservation: Reservation, nowMs = Date.now()): FlightProgressSnapshot | null {
+  if (reservation.type !== "flight") return null;
+  const departureMs = parseDateInput(reservation.flightDepartureTime || reservation.localTime);
+  if (Number.isNaN(departureMs)) return null;
+  const parsedArrivalMs = parseDateInput(reservation.flightArrivalTime ?? "");
+  const arrivalMs = !Number.isNaN(parsedArrivalMs) && parsedArrivalMs > departureMs
+    ? parsedArrivalMs
+    : departureMs + 4 * 60 * 60 * 1000;
+  const totalDurationMs = Math.max(1, arrivalMs - departureMs);
+  const elapsedMs = Math.max(0, nowMs - departureMs);
+  const progress = clamp01(elapsedMs / totalDurationMs);
+  const remainingMs = Math.max(0, arrivalMs - nowMs);
+  const phase: FlightProgressSnapshot["phase"] =
+    nowMs < departureMs
+      ? "preflight"
+      : nowMs >= arrivalMs
+        ? "arrived"
+        : "in-flight";
+
+  const airports = resolveFlightAirports(reservation);
+  const departureCoordinate = getAirportCoordinate(airports.departureAirport);
+  const arrivalCoordinate = getAirportCoordinate(airports.arrivalAirport);
+  const totalDistanceKm =
+    departureCoordinate && arrivalCoordinate
+      ? haversineDistanceKm(departureCoordinate, arrivalCoordinate)
+      : null;
+  const coveredDistanceKm = totalDistanceKm !== null ? totalDistanceKm * progress : null;
+  const remainingDistanceKm = totalDistanceKm !== null ? totalDistanceKm - (coveredDistanceKm ?? 0) : null;
+  const elapsedHours = Math.max(1 / 60, elapsedMs / 3_600_000);
+  const scheduledHours = Math.max(1 / 60, totalDurationMs / 3_600_000);
+  const speedKmh =
+    totalDistanceKm !== null
+      ? phase === "in-flight"
+        ? Math.round((coveredDistanceKm ?? totalDistanceKm * 0.5) / elapsedHours)
+        : Math.round(totalDistanceKm / scheduledHours)
+      : null;
+
+  return {
+    phase,
+    progress,
+    remainingMs,
+    totalDistanceKm,
+    coveredDistanceKm,
+    remainingDistanceKm,
+    speedKmh,
+    departureCode: airports.departureAirport,
+    arrivalCode: airports.arrivalAirport,
+  };
+}
+
 function formatBoardingPassClock(value: string): string {
   const normalized = value.trim();
   if (!normalized) {
@@ -1888,7 +2036,7 @@ export default function TravelAssistantPage() {
           setConsumerTab("family");
           const inviter = pendingInvite.inviterName?.trim() || "A family member";
           const groupName = pendingInvite.groupName?.trim() || "a family group";
-          setToast(`${inviter} invited you to ${groupName}. Review invite in Family tab.`);
+          setToastRaw(`${inviter} invited you to ${groupName}. Review invite in Family tab.`);
         })
         .catch(() => undefined);
     }, 0);
@@ -7090,6 +7238,8 @@ export default function TravelAssistantPage() {
                             (typeof inlineFlightStatus?.delayMinutes === "number" && inlineFlightStatus.delayMinutes > 0)
                           ? "bg-rose-500/20 text-rose-100 ring-rose-300/60"
                           : "bg-emerald-500/20 text-emerald-100 ring-emerald-300/60";
+                    const flightProgressSnapshot =
+                      reservation.type === "flight" ? getFlightProgressSnapshot(reservation, nowMs) : null;
                     const hotelData = reservation.type === "hotel" ? resolveHotelCardData(reservation) : null;
                     const reservationSwipeOffset = swipeOffsetByReservationId[reservation.id] ?? 0;
                     return (
@@ -7185,6 +7335,89 @@ export default function TravelAssistantPage() {
                                   </span>
                                 </p>
                               </div>
+                              {flightProgressSnapshot ? (
+                                <div className="mt-3 rounded-xl border border-slate-700 bg-slate-950/80 p-3 text-xs">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-300">
+                                      In-flight map
+                                    </p>
+                                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                                      {flightProgressSnapshot.phase === "preflight"
+                                        ? "Preflight"
+                                        : flightProgressSnapshot.phase === "in-flight"
+                                          ? "In flight"
+                                          : "Arrived"}
+                                    </p>
+                                  </div>
+                                  {(() => {
+                                    const startX = 16;
+                                    const endX = 304;
+                                    const normalizedProgress =
+                                      flightProgressSnapshot.phase === "preflight"
+                                        ? 0
+                                        : flightProgressSnapshot.phase === "arrived"
+                                          ? 1
+                                          : flightProgressSnapshot.progress;
+                                    const planeX = startX + (endX - startX) * normalizedProgress;
+                                    const curveHeight = 26 - Math.sin(normalizedProgress * Math.PI) * 14;
+                                    return (
+                                      <svg viewBox="0 0 320 44" className="mt-2 h-11 w-full" role="img" aria-label="In-flight progress map">
+                                        <defs>
+                                          <linearGradient id={`flight-progress-${reservation.id}`} x1="0%" x2="100%" y1="0%" y2="0%">
+                                            <stop offset="0%" stopColor="#38bdf8" />
+                                            <stop offset="100%" stopColor="#22d3ee" />
+                                          </linearGradient>
+                                        </defs>
+                                        <path
+                                          d={`M ${startX} 28 Q 160 4 ${endX} 28`}
+                                          fill="none"
+                                          stroke="url(#flight-progress-${reservation.id})"
+                                          strokeWidth="2.2"
+                                          strokeLinecap="round"
+                                          strokeDasharray="2.5 3"
+                                        />
+                                        <circle cx={startX} cy={28} r="3" fill="#22d3ee" />
+                                        <circle cx={endX} cy={28} r="3" fill="#22d3ee" />
+                                        <text x={startX - 2} y={41} textAnchor="start" fill="#94a3b8" fontSize="8.5" fontWeight="700">
+                                          {flightProgressSnapshot.departureCode}
+                                        </text>
+                                        <text x={endX + 2} y={41} textAnchor="end" fill="#94a3b8" fontSize="8.5" fontWeight="700">
+                                          {flightProgressSnapshot.arrivalCode}
+                                        </text>
+                                        <g transform={`translate(${planeX}, ${curveHeight})`}>
+                                          <path d="M 0 -5 L 8 0 L 0 5 L 2.4 0 Z" fill="#e2e8f0" />
+                                        </g>
+                                      </svg>
+                                    );
+                                  })()}
+                                  <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] text-slate-200">
+                                    <p>
+                                      <span className="block text-[10px] uppercase tracking-[0.12em] text-slate-400">Time left</span>
+                                      <span className="font-semibold">
+                                        {flightProgressSnapshot.phase === "arrived"
+                                          ? "0m"
+                                          : formatDurationCompact(flightProgressSnapshot.remainingMs)}
+                                      </span>
+                                    </p>
+                                    <p>
+                                      <span className="block text-[10px] uppercase tracking-[0.12em] text-slate-400">Speed</span>
+                                      <span className="font-semibold">
+                                        {typeof flightProgressSnapshot.speedKmh === "number"
+                                          ? `${flightProgressSnapshot.speedKmh} km/h`
+                                          : "Estimating"}
+                                      </span>
+                                    </p>
+                                    <p className="text-right">
+                                      <span className="block text-[10px] uppercase tracking-[0.12em] text-slate-400">Distance left</span>
+                                      <span className="font-semibold">
+                                        {typeof flightProgressSnapshot.remainingDistanceKm === "number"
+                                          ? `${Math.max(0, Math.round(flightProgressSnapshot.remainingDistanceKm))} km`
+                                          : "—"}
+                                      </span>
+                                    </p>
+                                  </div>
+                                </div>
+                              ) : null}
                             </div>
                           ) : reservation.type === "hotel" && hotelData ? (
                             <div className="rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-100 via-amber-50 to-white p-4 shadow-[0_12px_30px_-26px_rgba(120,53,15,0.6)] dark:border-amber-400/40 dark:from-amber-500/20 dark:via-amber-500/10 dark:to-slate-900">

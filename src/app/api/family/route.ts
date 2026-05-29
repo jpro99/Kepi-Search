@@ -42,6 +42,7 @@ const LocationSchema = z.object({
   lat: z.number().min(-90).max(90),
   lon: z.number().min(-180).max(180),
   accuracy: z.number().optional(),
+  speedKmh: z.number().optional(),
   updatedAt: z.string(),
   memberId: z.string(),
   label: z.string().optional(),
@@ -248,6 +249,7 @@ export async function POST(request: Request) {
     lat: z.number().optional(),
     lon: z.number().optional(),
     accuracy: z.number().optional(),
+    speedKmh: z.number().optional(),
     label: z.string().max(60).optional(),
     memberId: z.string().optional(),
     name: z.string().max(60).optional(),
@@ -480,7 +482,7 @@ export async function POST(request: Request) {
   }
 
   if (action === "update-location") {
-    const { lat, lon, accuracy, label } = parsed.data;
+    const { lat, lon, accuracy, speedKmh, label } = parsed.data;
     if (lat === undefined || lon === undefined) {
       return NextResponse.json({ error: "lat and lon required" }, { status: 400 });
     }
@@ -489,6 +491,7 @@ export async function POST(request: Request) {
     const location: z.infer<typeof LocationSchema> = {
       lat, lon,
       accuracy: accuracy ?? undefined,
+      speedKmh: typeof speedKmh === "number" && Number.isFinite(speedKmh) ? speedKmh : undefined,
       updatedAt: new Date().toISOString(),
       memberId: userId,
       label: label ?? undefined,

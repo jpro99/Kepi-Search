@@ -7,6 +7,8 @@ import { useEffect, useRef, useCallback, useState } from "react";
 interface LocationPoint {
   lat: number;
   lon: number;
+  accuracy?: number;
+  speedKmh?: number;
   updatedAt: string;
   memberId: string;
   label?: string;
@@ -36,6 +38,21 @@ function timeAgo(iso: string): string {
   if (diff < 1) return "just now";
   if (diff < 60) return `${diff}m ago`;
   return `${Math.floor(diff / 60)}h ago`;
+}
+
+function haversineDistanceMeters(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const toRad = (value: number): number => (value * Math.PI) / 180;
+  const earthRadiusMeters = 6_371_000;
+  const deltaLat = toRad(bLat - aLat);
+  const deltaLon = toRad(bLon - aLon);
+  const lat1 = toRad(aLat);
+  const lat2 = toRad(bLat);
+  const sinDeltaLat = Math.sin(deltaLat / 2);
+  const sinDeltaLon = Math.sin(deltaLon / 2);
+  const h =
+    sinDeltaLat * sinDeltaLat +
+    Math.cos(lat1) * Math.cos(lat2) * sinDeltaLon * sinDeltaLon;
+  return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
 function getWalkingDirectionsUrl(lat: number, lon: number): string {
@@ -112,6 +129,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<import("maplibre-gl").Map | null>(null);
   const markersRef = useRef<Map<string, import("maplibre-gl").Marker>>(new Map());
+  const lastFollowCenterRef = useRef<{ lat: number; lon: number; atMs: number } | null>(null);
   const fallbackAppliedRef = useRef(false);
   const [satellite, setSatellite] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -327,12 +345,27 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
 
   useEffect(() => {
     if (!mapRef.current || !selLoc || !followSelected) return;
-    mapRef.current.flyTo({
+    const nowMs = Date.now();
+    const previousCenter = lastFollowCenterRef.current;
+    const movedMeters = previousCenter
+      ? haversineDistanceMeters(previousCenter.lat, previousCenter.lon, selLoc.lat, selLoc.lon)
+      : Number.POSITIVE_INFINITY;
+    const shouldRecenter =
+      !previousCenter || movedMeters > 35 || nowMs - previousCenter.atMs > 45_000;
+    if (!shouldRecenter) {
+      return;
+    }
+    mapRef.current.easeTo({
       center: [selLoc.lon, selLoc.lat],
       zoom: Math.max(mapRef.current.getZoom(), 14),
       essential: true,
-      speed: 0.7,
+      duration: 800,
     });
+    lastFollowCenterRef.current = {
+      lat: selLoc.lat,
+      lon: selLoc.lon,
+      atMs: nowMs,
+    };
   }, [followSelected, selLoc]);
 
   const mapH = fullscreen ? "100dvh" : height;
@@ -402,6 +435,14 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
                 <p className="text-xs text-slate-500">
                   {isStale(selLoc.updatedAt) ? `⚠ ${timeAgo(selLoc.updatedAt)} — may be outdated` : `🟢 Live · ${timeAgo(selLoc.updatedAt)}`}
                 </p>
+                <div className="mt-1 flex flex-wrap gap-1 text-[11px] text-slate-500 dark:text-slate-400">
+                  {typeof selLoc.accuracy === "number" ? (
+                    <span>GPS ±{Math.round(selLoc.accuracy)}m</span>
+                  ) : null}
+                  {typeof selLoc.speedKmh === "number" ? (
+                    <span>• {Math.round(selLoc.speedKmh)} km/h</span>
+                  ) : null}
+                </div>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   <button
                     type="button"

@@ -8,6 +8,7 @@ interface LocationPoint {
   lat: number;
   lon: number;
   accuracy?: number;
+  speedKmh?: number;
   updatedAt: string;
   memberId: string;
   label?: string;
@@ -70,6 +71,38 @@ function isStale(iso: string): boolean {
 const INVITE_QUERY_PARAM = "familyInvite";
 const LIVE_SHARING_STORAGE_KEY = "kepi-family-live-sharing-enabled";
 const LOCATION_SYNC_THROTTLE_MS = 15_000;
+const MIN_MOVEMENT_METERS = 12;
+const MAX_GROUND_SPEED_MPS = 95;
+const HARD_ACCURACY_LIMIT_METERS = 260;
+
+interface LocationSample {
+  lat: number;
+  lon: number;
+  accuracy: number;
+  timestampMs: number;
+}
+
+function haversineDistanceMeters(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const toRad = (value: number): number => (value * Math.PI) / 180;
+  const earthRadiusMeters = 6_371_000;
+  const deltaLat = toRad(bLat - aLat);
+  const deltaLon = toRad(bLon - aLon);
+  const lat1 = toRad(aLat);
+  const lat2 = toRad(bLat);
+  const sinDeltaLat = Math.sin(deltaLat / 2);
+  const sinDeltaLon = Math.sin(deltaLon / 2);
+  const h =
+    sinDeltaLat * sinDeltaLat +
+    Math.cos(lat1) * Math.cos(lat2) * sinDeltaLon * sinDeltaLon;
+  return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function normalizeAccuracyMeters(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return 999;
+  }
+  return Math.max(3, Math.min(5000, value));
+}
 
 function toUpperInviteCode(value: string): string {
   return value.trim().toUpperCase().replaceAll(/[^A-Z0-9]/g, "");
@@ -114,6 +147,8 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
   const [pendingEmailInvites, setPendingEmailInvites] = useState<PendingFamilyEmailInvite[]>([]);
   const watchIdRef = useRef<number | null>(null);
   const lastLocationSentAtRef = useRef<number>(0);
+  const lastAcceptedSampleRef = useRef<LocationSample | null>(null);
+  const lastPostedSampleRef = useRef<LocationSample | null>(null);
   const geolocationSupported = typeof navigator !== "undefined" && Boolean(navigator.geolocation);
   const [liveSharingEnabled, setLiveSharingEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
@@ -230,6 +265,8 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
+      lastAcceptedSampleRef.current = null;
+      lastPostedSampleRef.current = null;
       setLiveSharingEnabled(false);
       if (typeof window !== "undefined") {
         window.localStorage.setItem(LIVE_SHARING_STORAGE_KEY, "false");
@@ -288,17 +325,79 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
 
   const pushLocationUpdate = useCallback(async (position: GeolocationPosition) => {
     const now = Date.now();
-    if (now - lastLocationSentAtRef.current < LOCATION_SYNC_THROTTLE_MS) {
+    const rawSample: LocationSample = {
+      lat: position.coords.latitude,
+      lon: position.coords.longitude,
+      accuracy: normalizeAccuracyMeters(position.coords.accuracy),
+      timestampMs: Number.isFinite(position.timestamp) ? position.timestamp : now,
+    };
+    const previousSample = lastAcceptedSampleRef.current;
+
+    if (previousSample && rawSample.accuracy > HARD_ACCURACY_LIMIT_METERS) {
       return true;
     }
+
+    let speedMps: number | null = null;
+    let movementMetersFromPrevious = 0;
+    if (previousSample) {
+      const elapsedSec = Math.max(1, (rawSample.timestampMs - previousSample.timestampMs) / 1000);
+      movementMetersFromPrevious = haversineDistanceMeters(
+        previousSample.lat,
+        previousSample.lon,
+        rawSample.lat,
+        rawSample.lon,
+      );
+      speedMps = movementMetersFromPrevious / elapsedSec;
+      const likelyJitterDistance = Math.max(MIN_MOVEMENT_METERS, rawSample.accuracy * 0.55);
+      if (movementMetersFromPrevious < likelyJitterDistance && elapsedSec < 18) {
+        return true;
+      }
+      if (speedMps > MAX_GROUND_SPEED_MPS && movementMetersFromPrevious > 300) {
+        return true;
+      }
+    }
+
+    const smoothingAlpha =
+      rawSample.accuracy <= 20
+        ? 0.82
+        : rawSample.accuracy <= 45
+          ? 0.68
+          : 0.5;
+    const smoothedSample: LocationSample = previousSample
+      ? {
+          lat: previousSample.lat + (rawSample.lat - previousSample.lat) * smoothingAlpha,
+          lon: previousSample.lon + (rawSample.lon - previousSample.lon) * smoothingAlpha,
+          accuracy: rawSample.accuracy,
+          timestampMs: rawSample.timestampMs,
+        }
+      : rawSample;
+
+    const postedSample = lastPostedSampleRef.current;
+    const movementMetersFromPosted = postedSample
+      ? haversineDistanceMeters(postedSample.lat, postedSample.lon, smoothedSample.lat, smoothedSample.lon)
+      : Number.POSITIVE_INFINITY;
+    if (postedSample && now - lastLocationSentAtRef.current < LOCATION_SYNC_THROTTLE_MS && movementMetersFromPosted < 32) {
+      lastAcceptedSampleRef.current = smoothedSample;
+      return true;
+    }
+    if (postedSample && movementMetersFromPosted < MIN_MOVEMENT_METERS && now - lastLocationSentAtRef.current < 45_000) {
+      lastAcceptedSampleRef.current = smoothedSample;
+      return true;
+    }
+
+    const speedKmh = speedMps !== null && Number.isFinite(speedMps)
+      ? Math.max(0, Math.min(1100, Math.round(speedMps * 3.6)))
+      : undefined;
+
     const res = await fetch("/api/family", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "update-location",
-        lat: position.coords.latitude,
-        lon: position.coords.longitude,
-        accuracy: position.coords.accuracy,
+        lat: smoothedSample.lat,
+        lon: smoothedSample.lon,
+        accuracy: smoothedSample.accuracy,
+        speedKmh,
       }),
     });
     const payload = await res.json().catch(() => ({})) as { ok?: boolean; location?: LocationPoint; error?: string };
@@ -311,6 +410,8 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
       ...previous,
       [syncedLocation.memberId]: syncedLocation,
     }));
+    lastAcceptedSampleRef.current = smoothedSample;
+    lastPostedSampleRef.current = smoothedSample;
     return true;
   }, []);
 
@@ -319,6 +420,8 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
+    lastAcceptedSampleRef.current = null;
+    lastPostedSampleRef.current = null;
     setLiveSharingEnabled(false);
     if (typeof window !== "undefined") {
       window.localStorage.setItem(LIVE_SHARING_STORAGE_KEY, "false");
@@ -387,7 +490,7 @@ export function FamilyPanel({ isPremium, onUpgrade, maptilerKey }: FamilyPanelPr
         }
         setMessage("Live location interrupted. Tap 'Share live' to retry.");
       },
-      { enableHighAccuracy: true, timeout: 18_000, maximumAge: 8_000 },
+      { enableHighAccuracy: false, timeout: 20_000, maximumAge: 10_000 },
     );
 
     if (typeof window !== "undefined") {
