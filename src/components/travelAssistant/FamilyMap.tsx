@@ -38,6 +38,13 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 60)}h ago`;
 }
 
+function getWalkingDirectionsUrl(lat: number, lon: number): string {
+  if (typeof navigator !== "undefined" && /iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+    return `https://maps.apple.com/?daddr=${lat},${lon}&dirflg=w`;
+  }
+  return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&travelmode=walking`;
+}
+
 const OPEN_STREET_MAP_FALLBACK_STYLE: import("maplibre-gl").StyleSpecification = {
   version: 8,
   sources: {
@@ -100,6 +107,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
   const [satellite, setSatellite] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [followSelected, setFollowSelected] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
   const [mapWarning, setMapWarning] = useState<string | null>(null);
   const [usingMaptilerStyle, setUsingMaptilerStyle] = useState(Boolean(maptilerKey));
@@ -127,7 +135,13 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
     wrap.appendChild(av);
     wrap.appendChild(lbl);
     wrap.addEventListener("click", () => {
-      setSelected(p => p === member.id ? null : member.id);
+      setSelected((previousSelected) => {
+        const nextSelected = previousSelected === member.id ? null : member.id;
+        if (nextSelected === null) {
+          setFollowSelected(false);
+        }
+        return nextSelected;
+      });
       onMemberClick?.(member.id);
     });
     return wrap;
@@ -298,6 +312,16 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
   const selMember = selected ? members.find(m => m.id === selected) : null;
   const selLoc = selected ? locations[selected] : null;
 
+  useEffect(() => {
+    if (!mapRef.current || !selLoc || !followSelected) return;
+    mapRef.current.flyTo({
+      center: [selLoc.lon, selLoc.lat],
+      zoom: Math.max(mapRef.current.getZoom(), 14),
+      essential: true,
+      speed: 0.7,
+    });
+  }, [followSelected, selLoc]);
+
   const mapH = fullscreen ? "100dvh" : height;
 
   return (
@@ -365,8 +389,39 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
                 <p className="text-xs text-slate-500">
                   {isStale(selLoc.updatedAt) ? `⚠ ${timeAgo(selLoc.updatedAt)} — may be outdated` : `🟢 Live · ${timeAgo(selLoc.updatedAt)}`}
                 </p>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.open(getWalkingDirectionsUrl(selLoc.lat, selLoc.lon), "_blank", "noopener,noreferrer");
+                    }}
+                    className="rounded-md bg-sky-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-sky-500"
+                  >
+                    Walk there
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFollowSelected((value) => !value)}
+                    className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
+                      followSelected
+                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200"
+                        : "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-100"
+                    }`}
+                  >
+                    {followSelected ? "Following" : "Follow live"}
+                  </button>
+                </div>
               </div>
-              <button type="button" onClick={() => setSelected(null)} className="ml-auto shrink-0 text-slate-400 text-lg">✕</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelected(null);
+                  setFollowSelected(false);
+                }}
+                className="ml-auto shrink-0 text-slate-400 text-lg"
+              >
+                ✕
+              </button>
             </div>
           </div>
         )}
