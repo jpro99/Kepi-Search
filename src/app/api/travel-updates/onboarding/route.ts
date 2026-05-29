@@ -5,6 +5,7 @@ import { logger } from "@/lib/logger";
 import { enforceRateLimit } from "@/lib/rateLimit";
 import { kvStoreDel, kvStoreGet, kvStoreSet } from "@/lib/travelAssistant/kvStore";
 import { generateId } from "@/lib/utils/generateId";
+import { getSubscriptionRecord, isSubscriptionActive } from "@/lib/billing/subscriptionStore";
 
 const ONBOARDING_COMPLETE_KEY = "onboarding-complete";
 const ONBOARDING_PROGRESS_KEY = "onboarding-progress";
@@ -78,10 +79,26 @@ export async function GET(req: Request) {
     );
   }
 
-  const complete = await kvStoreGet<boolean>(ONBOARDING_COMPLETE_KEY, { userId });
+  let isComplete = Boolean(await kvStoreGet<boolean>(ONBOARDING_COMPLETE_KEY, { userId }));
   const notificationsSeenRaw = await kvStoreGet<string | boolean | null>(ONBOARDING_NOTIFICATIONS_SEEN_KEY, { userId });
   const notificationsSeen = Boolean(notificationsSeenRaw);
-  if (complete === true) {
+
+  // Auto-complete onboarding for users with active subscription or lifetime access.
+  // Prevents the modal from showing on every refresh for paying users whose
+  // completion flag wasn't stored (e.g. redeemed a code before running onboarding).
+  if (!isComplete) {
+    try {
+      const sub = await getSubscriptionRecord(userId);
+      if (isSubscriptionActive(sub) || sub.lifetimePlan || (sub.trialExpiresAt && Date.parse(sub.trialExpiresAt) > Date.now())) {
+        await kvStoreSet<boolean>(ONBOARDING_COMPLETE_KEY, true, { userId });
+        isComplete = true;
+      }
+    } catch {
+      // Non-fatal — proceed with normal onboarding flow
+    }
+  }
+
+  if (isComplete) {
     return NextResponse.json(
       {
         complete: true,

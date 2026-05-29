@@ -48,51 +48,16 @@ function isStale(iso: string) { return Date.now() - Date.parse(iso) > 10 * 60_00
 /* ─── Map style builders ─────────────────────────────────────── */
 // Rewrite all MapTiler URLs in a style object to go through our server proxy.
 // This keeps the API key server-side and avoids the host_not_allowed 403.
-function proxyStyleUrls(style: Record<string, unknown>, origin: string): Record<string, unknown> {
-  // Rewrite all MapTiler URLs to go through our server proxy.
-  // Rules:
-  // 1. Sprite URLs must be absolute — prefix with origin
-  // 2. Glyphs URLs have {fontstack}/{range} tokens that MapLibre substitutes
-  //    at runtime — tokens must stay as literal braces, not percent-encoded
-  // 3. All other MapTiler URLs become absolute proxy paths
-
-  const proxyUrl = (url: string): string => {
-    const clean = url.replace(/[?&]key=[^&]*/g, "").replace(/\?$/, "");
-    const tokenMatch = clean.match(/^(.*?)(\{[^}]+\}.*)$/);
-    if (tokenMatch) {
-      const base = tokenMatch[1].replace(/\/$/, "");
-      const suffix = tokenMatch[2]; // kept unencoded so MapLibre can substitute
-      // Must be absolute for MapLibre
-      return `${origin}/api/maptiles?url=${encodeURIComponent(base)}&suffix=${suffix}`;
-    }
-    return `${origin}/api/maptiles?url=${encodeURIComponent(clean)}`;
-  };
-
-  const rewrite = (v: unknown, key?: string): unknown => {
-    if (typeof v === "string" && v.includes("api.maptiler.com")) {
-      return proxyUrl(v);
-    }
-    if (Array.isArray(v)) return v.map(item => rewrite(item));
-    if (v && typeof v === "object") {
-      return Object.fromEntries(
-        Object.entries(v as Record<string, unknown>).map(([k, val]) => [k, rewrite(val, k)])
-      );
-    }
-    return v;
-  };
-
-  return rewrite(style) as Record<string, unknown>;
-}
-
 async function loadProxiedStyle(styleUrl: string): Promise<Record<string, unknown>> {
-  // The style JSON itself must also go through the proxy —
-  // direct browser fetch to MapTiler fails with host_not_allowed
+  // Fetch the style JSON through our proxy (direct MapTiler fetch is blocked).
+  // We do NOT rewrite URLs inside the style — transformRequest handles all
+  // subsequent MapTiler requests that MapLibre makes after loading the style.
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const proxiedStyleUrl = `${origin}/api/maptiles?url=${encodeURIComponent(styleUrl.replace(/[?&]key=[^&]*/g, "").replace(/\?$/, ""))}`;
-  const res = await fetch(proxiedStyleUrl);
+  const clean = styleUrl.replace(/[?&]key=[^&]*/g, "").replace(/\?$/, "");
+  const proxiedUrl = `${origin}/api/maptiles?url=${encodeURIComponent(clean)}`;
+  const res = await fetch(proxiedUrl);
   if (!res.ok) throw new Error(`Style fetch failed: ${res.status}`);
-  const style = await res.json() as Record<string, unknown>;
-  return proxyStyleUrls(style, origin);
+  return res.json() as Promise<Record<string, unknown>>;
 }
 
 function streetsStyleUrl(key: string) {

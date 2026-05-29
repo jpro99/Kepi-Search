@@ -1820,19 +1820,6 @@ export default function TravelAssistantPage() {
     return () => { if (guidanceGpsWatchRef.current !== null) navigator.geolocation.clearWatch(guidanceGpsWatchRef.current); };
   }, []);
 
-  // Derive location status for AI guidance — uses the next departure airport
-  const guidanceLocationStatus = useMemo((): "away" | "at-airport" | "in-terminal" | "airborne" | "unknown" => {
-    const nextFlight = consumerReservationsSorted.find(r => r.type === "flight" && (Date.parse((r as unknown as Record<string,string>).localTime ?? "") - Date.now()) / 60_000 > -120);
-    const deptIata = (nextFlight as unknown as Record<string,string> | undefined)?.flightDepartureAirport;
-    const proximity = getAirportProximity(guidanceUserLat, guidanceUserLon, deptIata);
-    return proximity.status === "unknown" ? "unknown" : proximity.status;
-  }, [guidanceUserLat, guidanceUserLon, consumerReservationsSorted]);
-
-  const guidanceNearestAirport = useMemo(() => {
-    const proximity = getAirportProximity(guidanceUserLat, guidanceUserLon, undefined);
-    return proximity.airport?.iata ?? "";
-  }, [guidanceUserLat, guidanceUserLon]);
-
   // Auto-join family group if ?joinFamily=CODE in URL
   useEffect(() => {
     const joinCode = searchParams.get("joinFamily");
@@ -3396,6 +3383,20 @@ export default function TravelAssistantPage() {
       return leftMs - rightMs;
     });
   }, [consumerDisplayReservations]);
+
+  // Derive location status for AI guidance — must be after consumerReservationsSorted
+  const guidanceLocationStatus = useMemo((): "away" | "at-airport" | "in-terminal" | "airborne" | "unknown" => {
+    const nextFlight = consumerReservationsSorted.find(r => r.type === "flight" && (Date.parse((r as unknown as Record<string,string>).localTime ?? "") - Date.now()) / 60_000 > -120);
+    const deptIata = (nextFlight as unknown as Record<string,string> | undefined)?.flightDepartureAirport;
+    const proximity = getAirportProximity(guidanceUserLat, guidanceUserLon, deptIata);
+    return proximity.status === "unknown" ? "unknown" : proximity.status;
+  }, [guidanceUserLat, guidanceUserLon, consumerReservationsSorted]);
+
+  const guidanceNearestAirport = useMemo(() => {
+    const proximity = getAirportProximity(guidanceUserLat, guidanceUserLon, undefined);
+    return proximity.airport?.iata ?? "";
+  }, [guidanceUserLat, guidanceUserLon]);
+
   const nextUpcomingFlight = useMemo(() => {
     const nowMs = new Date().getTime();
     return consumerReservationsSorted.find((r) => {
