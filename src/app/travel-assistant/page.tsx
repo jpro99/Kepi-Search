@@ -182,6 +182,14 @@ interface Reservation extends ReservationDraft {
   source: "imported" | "manual" | "review-accepted";
 }
 
+// Journey phase — single source of truth for where the user is in their trip
+type JourneyPhase =
+  | { kind: "pre-trip"; daysUntil: number; nextFlight: Reservation }
+  | { kind: "airborne"; onFlight: Reservation; landingAt: string; landingIn: string }
+  | { kind: "just-landed"; flight: Reservation; landedMinutesAgo: number }
+  | { kind: "at-destination"; destination: string }
+  | { kind: "no-trip" };
+
 interface ReviewItem {
   id: string;
   reasons: string[];
@@ -3442,13 +3450,6 @@ export default function TravelAssistantPage() {
 
   // ── Single source of truth: where is the user right now in their journey? ──
   // Apple principle: one phase drives the entire app — Trip, Flights, everything.
-  type JourneyPhase =
-    | { kind: "pre-trip"; daysUntil: number; nextFlight: Reservation }
-    | { kind: "airborne"; onFlight: Reservation; landingAt: string; landingIn: string }
-    | { kind: "just-landed"; flight: Reservation; landedMinutesAgo: number }
-    | { kind: "at-destination"; destination: string }
-    | { kind: "no-trip" };
-
   const journeyPhase = useMemo((): JourneyPhase => {
     const nowMs = Date.now();
     const flights = consumerReservationsSorted.filter(r => r.type === "flight");
