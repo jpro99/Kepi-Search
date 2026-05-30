@@ -126,6 +126,8 @@ type VisibilityMode = "all-members" | "organizer-only";
 type DisruptionScenario = "none" | "missed-flight" | "train-delay" | "ride-no-show";
 type TimelineSectionTab = "reservations" | "documents" | "packing";
 type ConsumerTab = "trip" | "flights" | "hotels" | "map" | "more";
+
+const FAMILY_SHARING_PREF_KEY = "kepi:family-sharing-active";
 type AirportTransportChoice = "driving-myself" | "getting-dropped-off" | "uber-lyft" | "train-bus" | "other";
 
 interface LocationPoint {
@@ -1820,7 +1822,6 @@ export default function TravelAssistantPage() {
   const guidanceGpsWatchRef = useRef<number | null>(null);
   const familyWatchRef = useRef<number | null>(null);
   const familySendingRef = useRef(false);
-  const FAMILY_SHARING_PREF_KEY = "kepi:family-sharing-active";
 
   const sendFamilyLocation = useCallback(async (lat: number, lon: number, accuracy?: number) => {
     if (familySendingRef.current) return;
@@ -1884,9 +1885,9 @@ export default function TravelAssistantPage() {
       window.removeEventListener("kepi:family-start-sharing", onStart);
       window.removeEventListener("kepi:family-stop-sharing", onStop);
       if (familyWatchRef.current !== null) { navigator.geolocation.clearWatch(familyWatchRef.current); familyWatchRef.current = null; }
+      if (guidanceGpsWatchRef.current !== null) { navigator.geolocation.clearWatch(guidanceGpsWatchRef.current); guidanceGpsWatchRef.current = null; }
     };
-    return () => { if (guidanceGpsWatchRef.current !== null) navigator.geolocation.clearWatch(guidanceGpsWatchRef.current); };
-  }, []);
+  }, [startFamilyWatch, stopFamilyWatch]);
 
   // Auto-join family group if ?joinFamily=CODE in URL
   useEffect(() => {
@@ -7008,6 +7009,41 @@ export default function TravelAssistantPage() {
                   <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400">Trip complete</p>
                   <p className="text-xl font-black text-slate-900 dark:text-white mt-1">You made it to {journeyPhase.destination} ✅</p>
                   <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">All flights completed. Enjoy your trip!</p>
+                </div>
+
+              ) : journeyPhase.kind === "no-trip" ? (
+                /* ── WELCOME — new user, no trips yet ── */
+                <div className="rounded-3xl overflow-hidden bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 shadow-xl">
+                  <div className="px-5 pt-6 pb-4">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-sky-300/70">Welcome to Kepi</p>
+                    <p className="text-2xl font-black text-white mt-1">Your travel assistant ✈️</p>
+                    <p className="text-sky-100/70 text-sm mt-3 leading-relaxed">
+                      Kepi keeps track of everything so you can relax. Forward a confirmation email or add a flight to get started.
+                    </p>
+                  </div>
+                  <div className="mx-4 mb-4 space-y-2">
+                    {[
+                      { icon: "🛫", tab: "Flights" as ConsumerTab, label: "Flights", desc: "Gate · terminal · live status · baggage claim" },
+                      { icon: "🏨", tab: "Hotels" as ConsumerTab, label: "Hotels", desc: "Check-in · check-out · confirmation" },
+                      { icon: "🗺", tab: "map" as ConsumerTab, label: "Map", desc: "Family location sharing in real time" },
+                    ].map(({ icon, tab, label, desc }) => (
+                      <button key={label} type="button"
+                        onClick={() => tab === "map" ? router.push("/travel-assistant/live-map") : navigateToConsumerTab(tab)}
+                        className="w-full rounded-2xl bg-white/10 border border-white/10 px-4 py-3 text-left flex items-center gap-3 hover:bg-white/15 transition">
+                        <span className="text-xl">{icon}</span>
+                        <div>
+                          <p className="text-white font-semibold text-sm">{label}</p>
+                          <p className="text-white/50 text-xs">{desc}</p>
+                        </div>
+                        <span className="ml-auto text-white/30">›</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mx-4 mb-4 rounded-2xl bg-white/8 border border-white/10 px-4 py-3">
+                    <p className="text-white/60 text-xs leading-relaxed">
+                      💡 <span className="text-white/80 font-medium">Tip:</span> Forward any flight or hotel confirmation email to your Kepi address and it will appear here automatically.
+                    </p>
+                  </div>
                 </div>
 
               ) : null}
