@@ -103,8 +103,14 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const locale = await getLocale();
-  const messages = await getMessages();
+  let locale = "en";
+  let messages = {};
+  try {
+    locale = await getLocale();
+    messages = await getMessages();
+  } catch {
+    // Use defaults if i18n fails — non-fatal
+  }
 
   return (
     <html

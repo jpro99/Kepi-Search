@@ -138,7 +138,12 @@ const faqs = [
 export default async function Home() {
   const { userId } = await auth();
   const authCtaHref = userId ? "/travel-assistant" : "/sign-up";
-  const subscriptionRecord = userId ? await getSubscriptionRecord(userId) : null;
+  let subscriptionRecord = null;
+  try {
+    subscriptionRecord = userId ? await getSubscriptionRecord(userId) : null;
+  } catch {
+    // Non-fatal — show page without subscription state
+  }
   const hasProAccess = Boolean(
     subscriptionRecord &&
       (subscriptionRecord.lifetimePlan ||

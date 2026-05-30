@@ -156,7 +156,10 @@ async function getClerkDisplayName(userId: string): Promise<string | null> {
       || user.emailAddresses[0]?.emailAddress?.split("@")[0]
       || null;
     return name || null;
-  } catch { return null; }
+  } catch (e) {
+    logger.warn("getClerkDisplayName failed", { userId, error: e instanceof Error ? e.message : "unknown" });
+    return null;
+  }
 }
 
 // ── Resolve membership record, handling all corrupted formats ────────────────
