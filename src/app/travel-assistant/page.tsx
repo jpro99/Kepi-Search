@@ -3440,6 +3440,67 @@ export default function TravelAssistantPage() {
     }) ?? null;
   }, [consumerReservationsSorted]);
 
+  // ── Single source of truth: where is the user right now in their journey? ──
+  // Apple principle: one phase drives the entire app — Trip, Flights, everything.
+  type JourneyPhase =
+    | { kind: "pre-trip"; daysUntil: number; nextFlight: Reservation }
+    | { kind: "airborne"; onFlight: Reservation; landingAt: string; landingIn: string }
+    | { kind: "just-landed"; flight: Reservation; landedMinutesAgo: number }
+    | { kind: "at-destination"; destination: string }
+    | { kind: "no-trip" };
+
+  const journeyPhase = useMemo((): JourneyPhase => {
+    const nowMs = Date.now();
+    const flights = consumerReservationsSorted.filter(r => r.type === "flight");
+
+    for (const r of flights) {
+      const rr = r as Reservation & Record<string, string | undefined>;
+      const depMs = parseDateInput(rr.flightDepartureTime ?? rr.localTime ?? "");
+      const arrMs = parseDateInput(rr.flightArrivalTime ?? "");
+      const depValid = !isNaN(depMs);
+      const arrValid = !isNaN(arrMs);
+      const departed = depValid && nowMs > depMs;
+      const arrived = arrValid && nowMs > arrMs + 30 * 60_000;
+
+      if (departed && !arrived) {
+        // Currently airborne on this flight
+        const minsLeft = arrValid ? Math.max(0, Math.round((arrMs - nowMs) / 60_000)) : null;
+        const landingIn = minsLeft !== null
+          ? minsLeft < 60 ? `${minsLeft} min` : `${Math.floor(minsLeft / 60)}h ${minsLeft % 60}m`
+          : "en route";
+        return {
+          kind: "airborne",
+          onFlight: r,
+          landingAt: rr.flightArrivalAirport ?? "",
+          landingIn,
+        };
+      }
+
+      if (departed && arrived && nowMs - arrMs < 2 * 3600_000) {
+        // Just landed — within 2 hours
+        return {
+          kind: "just-landed",
+          flight: r,
+          landedMinutesAgo: Math.round((nowMs - arrMs) / 60_000),
+        };
+      }
+
+      if (!departed && depValid) {
+        // This is the next upcoming flight
+        const daysUntil = Math.max(0, Math.ceil((depMs - nowMs) / 86400_000));
+        return { kind: "pre-trip", daysUntil, nextFlight: r };
+      }
+    }
+
+    // All flights completed — at destination
+    const dest = consumerTripDestination ?? activeTrip?.destination ?? "";
+    if (dest) return { kind: "at-destination", destination: dest };
+    return { kind: "no-trip" };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consumerReservationsSorted, consumerTripDestination, activeTrip?.destination]);
+
+
+
   const forwardedReviewItems = useMemo(
     () => reviewQueue.filter((item) => item.sourceChannel === "email-forward"),
     [reviewQueue],
@@ -6765,41 +6826,52 @@ export default function TravelAssistantPage() {
             </section>
           ) : consumerTab === "trip" ? (
             <section className="space-y-4">
-              {/* ── Airborne mode: calm, no panic ── */}
-              {guidanceLocationStatus === "airborne" ? (
+              {/* ── TRIP TAB: phase-driven, single source of truth ── */}
+              {/* Apple principle: one card at the top tells you exactly where you are */}
+              {/* ── AIRBORNE ── */}
+              {journeyPhase.kind === "airborne" ? (
                 <div className="rounded-3xl overflow-hidden bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 shadow-xl">
-                  <div className="px-5 pt-5 pb-3">
-                    <div className="flex items-center gap-3">
-                      <span className="text-3xl">✈️</span>
-                      <div>
-                        <p className="text-[11px] font-bold uppercase tracking-widest text-sky-300 opacity-80">In Flight</p>
-                        <p className="text-xl font-bold text-white leading-tight mt-0.5">You're on your way</p>
-                      </div>
+                  <div className="px-5 pt-5 pb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-sky-300/70">In flight</p>
+                      <p className="text-2xl font-black text-white mt-1 leading-tight">
+                        {(journeyPhase.onFlight as Reservation & Record<string, string | undefined>).flightDepartureAirport ?? ""} → {journeyPhase.landingAt}
+                      </p>
+                      <p className="text-sky-200/60 text-sm mt-1">
+                        {(journeyPhase.onFlight as Reservation & Record<string, string | undefined>).flightNumber ?? journeyPhase.onFlight.provider} · Landing in {journeyPhase.landingIn}
+                      </p>
                     </div>
-                    <p className="text-sm text-sky-100/70 mt-3 leading-relaxed">
-                      Everything is taken care of. Sit back and relax — Kepi will alert you when it's time to prepare for landing.
+                    <span className="text-4xl mt-1">✈️</span>
+                  </div>
+                  <div className="mx-4 mb-4 rounded-2xl bg-white/10 px-4 py-3">
+                    <p className="text-sky-100/80 text-sm leading-relaxed">
+                      Everything&apos;s taken care of. Relax — check the <span className="font-bold text-white">Flights tab</span> for your landing guide including baggage claim and ground transport at {journeyPhase.landingAt}.
                     </p>
                   </div>
-                  {/* Next leg preview */}
-                  {nextUpcomingFlight && (() => {
-                    const nf = nextUpcomingFlight as Reservation & { flightDepartureAirport?: string; flightArrivalAirport?: string; flightNumber?: string };
-                    return nf.flightDepartureAirport && nf.flightArrivalAirport ? (
-                      <div className="mx-4 mb-4 rounded-2xl bg-white/10 px-4 py-3 flex items-center justify-between">
-                        <div>
-                          <p className="text-[10px] text-sky-200/60 font-semibold uppercase tracking-wider">Next up</p>
-                          <p className="text-white font-bold text-base mt-0.5">
-                            {nf.flightDepartureAirport} → {nf.flightArrivalAirport}
-                          </p>
-                          <p className="text-sky-200/70 text-xs mt-0.5">
-                            {nf.flightNumber ?? nf.provider} · {formatConsumerReservationTime(nextUpcomingFlight.localTime)}
-                          </p>
-                        </div>
-                        <span className="text-2xl opacity-50">›</span>
-                      </div>
-                    ) : null;
-                  })()}
                 </div>
-              ) : (
+
+              ) : journeyPhase.kind === "just-landed" ? (
+                /* ── JUST LANDED ── */
+                <div className="rounded-3xl overflow-hidden bg-gradient-to-br from-emerald-900 via-teal-950 to-slate-900 shadow-xl">
+                  <div className="px-5 pt-5 pb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-300/70">Welcome to {journeyPhase.landedMinutesAgo < 30 ? "your destination" : (journeyPhase.flight as Reservation & Record<string,string|undefined>).flightArrivalAirport ?? "your destination"}</p>
+                      <p className="text-2xl font-black text-white mt-1 leading-tight">You&apos;ve landed 🛬</p>
+                      <p className="text-emerald-200/60 text-sm mt-1">
+                        {journeyPhase.landedMinutesAgo < 2 ? "Just now" : `${journeyPhase.landedMinutesAgo} min ago`}
+                      </p>
+                    </div>
+                    <span className="text-4xl mt-1">🎉</span>
+                  </div>
+                  <div className="mx-4 mb-4 rounded-2xl bg-white/10 px-4 py-3">
+                    <p className="text-emerald-100/80 text-sm leading-relaxed">
+                      Tap <span className="font-bold text-white">Flights</span> for baggage claim directions, rideshare pickup, and ground transport at this airport.
+                    </p>
+                  </div>
+                </div>
+
+              ) : journeyPhase.kind === "pre-trip" ? (
+                /* ── PRE-TRIP ── */
                 <>
                   <NextUpCard
                     reservations={consumerReservationsSorted}
@@ -6814,7 +6886,7 @@ export default function TravelAssistantPage() {
                     locationStatus={guidanceLocationStatus}
                     nearestAirport={guidanceNearestAirport}
                   />
-                  {tripDaysAway !== null && tripDaysAway <= 1 && (
+                  {journeyPhase.daysUntil <= 1 && (
                     <button
                       type="button"
                       onClick={() => setTravelDayOpen(true)}
@@ -6833,42 +6905,46 @@ export default function TravelAssistantPage() {
                     onActionTap={(tab) => navigateToConsumerTab(tab as ConsumerTab)}
                   />
                 </>
-              )}
+
+              ) : journeyPhase.kind === "at-destination" ? (
+                /* ── AT DESTINATION / TRIP COMPLETE ── */
+                <div className="rounded-3xl bg-white dark:bg-slate-900 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.08] p-5">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400">Trip complete</p>
+                  <p className="text-xl font-black text-slate-900 dark:text-white mt-1">You made it to {journeyPhase.destination} ✅</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">All flights completed. Enjoy your trip!</p>
+                </div>
+
+              ) : null}
               <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Trip</p>
+                    <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                      {journeyPhase.kind === "airborne" ? "In flight" :
+                       journeyPhase.kind === "just-landed" ? "Just landed" :
+                       journeyPhase.kind === "at-destination" ? "At destination" :
+                       "Trip"}
+                    </p>
                     <h1 className="mt-1 text-2xl font-bold text-slate-950 dark:text-slate-100">
                       {activeTrip?.name ?? "Your next trip"}
                     </h1>
                     <p className="mt-1 text-base text-slate-600 dark:text-slate-300">
-                      {consumerTripDestination ?? "Destination pending"}
+                      {journeyPhase.kind === "airborne"
+                        ? `Flying to ${journeyPhase.landingAt} · ${journeyPhase.landingIn} to land`
+                        : journeyPhase.kind === "just-landed"
+                          ? `Landed ${journeyPhase.landedMinutesAgo < 2 ? "just now" : `${journeyPhase.landedMinutesAgo} min ago`}`
+                          : journeyPhase.kind === "pre-trip"
+                            ? journeyPhase.daysUntil === 0 ? "Departing today" : `${journeyPhase.daysUntil} day${journeyPhase.daysUntil === 1 ? "" : "s"} until departure`
+                            : consumerTripDestination ?? "Destination pending"}
                     </p>
                   </div>
                   <span className={`rounded-full px-3 py-1 text-xs font-semibold ${consumerHeroStatus.className}`}>
-                    {consumerHeroStatus.label}
+                    {journeyPhase.kind === "airborne" ? "In flight" :
+                     journeyPhase.kind === "just-landed" ? "Landed" :
+                     journeyPhase.kind === "at-destination" ? "Complete" :
+                     consumerHeroStatus.label}
                   </span>
                 </div>
-                <p className="mt-4 text-sm text-slate-700 dark:text-slate-300">
-                  Departure {formatTripDepartureDate(consumerTripStartDate)} •{" "}
-                  {tripDaysAway === 0 ? "Today" : tripDaysAway === 1 ? "1 day away" : `${tripDaysAway} days away`}
-                </p>
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{consumerStatus.detail}</p>
-                {consumerPrimaryAction?.targetTab ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (consumerPrimaryAction.onClick) {
-                        consumerPrimaryAction.onClick();
-                        return;
-                      }
-                      navigateToConsumerTab(consumerPrimaryAction.targetTab);
-                    }}
-                    className="mt-4 rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-slate-200"
-                  >
-                    {consumerPrimaryAction.label}
-                  </button>
-                ) : null}
               </article>
 
               {firstForwardedReviewItem ? (
@@ -6897,18 +6973,21 @@ export default function TravelAssistantPage() {
                 </button>
               ) : null}
 
-              {/* Suppress AirportMode when airborne — irrelevant to someone already flying */}
-              {guidanceLocationStatus !== "airborne" && (
+              {/* AirportMode: only when pre-trip, not airborne or landed */}
+              {(journeyPhase.kind === "pre-trip" || journeyPhase.kind === "no-trip") && (
                 <AirportMode
                   reservations={consumerReservationsSorted}
                   onViewReservations={() => navigateToConsumerTab("flights")}
                 />
               )}
 
-              <ArrivalMode
-                reservations={consumerReservationsSorted}
-                onViewReservations={() => navigateToConsumerTab("flights")}
-              />
+              {/* ArrivalMode: only when just-landed or close to landing */}
+              {(journeyPhase.kind === "just-landed" || journeyPhase.kind === "airborne") && (
+                <ArrivalMode
+                  reservations={consumerReservationsSorted}
+                  onViewReservations={() => navigateToConsumerTab("flights")}
+                />
+              )}
 
               <TripTimeline
                 reservations={consumerReservationsSorted}
