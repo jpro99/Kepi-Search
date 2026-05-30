@@ -76,6 +76,7 @@ export function LiveMapPage() {
   const isLoadedRef = useRef(false);
   const watchIdRef = useRef<number | null>(null);
   const myMemberIdRef = useRef<string | null>(null);
+  const firstFixRef = useRef<boolean>(false);
 
   const [group, setGroup] = useState<FamilyGroup | null>(null);
   const [locations, setLocations] = useState<Record<string, LocationPoint>>({});
@@ -137,8 +138,23 @@ export function LiveMapPage() {
         const stale = isStale(loc.updatedAt);
 
         if (existing[member.id]) {
-          // Move existing marker instead of rebuilding — much cheaper
-          existing[member.id].setLngLat([loc.lon, loc.lat]);
+          const marker = existing[member.id];
+          const from = marker.getLngLat();
+          // GPS noise filter — skip if moved less than ~5 metres
+          const dLng = Math.abs(loc.lon - from.lng);
+          const dLat = Math.abs(loc.lat - from.lat);
+          if (dLng < 0.00005 && dLat < 0.00005) return;
+          // Smooth animated lerp over 2s
+          const to = { lng: loc.lon, lat: loc.lat };
+          const dur = 2000;
+          const t0 = performance.now();
+          const step = (now: number) => {
+            const p = Math.min(1, (now - t0) / dur);
+            const e = p < 0.5 ? 2*p*p : -1+(4-2*p)*p;
+            marker.setLngLat([from.lng+(to.lng-from.lng)*e, from.lat+(to.lat-from.lat)*e]);
+            if (p < 1) requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
           return;
         }
 
@@ -332,6 +348,7 @@ export function LiveMapPage() {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
+      firstFixRef.current = false;
       setSharingLocation(false);
       return;
     }
@@ -356,9 +373,10 @@ export function LiveMapPage() {
             ...prev,
             [memberId]: { lat, lon, accuracy, updatedAt: new Date().toISOString(), memberId },
           }));
-          // Pan map to follow me
-          if (mapRef.current) {
-            mapRef.current.easeTo({ center: [lon, lat], duration: 400 });
+          // Only center map on first GPS fix, not every update (prevents jumpiness)
+          if (mapRef.current && !firstFixRef.current) {
+            firstFixRef.current = true;
+            mapRef.current.easeTo({ center: [lon, lat], zoom: 15, duration: 1200 });
           }
         }
       },

@@ -73,9 +73,27 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
         if (!loc) return;
         const stale = isStale(loc.updatedAt);
 
-        // Move existing marker instead of rebuilding
+        // Animate marker to new position using requestAnimationFrame lerp
         if (existing[member.id]) {
-          existing[member.id].setLngLat([loc.lon, loc.lat]);
+          const marker = existing[member.id];
+          const from = marker.getLngLat();
+          const to = { lng: loc.lon, lat: loc.lat };
+          // Only animate if moved more than ~5m (avoids jitter from GPS noise)
+          const dLng = Math.abs(to.lng - from.lng);
+          const dLat = Math.abs(to.lat - from.lat);
+          if (dLng < 0.00005 && dLat < 0.00005) return; // GPS noise, skip
+          const duration = 2000;
+          const start = performance.now();
+          const animate = (now: number) => {
+            const t = Math.min(1, (now - start) / duration);
+            const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // ease-in-out
+            marker.setLngLat([
+              from.lng + (to.lng - from.lng) * ease,
+              from.lat + (to.lat - from.lat) * ease,
+            ]);
+            if (t < 1) requestAnimationFrame(animate);
+          };
+          requestAnimationFrame(animate);
           return;
         }
 
@@ -249,11 +267,11 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
     if (!mapRef.current) return;
     const locs = members.map(m => locations[m.id]).filter(Boolean) as LocationPoint[];
     if (!locs.length) return;
-    if (locs.length === 1) { mapRef.current.flyTo({ center: [locs[0].lon, locs[0].lat], zoom: 14 }); return; }
+    if (locs.length === 1) { mapRef.current.flyTo({ center: [locs[0].lon, locs[0].lat], zoom: 14, duration: 1500, essential: true }); return; }
     import("maplibre-gl").then(({ LngLatBounds }) => {
       const b = new LngLatBounds();
       locs.forEach(l => b.extend([l.lon, l.lat]));
-      mapRef.current?.fitBounds(b, { padding: 60, maxZoom: 14 });
+      mapRef.current?.fitBounds(b, { padding: 60, maxZoom: 14, duration: 1500 });
     }).catch(console.error);
   }, [members, locations]);
 
@@ -299,7 +317,7 @@ export function FamilyMap({ members, locations, maptilerKey, height = 300, onMem
                   type="button"
                   onClick={() => {
                     setSelected(p => p === m.id ? null : m.id);
-                    if (loc && mapRef.current) mapRef.current.flyTo({ center: [loc.lon, loc.lat], zoom: 15, duration: 600 });
+                    if (loc && mapRef.current) mapRef.current.flyTo({ center: [loc.lon, loc.lat], zoom: 16, duration: 1200 });
                   }}
                   className={`flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-semibold shadow-md transition ${
                     selected === m.id ? "bg-sky-600 text-white" : "bg-white/90 text-slate-800"
