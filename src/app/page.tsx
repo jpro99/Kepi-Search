@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { AuthRedirect } from "@/components/ui/AuthRedirect";
-
-// Force dynamic rendering — this page uses auth() which reads cookies
-export const dynamic = "force-dynamic";
 import { auth } from "@clerk/nextjs/server";
 import { getSubscriptionRecord, isSubscriptionActive } from "@/lib/billing/subscriptionStore";
 import { Logo } from "@/components/ui/Logo";
+
+// Force dynamic rendering — this page uses cookies via auth()
+export const dynamic = "force-dynamic";
 
 const featureCards = [
   {
@@ -140,24 +140,21 @@ const faqs = [
 ] as const;
 
 export default async function Home() {
-  // Keep server operations minimal — only what's needed for SEO/first paint
-  // Auth check happens client-side via Clerk to avoid server crash on bad sessions
-  const authCtaHref = "/sign-up"; // default — client will redirect if logged in
-  let subscriptionRecord = null;
+  let userId: string | null = null;
   let hasProAccess = false;
   try {
     const session = await auth();
-    if (session.userId) {
+    userId = session.userId ?? null;
+    if (userId) {
       try {
-        subscriptionRecord = await getSubscriptionRecord(session.userId);
+        const sub = await getSubscriptionRecord(userId);
+        hasProAccess = Boolean(
+          sub && (sub.lifetimePlan || (isSubscriptionActive(sub) && sub.plan !== "free"))
+        );
       } catch { /* redis unavailable */ }
-      hasProAccess = Boolean(
-        subscriptionRecord &&
-          (subscriptionRecord.lifetimePlan ||
-            (isSubscriptionActive(subscriptionRecord) && subscriptionRecord.plan !== "free")),
-      );
     }
   } catch { /* clerk unavailable — show static page */ }
+  const authCtaHref = userId ? "/travel-assistant" : "/sign-up";
 
   return (
     <main className="min-h-screen bg-[#f0f4f8] text-slate-900 dark:bg-slate-950 dark:text-slate-100">
