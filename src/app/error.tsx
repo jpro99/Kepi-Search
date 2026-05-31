@@ -26,6 +26,12 @@ export default function GlobalError({
       <section className="w-full rounded-lg border border-red-200 bg-red-50 p-4 text-left text-xs text-red-900">
         <p className="font-semibold">Error message</p>
         <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words">{errorMessage}</pre>
+        {error?.digest && (
+          <>
+            <p className="mt-3 font-semibold">Error digest (send this to support)</p>
+            <pre className="mt-2 font-mono text-sm font-bold">{error.digest}</pre>
+          </>
+        )}
         <p className="mt-3 font-semibold">Error stack</p>
         <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words">{errorStack}</pre>
       </section>

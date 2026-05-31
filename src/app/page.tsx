@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AuthRedirect } from "@/components/ui/AuthRedirect";
 import { auth } from "@clerk/nextjs/server";
 import { getSubscriptionRecord, isSubscriptionActive } from "@/lib/billing/subscriptionStore";
 import { Logo } from "@/components/ui/Logo";
@@ -136,22 +137,28 @@ const faqs = [
 ] as const;
 
 export default async function Home() {
-  const { userId } = await auth();
-  const authCtaHref = userId ? "/travel-assistant" : "/sign-up";
+  // Keep server operations minimal — only what's needed for SEO/first paint
+  // Auth check happens client-side via Clerk to avoid server crash on bad sessions
+  const authCtaHref = "/sign-up"; // default — client will redirect if logged in
   let subscriptionRecord = null;
+  let hasProAccess = false;
   try {
-    subscriptionRecord = userId ? await getSubscriptionRecord(userId) : null;
-  } catch {
-    // Non-fatal — show page without subscription state
-  }
-  const hasProAccess = Boolean(
-    subscriptionRecord &&
-      (subscriptionRecord.lifetimePlan ||
-        (isSubscriptionActive(subscriptionRecord) && subscriptionRecord.plan !== "free")),
-  );
+    const session = await auth();
+    if (session.userId) {
+      try {
+        subscriptionRecord = await getSubscriptionRecord(session.userId);
+      } catch { /* redis unavailable */ }
+      hasProAccess = Boolean(
+        subscriptionRecord &&
+          (subscriptionRecord.lifetimePlan ||
+            (isSubscriptionActive(subscriptionRecord) && subscriptionRecord.plan !== "free")),
+      );
+    }
+  } catch { /* clerk unavailable — show static page */ }
 
   return (
     <main className="min-h-screen bg-[#f0f4f8] text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      <AuthRedirect />
       {/* Top nav */}
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-8">
         <Logo size="sm" />
