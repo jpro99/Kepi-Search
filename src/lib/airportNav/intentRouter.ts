@@ -17,6 +17,7 @@ export type VoiceIntentKind =
   | "set_credentials"
   | "next_step"
   | "eta"
+  | "sprint"
   | "cancel"
   | "unknown";
 
@@ -85,6 +86,11 @@ export function routeVoiceIntent(rawUtterance: string): VoiceIntent {
   // Cancel / stop
   if (/\b(stop|cancel|end (the )?(route|navigation)|never ?mind)\b/.test(text)) {
     return { intent: "cancel", utterance };
+  }
+
+  // Sprint — running late beats everything except cancel
+  if (/\b(running late|i'?m late|fastest|quickest|hurry|sprint|gonna miss)\b/.test(text)) {
+    return { intent: "sprint", utterance };
   }
 
   // Credentials — check BEFORE navigate_security ("I have precheck" must not

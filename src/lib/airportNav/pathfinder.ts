@@ -116,10 +116,23 @@ export interface ComputeRouteOptions {
   fromNodeId: string;
   toPoiId: string;
   credentials: TravelerSecurityCredentials;
+  /** "sprint" reprices walking edges at a brisk 1.65 m/s (running-late pace). */
+  profile?: "default" | "sprint";
+}
+
+const SPRINT_MPS = 1.65;
+
+/** Edge traversal cost in seconds under the given profile. */
+function edgeCost(edge: GraphEdge, profile: "default" | "sprint"): number {
+  if (profile === "sprint" && (edge.kind === "walkway" || edge.kind === "moving_walkway")) {
+    return Math.round(edge.lengthM / SPRINT_MPS);
+  }
+  return edge.traverseSeconds;
 }
 
 export function computeRoute(options: ComputeRouteOptions): ComputedRoute | null {
   const { layout, fromNodeId, toPoiId, credentials } = options;
+  const profile = options.profile ?? "default";
   const poi = layout.pois.find((entry) => entry.id === toPoiId);
   if (!poi) return null;
   const targetNodeId = poi.nodeId;
@@ -158,7 +171,7 @@ export function computeRoute(options: ComputeRouteOptions): ComputedRoute | null
       if (!edgeUsable(edge, lanes)) continue;
       // Among usable parallel security edges, prefer the best lane we hold:
       // lane edges already differ in traverseSeconds, so cost handles it.
-      const tentative = (gScore.get(current) ?? Infinity) + edge.traverseSeconds;
+      const tentative = (gScore.get(current) ?? Infinity) + edgeCost(edge, profile);
       if (tentative < (gScore.get(toNodeId) ?? Infinity)) {
         gScore.set(toNodeId, tentative);
         cameFrom.set(toNodeId, { nodeId: current, edge });
@@ -186,7 +199,7 @@ export function computeRoute(options: ComputeRouteOptions): ComputedRoute | null
     .filter((pos): pos is [number, number] => Array.isArray(pos));
 
   const totalMeters = edgesUsed.reduce((sum, edge) => sum + edge.lengthM, 0);
-  const totalSeconds = edgesUsed.reduce((sum, edge) => sum + edge.traverseSeconds, 0);
+  const totalSeconds = edgesUsed.reduce((sum, edge) => sum + edgeCost(edge, profile), 0);
   const laneUsed = edgesUsed.find((edge) => edge.kind === "security_transition")?.laneType;
   const instructions = buildInstructions(nodeIds, edgesUsed, nodeById, poi.name);
 

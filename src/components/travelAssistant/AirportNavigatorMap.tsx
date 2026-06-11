@@ -14,6 +14,7 @@ import {
   type JourneyPrompt,
 } from "@/lib/airportNav/journeyMachine";
 import { routeVoiceIntent } from "@/lib/airportNav/intentRouter";
+import { computeBoardingPressure, type BoardingPressure } from "@/lib/airportNav/boardingMath";
 
 /* ─────────────────────────────────────────────────────────────────────────
  * Kepi Airport Navigator — Phase 1 surface (spec §B/§C/§D4/§D5).
@@ -139,6 +140,15 @@ export function AirportNavigatorMap({
   // State mirror of the instruction index — rendering must not read the ref.
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
 
+  // Sprint Mode (spec §B Flow 6) — brisk-pace routing when running late
+  const [sprint, setSprint] = useState(false);
+  const sprintRef = useRef(false);
+  const sprintSuggestedRef = useRef(false);
+  const setSprintMode = useCallback((on: boolean) => {
+    sprintRef.current = on;
+    setSprint(on);
+  }, []);
+
   // Rebuild-sensitive values rounded so per-second parent ticks don't thrash markers
   const minutesRounded = Math.round(minutesToDeparture);
 
@@ -250,7 +260,13 @@ export function AirportNavigatorMap({
         if (viaVoice) sayAndShow("Quick one — do you have TSA PreCheck, CLEAR, or both?");
         return;
       }
-      const route = computeRoute({ layout, fromNodeId: originNodeId, toPoiId: poiId, credentials });
+      const route = computeRoute({
+        layout,
+        fromNodeId: originNodeId,
+        toPoiId: poiId,
+        credentials,
+        profile: sprintRef.current ? "sprint" : "default",
+      });
       setActiveRoute(route);
       setActiveDestName(route ? targetPoi.name : null);
       setShowInstructions(false);
@@ -295,9 +311,15 @@ export function AirportNavigatorMap({
   useEffect(() => {
     if (!activeRoute || !layout || !originNodeId) return;
     if (activeRoute.fromNodeId === originNodeId) return;
-    const route = computeRoute({ layout, fromNodeId: originNodeId, toPoiId: activeRoute.toPoiId, credentials });
+    const route = computeRoute({
+      layout,
+      fromNodeId: originNodeId,
+      toPoiId: activeRoute.toPoiId,
+      credentials,
+      profile: sprintRef.current ? "sprint" : "default",
+    });
     if (route) setActiveRoute(route);
-  }, [originNodeId, activeRoute, layout, credentials]);
+  }, [originNodeId, activeRoute, layout, credentials, sprint]);
 
   /* ── Journey: position + clock events ───────────────────────────────── */
   useEffect(() => {
@@ -349,6 +371,50 @@ export function AirportNavigatorMap({
     }
   }, [snapped?.nearestNodeId, activeRoute, layout, activeDestName, haptic, sayAndShow, processJourneyEvent, endRoute]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* ── Gate route + Boarding Pressure Index (spec §L.1) ───────────────── */
+  const gateRoute = useMemo(() => {
+    if (!gatePoi || !layout || !originNodeId) return null;
+    return computeRoute({
+      layout,
+      fromNodeId: originNodeId,
+      toPoiId: gatePoi.id,
+      credentials,
+      profile: sprint ? "sprint" : "default",
+    });
+  }, [gatePoi, layout, originNodeId, credentials, sprint]);
+
+  const pressure: BoardingPressure | null = useMemo(() => {
+    if (!gateRoute || minutesRounded > 600) return null;
+    // gateRoute.totalSeconds already includes the security-lane wait when the
+    // route crosses a checkpoint, so securityWaitSeconds stays 0 here.
+    return computeBoardingPressure({
+      minutesToDeparture: minutesRounded,
+      walkToGateSeconds: gateRoute.totalSeconds,
+      securityWaitSeconds: 0,
+      throughSecurity: true,
+    });
+  }, [gateRoute, minutesRounded]);
+
+  // Sprint self-suggestion — once, calmly (spec: calm urgency, never panic)
+  useEffect(() => {
+    if (!pressure || sprintRef.current || sprintSuggestedRef.current) return;
+    if (pressure.verdict === "sprint" || pressure.verdict === "at_risk") {
+      sprintSuggestedRef.current = true;
+      sayAndShow("Running tight — say 'fastest route' or tap the timer chip and I'll get you there quickest.");
+    }
+  }, [pressure, sayAndShow]);
+
+  const onPressureChipTap = useCallback(() => {
+    if (!pressure) return;
+    if ((pressure.verdict === "sprint" || pressure.verdict === "at_risk") && gatePoi) {
+      setSprintMode(true);
+      startRoute(gatePoi.id, true);
+      return;
+    }
+    showSubtitle(pressure.breakdown);
+  }, [pressure, gatePoi, setSprintMode, startRoute, showSubtitle]);
+
+
   /* ── Voice co-pilot ─────────────────────────────────────────────────── */
   const bestLoungePoi = useCallback((): PoiDefinition | null => {
     if (!layout || !originNodeId) return null;
@@ -380,6 +446,77 @@ export function AirportNavigatorMap({
     }
     return securityPois[0];
   }, [layout, credentials]);
+
+  const executeConciergeAction = useCallback(
+    (action: string) => {
+      switch (action) {
+        case "navigate_gate":
+          if (gatePoi) startRoute(gatePoi.id, true);
+          return;
+        case "navigate_lounge": {
+          const lounge = bestLoungePoi();
+          if (lounge) startRoute(lounge.id, true);
+          return;
+        }
+        case "navigate_security": {
+          const checkpoint = securityPoi();
+          if (checkpoint) startRoute(checkpoint.id, true);
+          return;
+        }
+        case "navigate_checkin": {
+          const checkin = layout?.pois.find((poi) => poi.category === "checkin");
+          if (checkin) startRoute(checkin.id, true);
+          return;
+        }
+        case "navigate_restroom": {
+          const restroom = layout?.pois.find((poi) => poi.category === "restroom");
+          if (restroom) startRoute(restroom.id, true);
+          return;
+        }
+        case "sprint":
+          setSprintMode(true);
+          if (gatePoi) startRoute(gatePoi.id, true);
+          return;
+        default:
+          return;
+      }
+    },
+    [gatePoi, layout, startRoute, bestLoungePoi, securityPoi, setSprintMode],
+  );
+
+  const askConcierge = useCallback(
+    (utterance: string) => {
+      showSubtitle("Hmm, let me think…");
+      const payload = {
+        utterance,
+        iata,
+        journeyPhase: journeyRef.current.phase,
+        throughSecurity: journeyRef.current.throughSecurity,
+        gateCode,
+        minutesToDeparture: minutesRounded,
+        pressureLine: pressure?.line ?? "",
+        pressureBreakdown: pressure?.breakdown ?? "",
+        pressureVerdict: pressure?.verdict ?? "unknown",
+        walkToGateMinutes: gateRoute ? Math.round(gateRoute.totalSeconds / 60) : null,
+        credentials,
+        eligibleLounges: eligibleLoungeNames.slice(0, 10),
+      };
+      void fetch("/api/airport-nav/voice-intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+        .then((concierge: { spoken?: string; action?: string }) => {
+          if (concierge.spoken) sayAndShow(concierge.spoken);
+          if (concierge.action && concierge.action !== "none") executeConciergeAction(concierge.action);
+        })
+        .catch(() => {
+          sayAndShow("I can take you to your gate, a lounge, security, check-in, or a restroom.");
+        });
+    },
+    [iata, gateCode, minutesRounded, pressure, gateRoute, credentials, eligibleLoungeNames, sayAndShow, showSubtitle, executeConciergeAction],
+  );
 
   const handleUtterance = useCallback(
     (transcript: string) => {
@@ -452,16 +589,25 @@ export function AirportNavigatorMap({
           sayAndShow("Start a route and I'll keep you posted on timing.");
           return;
         }
+        case "sprint": {
+          setSprintMode(true);
+          if (gatePoi) startRoute(gatePoi.id, true);
+          else sayAndShow("Fastest pace it is — I'll route you the moment your gate is assigned.");
+          return;
+        }
         case "cancel": {
+          setSprintMode(false);
           endRoute();
           sayAndShow("Navigation ended.");
           return;
         }
         default:
-          sayAndShow("I can take you to your gate, a lounge, security, check-in, or a restroom.");
+          // Open-ended question → Claude concierge fall-through with full
+          // journey context (spec §D5). Offline or error → honest fallback.
+          askConcierge(transcript);
       }
     },
-    [gatePoi, gateCode, layout, originNodeId, credentials, activeRoute, activeDestName, statusLine, eligibleLoungeNames, startRoute, endRoute, answerCredentials, bestLoungePoi, securityPoi, sayAndShow, showSubtitle],
+    [gatePoi, gateCode, layout, originNodeId, credentials, activeRoute, activeDestName, statusLine, eligibleLoungeNames, startRoute, endRoute, answerCredentials, bestLoungePoi, securityPoi, sayAndShow, showSubtitle, setSprintMode, askConcierge],
   );
 
   const startListening = useCallback(() => {
@@ -521,13 +667,11 @@ export function AirportNavigatorMap({
 
   /* ── Leave-by chip (lounge phase) ───────────────────────────────────── */
   const leaveByLabel = useMemo(() => {
-    if (journeyPhase !== "lounge" || !gatePoi || !layout || !originNodeId) return null;
-    const route = computeRoute({ layout, fromNodeId: originNodeId, toPoiId: gatePoi.id, credentials });
-    if (!route) return null;
-    const leaveByMs = Date.now() + minutesRounded * 60_000 - route.totalSeconds * 1000 - 15 * 60_000;
+    if (journeyPhase !== "lounge" || !gateRoute) return null;
+    const leaveByMs = Date.now() + minutesRounded * 60_000 - gateRoute.totalSeconds * 1000 - 15 * 60_000;
     if (leaveByMs <= Date.now()) return "Leave now";
     return `Leave by ${fmtClock(leaveByMs)}`;
-  }, [journeyPhase, gatePoi, layout, originNodeId, credentials, minutesRounded]);
+  }, [journeyPhase, gateRoute, minutesRounded]);
 
   /* ── Map init (dark schematic canvas, no remote style) ──────────────── */
   useEffect(() => {
@@ -806,6 +950,22 @@ export function AirportNavigatorMap({
           </p>
         </div>
         <div className="flex flex-col items-end gap-1">
+          {pressure && (
+            <button
+              type="button"
+              onClick={onPressureChipTap}
+              className={`pointer-events-auto rounded-lg px-2 py-1 text-[10px] font-bold backdrop-blur ${
+                pressure.verdict === "comfortable"
+                  ? "bg-black/45 text-emerald-300"
+                  : pressure.verdict === "tight"
+                  ? "bg-black/45 text-amber-300"
+                  : "bg-red-600/90 text-white"
+              }`}
+              aria-label="Boarding time budget"
+            >
+              {sprint ? "⚡ " : ""}{pressure.verdict === "at_risk" ? "⚠ " : ""}{pressure.line}
+            </button>
+          )}
           {leaveByLabel && (
             <span className={`rounded-lg px-2 py-1 text-[10px] font-bold backdrop-blur ${leaveByLabel === "Leave now" ? "bg-amber-500/90 text-slate-900" : "bg-black/45 text-amber-200"}`}>
               ⏱ {leaveByLabel}
